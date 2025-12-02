@@ -1,0 +1,768 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Local Admin - Disaster Clippy</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: #1a1a2e;
+            color: #eee;
+            min-height: 100vh;
+        }
+
+        header {
+            background: #16213e;
+            padding: 1rem 2rem;
+            border-bottom: 1px solid #0f3460;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        header h1 {
+            font-size: 1.5rem;
+            color: #e94560;
+        }
+
+        header p {
+            font-size: 0.9rem;
+            color: #888;
+            margin-top: 0.25rem;
+        }
+
+        .nav-links {
+            display: flex;
+            gap: 1rem;
+        }
+
+        .nav-links a {
+            color: #4ecca3;
+            text-decoration: none;
+            font-size: 0.9rem;
+            padding: 0.5rem 0.75rem;
+            border-radius: 4px;
+            transition: background 0.2s;
+        }
+
+        .nav-links a:hover {
+            background: #0f3460;
+        }
+
+        .nav-links a.active {
+            background: #0f3460;
+            color: #e94560;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+
+        .status-bar {
+            background: #0f3460;
+            border-radius: 8px;
+            padding: 1rem;
+            margin-bottom: 2rem;
+            display: flex;
+            gap: 2rem;
+            flex-wrap: wrap;
+        }
+
+        .status-item {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .status-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+        }
+
+        .status-dot.online { background: #4ecca3; }
+        .status-dot.offline { background: #e94560; }
+        .status-dot.hybrid { background: #f9a825; }
+
+        .section {
+            background: #16213e;
+            border: 1px solid #0f3460;
+            border-radius: 8px;
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .section h2 {
+            font-size: 1.1rem;
+            color: #e94560;
+            margin-bottom: 1rem;
+            padding-bottom: 0.5rem;
+            border-bottom: 1px solid #0f3460;
+        }
+
+        .section p.description {
+            color: #888;
+            font-size: 0.85rem;
+            margin-bottom: 1rem;
+        }
+
+        .form-group {
+            margin-bottom: 1rem;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 0.5rem;
+            color: #ccc;
+            font-size: 0.9rem;
+        }
+
+        .form-group input[type="text"],
+        .form-group select {
+            width: 100%;
+            padding: 0.75rem;
+            border: 1px solid #0f3460;
+            border-radius: 6px;
+            background: #1a1a2e;
+            color: #eee;
+            font-size: 0.95rem;
+        }
+
+        .form-group input:focus,
+        .form-group select:focus {
+            outline: none;
+            border-color: #4ecca3;
+        }
+
+        .path-input-group {
+            display: flex;
+            gap: 0.5rem;
+        }
+
+        .path-input-group input {
+            flex: 1;
+        }
+
+        .path-input-group button {
+            padding: 0.75rem 1rem;
+            background: #0f3460;
+            border: 1px solid #4ecca3;
+            color: #4ecca3;
+            border-radius: 6px;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+
+        .path-input-group button:hover {
+            background: #4ecca3;
+            color: #1a1a2e;
+        }
+
+        .radio-group {
+            display: flex;
+            gap: 1rem;
+            flex-wrap: wrap;
+        }
+
+        .radio-option {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.75rem 1rem;
+            background: #1a1a2e;
+            border: 1px solid #0f3460;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: border-color 0.2s;
+        }
+
+        .radio-option:hover {
+            border-color: #4ecca3;
+        }
+
+        .radio-option.selected {
+            border-color: #4ecca3;
+            background: #0f3460;
+        }
+
+        .radio-option input {
+            accent-color: #4ecca3;
+        }
+
+        .checkbox-option {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            cursor: pointer;
+        }
+
+        .checkbox-option input {
+            accent-color: #4ecca3;
+            width: 18px;
+            height: 18px;
+        }
+
+        .backup-summary {
+            margin-top: 1rem;
+            padding: 1rem;
+            background: #1a1a2e;
+            border-radius: 6px;
+        }
+
+        .backup-summary h4 {
+            font-size: 0.9rem;
+            color: #4ecca3;
+            margin-bottom: 0.75rem;
+        }
+
+        .backup-counts {
+            display: flex;
+            gap: 2rem;
+            flex-wrap: wrap;
+        }
+
+        .backup-count {
+            text-align: center;
+        }
+
+        .backup-count .number {
+            font-size: 1.5rem;
+            font-weight: bold;
+            color: #e94560;
+        }
+
+        .backup-count .label {
+            font-size: 0.8rem;
+            color: #888;
+        }
+
+        .file-list {
+            background: #1a1a2e;
+            border-radius: 6px;
+            padding: 0.5rem;
+            max-height: 150px;
+            overflow-y: auto;
+            margin-top: 0.5rem;
+        }
+
+        .file-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.5rem;
+            border-bottom: 1px solid #0f3460;
+        }
+
+        .file-item:last-child {
+            border-bottom: none;
+        }
+
+        .file-name {
+            color: #4ecca3;
+        }
+
+        .file-size {
+            color: #888;
+            font-size: 0.85rem;
+        }
+
+        .empty-list {
+            color: #666;
+            text-align: center;
+            padding: 1rem;
+        }
+
+        .btn {
+            padding: 0.75rem 1.5rem;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.95rem;
+            font-weight: 500;
+            transition: background 0.2s;
+        }
+
+        .btn-primary {
+            background: #e94560;
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: #ff6b6b;
+        }
+
+        .btn-secondary {
+            background: #0f3460;
+            color: #4ecca3;
+            border: 1px solid #4ecca3;
+        }
+
+        .btn-secondary:hover {
+            background: #4ecca3;
+            color: #1a1a2e;
+        }
+
+        .actions {
+            display: flex;
+            gap: 1rem;
+            margin-top: 2rem;
+        }
+
+        .toast {
+            position: fixed;
+            bottom: 2rem;
+            right: 2rem;
+            background: #4ecca3;
+            color: #1a1a2e;
+            padding: 1rem 1.5rem;
+            border-radius: 8px;
+            font-weight: 500;
+            transform: translateY(100px);
+            opacity: 0;
+            transition: all 0.3s ease;
+        }
+
+        .toast.show {
+            transform: translateY(0);
+            opacity: 1;
+        }
+
+        .toast.error {
+            background: #e94560;
+            color: white;
+        }
+
+        .mode-description {
+            font-size: 0.8rem;
+            color: #666;
+            margin-top: 0.25rem;
+        }
+
+        .collapsible {
+            margin-top: 0.5rem;
+        }
+
+        .collapsible-header {
+            cursor: pointer;
+            color: #888;
+            font-size: 0.85rem;
+        }
+
+        .collapsible-header:hover {
+            color: #4ecca3;
+        }
+
+        .collapsible-content {
+            display: none;
+        }
+
+        .collapsible-content.open {
+            display: block;
+        }
+
+        @media (max-width: 600px) {
+            .container {
+                padding: 1rem;
+            }
+            .radio-group {
+                flex-direction: column;
+            }
+            .status-bar {
+                flex-direction: column;
+                gap: 0.75rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div>
+            <h1>Local Admin Panel</h1>
+            <p>Manage your offline disaster preparedness system</p>
+        </div>
+        <div class="nav-links">
+            <a href="/useradmin/" class="active">Settings</a>
+            <a href="/useradmin/packs">Source Packs</a>
+            <a href="/useradmin/cloud-upload">Cloud Upload</a>
+            <a href="/">Chat</a>
+        </div>
+    </header>
+
+    <div class="container">
+        <!-- Status Bar -->
+        <div class="status-bar">
+            <div class="status-item">
+                <span class="status-dot" id="internetDot"></span>
+                <span id="internetStatus">Checking...</span>
+            </div>
+            <div class="status-item">
+                <span class="status-dot hybrid" id="modeDot"></span>
+                <span id="modeStatus">Mode: Loading...</span>
+            </div>
+            <div class="status-item">
+                <span id="backupStatus">Backups: Loading...</span>
+            </div>
+        </div>
+
+        <!-- Offline Mode Section -->
+        <div class="section">
+            <h2>Connection Mode</h2>
+            <p class="description">Choose how your system handles internet connectivity</p>
+
+            <div class="radio-group" id="offlineModeGroup">
+                <label class="radio-option" data-mode="online_only">
+                    <input type="radio" name="offline_mode" value="online_only">
+                    <div>
+                        <span>Online Only</span>
+                        <div class="mode-description">Always use live internet sources</div>
+                    </div>
+                </label>
+                <label class="radio-option" data-mode="hybrid">
+                    <input type="radio" name="offline_mode" value="hybrid">
+                    <div>
+                        <span>Hybrid (Recommended)</span>
+                        <div class="mode-description">Use internet when available, fallback to offline</div>
+                    </div>
+                </label>
+                <label class="radio-option" data-mode="offline_only">
+                    <input type="radio" name="offline_mode" value="offline_only">
+                    <div>
+                        <span>Offline Only</span>
+                        <div class="mode-description">Only use local backup files</div>
+                    </div>
+                </label>
+            </div>
+
+            <div class="form-group" style="margin-top: 1rem;">
+                <label class="checkbox-option">
+                    <input type="checkbox" id="autoFallback" checked>
+                    <span>Auto-fallback to offline when internet unavailable</span>
+                </label>
+            </div>
+        </div>
+
+        <!-- Unified Backup Folder Section -->
+        <div class="section">
+            <h2>Backup Location</h2>
+            <p class="description">Set the folder containing your offline backups (ZIM files, HTML folders, PDFs)</p>
+
+            <div class="form-group">
+                <label>Backup Folder</label>
+                <div class="path-input-group">
+                    <input type="text" id="backupFolder" placeholder="D:\disaster-backups">
+                    <button onclick="validateAndScanBackups()">Scan</button>
+                </div>
+            </div>
+
+            <div class="backup-summary" id="backupSummary" style="display: none;">
+                <h4>Found Backups:</h4>
+                <div class="backup-counts">
+                    <div class="backup-count">
+                        <div class="number" id="zimCount">0</div>
+                        <div class="label">ZIM Files</div>
+                    </div>
+                    <div class="backup-count">
+                        <div class="number" id="htmlCount">0</div>
+                        <div class="label">HTML Sites</div>
+                    </div>
+                    <div class="backup-count">
+                        <div class="number" id="pdfCount">0</div>
+                        <div class="label">PDF Files</div>
+                    </div>
+                </div>
+
+                <!-- Collapsible file lists -->
+                <div class="collapsible">
+                    <div class="collapsible-header" onclick="toggleList('zim')">[+] Show ZIM files</div>
+                    <div class="collapsible-content" id="zimList">
+                        <div class="file-list" id="zimFileList"></div>
+                    </div>
+                </div>
+
+                <div class="collapsible">
+                    <div class="collapsible-header" onclick="toggleList('html')">[+] Show HTML folders</div>
+                    <div class="collapsible-content" id="htmlList">
+                        <div class="file-list" id="htmlFileList"></div>
+                    </div>
+                </div>
+
+                <div class="collapsible">
+                    <div class="collapsible-header" onclick="toggleList('pdf')">[+] Show PDF files</div>
+                    <div class="collapsible-content" id="pdfList">
+                        <div class="file-list" id="pdfFileList"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Personal Cloud Backup (Placeholder) -->
+        <div class="section">
+            <h2>Personal Cloud Backup</h2>
+            <p class="description">
+                Configure your own cloud storage for personal backups.
+                This is separate from the Global Cloud Backup used for sharing with others.
+            </p>
+
+            <div style="background: #1a1a2e; border: 1px dashed #0f3460; border-radius: 6px; padding: 1.5rem; text-align: center; color: #666;">
+                <p style="margin-bottom: 0.5rem;">Personal cloud backup coming soon</p>
+                <p style="font-size: 0.8rem;">You'll be able to configure your own R2/S3 bucket for private backups</p>
+            </div>
+        </div>
+
+        <!-- Advanced Options -->
+        <div class="section">
+            <h2>Advanced Options</h2>
+            <div class="form-group">
+                <label class="checkbox-option">
+                    <input type="checkbox" id="cacheResponses" checked>
+                    <span>Cache AI responses for offline use</span>
+                </label>
+                <p class="description" style="margin-left: 26px; margin-top: 0.5rem;">
+                    Save LLM responses locally so they can be reused when offline (coming soon)
+                </p>
+            </div>
+        </div>
+
+        <!-- Actions -->
+        <div class="actions">
+            <button class="btn btn-primary" onclick="saveSettings()">Save Settings</button>
+        </div>
+    </div>
+
+    <div class="toast" id="toast"></div>
+
+    <script>
+        let currentSettings = {};
+
+        // Load settings on page load
+        async function loadSettings() {
+            try {
+                const response = await fetch('/useradmin/api/settings');
+                const data = await response.json();
+                currentSettings = data.settings;
+
+                // Update internet status
+                updateInternetStatus(data.internet_available);
+
+                // Update offline mode
+                const mode = currentSettings.offline_mode || 'hybrid';
+                document.querySelector(`input[value="${mode}"]`).checked = true;
+                updateModeSelection(mode);
+
+                // Update auto fallback
+                document.getElementById('autoFallback').checked = currentSettings.auto_fallback !== false;
+
+                // Update cache responses
+                document.getElementById('cacheResponses').checked = currentSettings.cache_responses !== false;
+
+                // Update backup folder (use unified path or legacy)
+                const backupFolder = currentSettings.backup_folder ||
+                                    currentSettings.backup_paths?.zim_folder || '';
+                document.getElementById('backupFolder').value = backupFolder;
+
+                // Scan backups if path is set
+                if (backupFolder) {
+                    scanAllBackups();
+                }
+
+            } catch (e) {
+                console.error('Failed to load settings:', e);
+                showToast('Failed to load settings', true);
+            }
+        }
+
+        function updateInternetStatus(available) {
+            const dot = document.getElementById('internetDot');
+            const status = document.getElementById('internetStatus');
+
+            if (available) {
+                dot.className = 'status-dot online';
+                status.textContent = 'Internet: Connected';
+            } else {
+                dot.className = 'status-dot offline';
+                status.textContent = 'Internet: Disconnected';
+            }
+        }
+
+        function updateModeSelection(mode) {
+            document.querySelectorAll('.radio-option').forEach(opt => {
+                opt.classList.remove('selected');
+                if (opt.dataset.mode === mode) {
+                    opt.classList.add('selected');
+                }
+            });
+
+            const modeDot = document.getElementById('modeDot');
+            const modeStatus = document.getElementById('modeStatus');
+
+            const modeLabels = {
+                'online_only': 'Online Only',
+                'hybrid': 'Hybrid',
+                'offline_only': 'Offline Only'
+            };
+
+            modeDot.className = 'status-dot ' + mode.replace('_only', '');
+            modeStatus.textContent = 'Mode: ' + modeLabels[mode];
+        }
+
+        // Handle radio button changes
+        document.querySelectorAll('input[name="offline_mode"]').forEach(radio => {
+            radio.addEventListener('change', (e) => {
+                updateModeSelection(e.target.value);
+            });
+        });
+
+        async function validateAndScanBackups() {
+            const path = document.getElementById('backupFolder').value;
+
+            if (!path) {
+                showToast('Please enter a path first', true);
+                return;
+            }
+
+            try {
+                const response = await fetch('/useradmin/api/validate-path', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ path: path })
+                });
+
+                const data = await response.json();
+
+                if (data.valid) {
+                    // Save the path
+                    await fetch('/useradmin/api/backup-path', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ path_type: 'backup_folder', path: path })
+                    });
+                    showToast('Path verified');
+                    scanAllBackups();
+                } else {
+                    showToast(data.error || 'Invalid path', true);
+                }
+            } catch (e) {
+                showToast('Error validating path', true);
+            }
+        }
+
+        async function scanAllBackups() {
+            try {
+                const response = await fetch('/useradmin/api/scan-backups');
+                const data = await response.json();
+
+                const zimFiles = data.zim_files || [];
+                const htmlFiles = data.html_files || [];
+                const pdfFiles = data.pdf_files || [];
+
+                // Update counts
+                document.getElementById('zimCount').textContent = zimFiles.length;
+                document.getElementById('htmlCount').textContent = htmlFiles.length;
+                document.getElementById('pdfCount').textContent = pdfFiles.length;
+
+                // Render file lists
+                renderFileList('zimFileList', zimFiles);
+                renderFileList('htmlFileList', htmlFiles);
+                renderFileList('pdfFileList', pdfFiles);
+
+                // Show summary
+                document.getElementById('backupSummary').style.display = 'block';
+
+                // Update status bar
+                const totalFiles = zimFiles.length + htmlFiles.length + pdfFiles.length;
+                document.getElementById('backupStatus').textContent =
+                    `Backups: ${totalFiles} items`;
+
+            } catch (e) {
+                console.error('Failed to scan backups:', e);
+            }
+        }
+
+        function renderFileList(elementId, files) {
+            const container = document.getElementById(elementId);
+
+            if (!files || files.length === 0) {
+                container.innerHTML = '<div class="empty-list">No files found</div>';
+                return;
+            }
+
+            container.innerHTML = files.map(file => `
+                <div class="file-item">
+                    <span class="file-name">${escapeHtml(file.name)}</span>
+                    <span class="file-size">${file.size_mb} MB</span>
+                </div>
+            `).join('');
+        }
+
+        function toggleList(type) {
+            const content = document.getElementById(type + 'List');
+            const header = content.previousElementSibling;
+
+            if (content.classList.contains('open')) {
+                content.classList.remove('open');
+                header.textContent = header.textContent.replace('[-]', '[+]');
+            } else {
+                content.classList.add('open');
+                header.textContent = header.textContent.replace('[+]', '[-]');
+            }
+        }
+
+        async function saveSettings() {
+            const settings = {
+                offline_mode: document.querySelector('input[name="offline_mode"]:checked').value,
+                auto_fallback: document.getElementById('autoFallback').checked,
+                cache_responses: document.getElementById('cacheResponses').checked,
+                backup_folder: document.getElementById('backupFolder').value
+            };
+
+            try {
+                const response = await fetch('/useradmin/api/settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(settings)
+                });
+
+                const data = await response.json();
+
+                if (data.status === 'success') {
+                    showToast('Settings saved successfully');
+                    currentSettings = data.settings;
+                } else {
+                    showToast('Failed to save settings', true);
+                }
+            } catch (e) {
+                showToast('Error saving settings', true);
+            }
+        }
+
+        function showToast(message, isError = false) {
+            const toast = document.getElementById('toast');
+            toast.textContent = message;
+            toast.className = 'toast' + (isError ? ' error' : '');
+            toast.classList.add('show');
+
+            setTimeout(() => {
+                toast.classList.remove('show');
+            }, 3000);
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // Initialize
+        loadSettings();
+    </script>
+</body>
+</html>

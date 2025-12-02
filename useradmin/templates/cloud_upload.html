@@ -1,0 +1,700 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cloud Backup Upload - Disaster Clippy</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: #1a1a2e;
+            color: #eee;
+            min-height: 100vh;
+        }
+
+        header {
+            background: #16213e;
+            padding: 1rem 2rem;
+            border-bottom: 1px solid #0f3460;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        header h1 {
+            font-size: 1.5rem;
+            color: #e94560;
+        }
+
+        header p {
+            font-size: 0.9rem;
+            color: #888;
+            margin-top: 0.25rem;
+        }
+
+        .nav-links {
+            display: flex;
+            gap: 1rem;
+        }
+
+        .nav-links a {
+            color: #4ecca3;
+            text-decoration: none;
+            font-size: 0.9rem;
+            padding: 0.5rem 0.75rem;
+            border-radius: 4px;
+            transition: background 0.2s;
+        }
+
+        .nav-links a:hover {
+            background: #0f3460;
+        }
+
+        .nav-links a.active {
+            background: #0f3460;
+            color: #e94560;
+        }
+
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+
+        .section {
+            background: #16213e;
+            border: 1px solid #0f3460;
+            border-radius: 8px;
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .section h2 {
+            font-size: 1.1rem;
+            color: #e94560;
+            margin-bottom: 1rem;
+            padding-bottom: 0.5rem;
+            border-bottom: 1px solid #0f3460;
+        }
+
+        .section p.description {
+            color: #888;
+            font-size: 0.85rem;
+            margin-bottom: 1rem;
+        }
+
+        .status-card {
+            background: #1a1a2e;
+            border: 1px solid #0f3460;
+            border-radius: 8px;
+            padding: 1rem;
+            margin-bottom: 1rem;
+        }
+
+        .status-card.connected {
+            border-color: #4ecca3;
+        }
+
+        .status-card.disconnected {
+            border-color: #e94560;
+        }
+
+        .status-indicator {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            margin-right: 0.5rem;
+        }
+
+        .status-online { background: #4ecca3; }
+        .status-offline { background: #e94560; }
+        .status-warning { background: #f9a825; }
+
+        .source-grid {
+            display: grid;
+            gap: 1rem;
+        }
+
+        .source-card {
+            background: #1a1a2e;
+            border: 1px solid #0f3460;
+            border-radius: 8px;
+            padding: 1rem;
+            transition: border-color 0.2s;
+        }
+
+        .source-card.complete {
+            border-color: #4ecca3;
+        }
+
+        .source-card.incomplete {
+            border-color: #f9a825;
+            opacity: 0.8;
+        }
+
+        .source-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 0.75rem;
+        }
+
+        .source-name {
+            font-size: 1rem;
+            font-weight: 600;
+            color: #e94560;
+        }
+
+        .source-badge {
+            font-size: 0.7rem;
+            padding: 0.2rem 0.5rem;
+            border-radius: 4px;
+            text-transform: uppercase;
+            font-weight: 600;
+        }
+
+        .badge-complete {
+            background: #4ecca3;
+            color: #1a1a2e;
+        }
+
+        .badge-incomplete {
+            background: #f9a825;
+            color: #1a1a2e;
+        }
+
+        .source-meta {
+            font-size: 0.85rem;
+            color: #888;
+            margin-bottom: 0.5rem;
+        }
+
+        .source-meta span {
+            margin-right: 1rem;
+        }
+
+        .checklist {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+            margin-bottom: 0.75rem;
+        }
+
+        .check-item {
+            font-size: 0.8rem;
+            padding: 0.2rem 0.5rem;
+            border-radius: 4px;
+            background: #0f3460;
+        }
+
+        .check-item.has {
+            color: #4ecca3;
+        }
+
+        .check-item.missing {
+            color: #e94560;
+        }
+
+        .missing-list {
+            font-size: 0.8rem;
+            color: #f9a825;
+            margin-bottom: 0.75rem;
+        }
+
+        .source-actions {
+            display: flex;
+            gap: 0.5rem;
+        }
+
+        .btn {
+            padding: 0.5rem 1rem;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.85rem;
+            font-weight: 500;
+            transition: background 0.2s;
+        }
+
+        .btn-primary {
+            background: #e94560;
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: #ff6b6b;
+        }
+
+        .btn-primary:disabled {
+            background: #555;
+            cursor: not-allowed;
+        }
+
+        .btn-secondary {
+            background: #0f3460;
+            color: #4ecca3;
+            border: 1px solid #4ecca3;
+        }
+
+        .btn-secondary:hover {
+            background: #4ecca3;
+            color: #1a1a2e;
+        }
+
+        .btn-uploaded {
+            background: #2e4a2e;
+            color: #4ecca3;
+            cursor: default;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 2rem;
+            color: #888;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 2rem;
+            color: #666;
+        }
+
+        .toast {
+            position: fixed;
+            bottom: 2rem;
+            right: 2rem;
+            background: #4ecca3;
+            color: #1a1a2e;
+            padding: 1rem 1.5rem;
+            border-radius: 8px;
+            font-weight: 500;
+            transform: translateY(100px);
+            opacity: 0;
+            transition: all 0.3s ease;
+            z-index: 1000;
+        }
+
+        .toast.show {
+            transform: translateY(0);
+            opacity: 1;
+        }
+
+        .toast.error {
+            background: #e94560;
+            color: white;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 4px;
+            background: #0f3460;
+            border-radius: 2px;
+            margin-top: 0.5rem;
+            overflow: hidden;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: #4ecca3;
+            transition: width 0.3s ease;
+        }
+
+        .cloud-files {
+            margin-top: 1rem;
+        }
+
+        .cloud-file {
+            display: flex;
+            justify-content: space-between;
+            padding: 0.5rem;
+            border-bottom: 1px solid #0f3460;
+        }
+
+        .cloud-file:last-child {
+            border-bottom: none;
+        }
+
+        .token-warning {
+            background: #3d2e00;
+            border: 1px solid #f9a825;
+            padding: 1rem;
+            border-radius: 6px;
+            margin-bottom: 1rem;
+        }
+
+        .token-warning strong {
+            color: #f9a825;
+        }
+
+        @media (max-width: 600px) {
+            .container {
+                padding: 1rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div>
+            <h1>Cloud Backup Upload</h1>
+            <p>Upload verified source backups to R2 cloud storage</p>
+        </div>
+        <div class="nav-links">
+            <a href="/useradmin/">Settings</a>
+            <a href="/useradmin/packs">Source Packs</a>
+            <a href="/useradmin/cloud-upload" class="active">Cloud Upload</a>
+            <a href="/">Chat</a>
+        </div>
+    </header>
+
+    <div class="container">
+        <!-- Global Cloud Connection Status -->
+        <div class="section">
+            <h2>Global Cloud Connection</h2>
+            <p class="description">Connection to the shared R2 cloud storage for submitting verified sources</p>
+
+            <div class="status-card" id="cloudStatus">
+                <div class="loading">Checking connection...</div>
+            </div>
+        </div>
+
+        <!-- Sources Ready for Upload -->
+        <div class="section">
+            <h2>Local Sources</h2>
+            <p class="description">
+                Sources must have: verified license + metadata + backup file to be uploaded.
+                This ensures only quality-verified content goes to the global system.
+            </p>
+
+            <div id="sourcesList" class="source-grid">
+                <div class="loading">Loading sources...</div>
+            </div>
+        </div>
+
+        <!-- Pending Submissions -->
+        <div class="section">
+            <h2>Your Submissions</h2>
+            <p class="description">
+                Sources you've submitted for review. Once approved by the admin,
+                they'll be moved to the Global Cloud Backup for all users to access.
+            </p>
+
+            <div id="cloudBackups">
+                <div class="loading">Loading...</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="toast" id="toast"></div>
+
+    <script>
+        let cloudConnected = false;
+        let uploadedSources = new Set();
+
+        // Check cloud storage status
+        async function checkCloudStatus() {
+            const container = document.getElementById('cloudStatus');
+
+            try {
+                const response = await fetch('/useradmin/api/cloud-storage-status');
+                const data = await response.json();
+
+                cloudConnected = data.connected;
+
+                let statusHtml = '';
+
+                if (data.connected) {
+                    statusHtml = `
+                        <div style="display: flex; align-items: center; gap: 1rem;">
+                            <span class="status-indicator status-online"></span>
+                            <div>
+                                <strong style="color: #4ecca3;">Connected to Global Cloud</strong>
+                                <div style="font-size: 0.85rem; color: #888;">Ready to submit sources for review</div>
+                            </div>
+                        </div>
+                    `;
+
+                    if (data.token_status && data.token_status.includes('expiring')) {
+                        statusHtml += `
+                            <div class="token-warning" style="margin-top: 1rem;">
+                                <strong>Token Expiring Soon!</strong>
+                                <div style="font-size: 0.85rem; margin-top: 0.25rem;">
+                                    ${data.token_status} - Contact admin to update credentials
+                                </div>
+                            </div>
+                        `;
+                    }
+
+                    container.className = 'status-card connected';
+                } else if (data.configured) {
+                    statusHtml = `
+                        <div style="display: flex; align-items: center; gap: 1rem;">
+                            <span class="status-indicator status-offline"></span>
+                            <div>
+                                <strong style="color: #e94560;">Connection Failed</strong>
+                                <div style="font-size: 0.85rem; color: #888;">${data.error || 'Unable to connect to global cloud'}</div>
+                            </div>
+                        </div>
+                    `;
+                    container.className = 'status-card disconnected';
+                } else {
+                    statusHtml = `
+                        <div style="display: flex; align-items: center; gap: 1rem;">
+                            <span class="status-indicator status-warning"></span>
+                            <div>
+                                <strong style="color: #f9a825;">Not Configured</strong>
+                                <div style="font-size: 0.85rem; color: #888;">
+                                    Global cloud storage not configured. Contact admin for setup.
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                    container.className = 'status-card';
+                }
+
+                container.innerHTML = statusHtml;
+
+            } catch (e) {
+                container.innerHTML = `
+                    <div style="color: #e94560;">
+                        Error checking cloud status: ${e.message}
+                    </div>
+                `;
+                container.className = 'status-card disconnected';
+            }
+        }
+
+        // Load sources
+        async function loadSources() {
+            const container = document.getElementById('sourcesList');
+
+            try {
+                const response = await fetch('/useradmin/api/sources-for-upload');
+                const data = await response.json();
+
+                if (data.error) {
+                    container.innerHTML = `<div class="empty-state">${data.error}</div>`;
+                    return;
+                }
+
+                if (!data.sources || data.sources.length === 0) {
+                    container.innerHTML = '<div class="empty-state">No sources configured. Add sources to config/sources.json</div>';
+                    return;
+                }
+
+                container.innerHTML = data.sources.map(source => {
+                    const isUploaded = uploadedSources.has(source.source_id);
+
+                    return `
+                        <div class="source-card ${source.is_complete ? 'complete' : 'incomplete'}">
+                            <div class="source-header">
+                                <span class="source-name">${escapeHtml(source.name)}</span>
+                                <span class="source-badge ${source.is_complete ? 'badge-complete' : 'badge-incomplete'}">
+                                    ${source.is_complete ? 'Ready' : 'Incomplete'}
+                                </span>
+                            </div>
+
+                            <div class="source-meta">
+                                <span>${source.document_count || 0} docs</span>
+                                <span>${source.backup_size_mb || 0} MB</span>
+                                <span>${source.backup_type || 'no backup'}</span>
+                            </div>
+
+                            <div class="checklist">
+                                <span class="check-item ${source.has_config ? 'has' : 'missing'}">
+                                    ${source.has_config ? '[x]' : '[ ]'} Config
+                                </span>
+                                <span class="check-item ${source.has_metadata ? 'has' : 'missing'}">
+                                    ${source.has_metadata ? '[x]' : '[ ]'} Metadata
+                                </span>
+                                <span class="check-item ${source.has_backup ? 'has' : 'missing'}">
+                                    ${source.has_backup ? '[x]' : '[ ]'} Backup
+                                </span>
+                                <span class="check-item ${source.license_verified ? 'has' : 'missing'}">
+                                    ${source.license_verified ? '[x]' : '[ ]'} License Verified
+                                </span>
+                            </div>
+
+                            ${source.missing && source.missing.length > 0 ? `
+                                <div class="missing-list">
+                                    Missing: ${source.missing.join(', ')}
+                                </div>
+                            ` : ''}
+
+                            <div class="source-actions">
+                                ${source.is_complete ? `
+                                    <button class="btn ${isUploaded ? 'btn-uploaded' : 'btn-primary'}"
+                                            onclick="uploadSource('${source.source_id}')"
+                                            ${!cloudConnected || isUploaded ? 'disabled' : ''}>
+                                        ${isUploaded ? 'Submitted' : 'Submit for Review'}
+                                    </button>
+                                ` : `
+                                    <button class="btn btn-primary" disabled>
+                                        Complete requirements first
+                                    </button>
+                                `}
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+
+            } catch (e) {
+                container.innerHTML = `<div class="empty-state">Error loading sources: ${e.message}</div>`;
+            }
+        }
+
+        // Upload a source
+        async function uploadSource(sourceId) {
+            if (!cloudConnected) {
+                showToast('Cloud storage not connected', true);
+                return;
+            }
+
+            showToast(`Uploading ${sourceId}...`);
+
+            try {
+                const response = await fetch('/useradmin/api/upload-backup', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ source_id: sourceId })
+                });
+
+                const data = await response.json();
+
+                if (response.ok && data.status === 'success') {
+                    uploadedSources.add(sourceId);
+                    showToast(`Submitted ${sourceId} for review (${data.size_mb} MB)`);
+                    loadSources();
+                    loadCloudBackups();
+                } else {
+                    showToast(data.detail || 'Upload failed', true);
+                }
+            } catch (e) {
+                showToast('Error: ' + e.message, true);
+            }
+        }
+
+        // Load submissions with status
+        async function loadCloudBackups() {
+            const container = document.getElementById('cloudBackups');
+
+            try {
+                const response = await fetch('/useradmin/api/cloud-backups');
+                const data = await response.json();
+
+                if (data.error) {
+                    container.innerHTML = `<div class="empty-state">${data.error}</div>`;
+                    return;
+                }
+
+                if (!data.submissions || Object.keys(data.submissions).length === 0) {
+                    container.innerHTML = '<div class="empty-state">No submissions yet. Upload a source to submit it for review.</div>';
+                    return;
+                }
+
+                // Track submitted sources
+                for (const submissionId of Object.keys(data.submissions)) {
+                    const parts = submissionId.split('_');
+                    if (parts.length >= 3) {
+                        const sourceId = parts.slice(2).join('_');
+                        uploadedSources.add(sourceId);
+                    }
+                }
+
+                let html = `
+                    <div style="margin-bottom: 1rem; color: #888;">
+                        ${data.total_submissions} submission(s) (${data.total_size_mb} MB total)
+                    </div>
+                    <div class="cloud-files">
+                `;
+
+                for (const [submissionId, info] of Object.entries(data.submissions)) {
+                    const parts = submissionId.split('_');
+                    const sourceId = parts.length >= 3 ? parts.slice(2).join('_') : submissionId;
+
+                    // Status styling
+                    const status = info.status || 'pending_review';
+                    let statusColor, statusText, statusBg;
+
+                    switch(status) {
+                        case 'approved':
+                            statusColor = '#4ecca3';
+                            statusText = 'Approved';
+                            statusBg = '#1a2e1a';
+                            break;
+                        case 'denied':
+                            statusColor = '#e94560';
+                            statusText = 'Denied';
+                            statusBg = '#2e1a1a';
+                            break;
+                        default:
+                            statusColor = '#f9a825';
+                            statusText = 'Pending Review';
+                            statusBg = '#2e2a1a';
+                    }
+
+                    html += `
+                        <div class="cloud-file" style="flex-direction: column; align-items: flex-start; padding: 0.75rem; background: ${statusBg}; border-radius: 6px; margin-bottom: 0.5rem;">
+                            <div style="display: flex; justify-content: space-between; width: 100%;">
+                                <span style="color: #4ecca3; font-weight: 500;">${escapeHtml(sourceId)}</span>
+                                <span style="color: ${statusColor}; font-size: 0.8rem; font-weight: 500;">${statusText}</span>
+                            </div>
+                            <div style="font-size: 0.8rem; color: #888; margin-top: 0.25rem;">
+                                ${info.files.length} file(s), ${info.total_size_mb.toFixed(2)} MB
+                            </div>
+                    `;
+
+                    // Show admin message if present
+                    if (info.admin_message) {
+                        const msgColor = status === 'denied' ? '#e94560' : '#4ecca3';
+                        html += `
+                            <div style="margin-top: 0.5rem; padding: 0.5rem; background: #0f3460; border-left: 3px solid ${msgColor}; border-radius: 4px;">
+                                <div style="font-size: 0.75rem; color: #888;">Admin Message:</div>
+                                <div style="font-size: 0.85rem; color: ${msgColor};">${escapeHtml(info.admin_message)}</div>
+                            </div>
+                        `;
+                    }
+
+                    html += `</div>`;
+                }
+
+                html += '</div>';
+                container.innerHTML = html;
+
+            } catch (e) {
+                container.innerHTML = `<div class="empty-state">Error: ${e.message}</div>`;
+            }
+        }
+
+        function showToast(message, isError = false) {
+            const toast = document.getElementById('toast');
+            toast.textContent = message;
+            toast.className = 'toast' + (isError ? ' error' : '');
+            toast.classList.add('show');
+
+            setTimeout(() => {
+                toast.classList.remove('show');
+            }, 3000);
+        }
+
+        function escapeHtml(text) {
+            if (!text) return '';
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // Initialize
+        checkCloudStatus();
+        loadSources();
+        loadCloudBackups();
+    </script>
+</body>
+</html>

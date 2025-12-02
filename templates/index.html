@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Disaster Clippy - DIY Resource Finder</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: #1a1a2e;
+            color: #eee;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        header {
+            background: #16213e;
+            padding: 1rem 2rem;
+            border-bottom: 1px solid #0f3460;
+        }
+
+        header h1 {
+            font-size: 1.5rem;
+            color: #e94560;
+        }
+
+        header p {
+            font-size: 0.9rem;
+            color: #888;
+            margin-top: 0.25rem;
+        }
+
+        .container {
+            display: flex;
+            flex: 1;
+            max-width: 1400px;
+            margin: 0 auto;
+            width: 100%;
+        }
+
+        /* Chat Panel */
+        .chat-panel {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            border-right: 1px solid #0f3460;
+        }
+
+        .chat-messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 1rem;
+        }
+
+        .message {
+            margin-bottom: 1rem;
+            padding: 0.75rem 1rem;
+            border-radius: 8px;
+            max-width: 85%;
+        }
+
+        .message.user {
+            background: #0f3460;
+            margin-left: auto;
+        }
+
+        .message.assistant {
+            background: #16213e;
+            border: 1px solid #0f3460;
+        }
+
+        .message-content {
+            white-space: pre-wrap;
+            line-height: 1.5;
+        }
+
+        .message-content a {
+            color: #4ecca3;
+            text-decoration: none;
+        }
+
+        .message-content a:hover {
+            text-decoration: underline;
+        }
+
+        .message-content .md-header {
+            color: #e94560;
+            margin: 0.75rem 0 0.5rem 0;
+            font-size: 1rem;
+        }
+
+        .message-content h2.md-header {
+            font-size: 1.1rem;
+        }
+
+        .message-content strong {
+            color: #fff;
+        }
+
+        .chat-input {
+            padding: 1rem;
+            background: #16213e;
+            border-top: 1px solid #0f3460;
+        }
+
+        .chat-input form {
+            display: flex;
+            gap: 0.5rem;
+        }
+
+        .chat-input textarea {
+            flex: 1;
+            padding: 0.75rem;
+            border: 1px solid #0f3460;
+            border-radius: 8px;
+            background: #1a1a2e;
+            color: #eee;
+            font-size: 1rem;
+            resize: none;
+            min-height: 50px;
+            font-family: inherit;
+        }
+
+        .chat-input textarea:focus {
+            outline: none;
+            border-color: #e94560;
+        }
+
+        .chat-input button {
+            padding: 0.75rem 1.5rem;
+            background: #e94560;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 1rem;
+            font-weight: 500;
+        }
+
+        .chat-input button:hover {
+            background: #ff6b6b;
+        }
+
+        .chat-input button:disabled {
+            background: #555;
+            cursor: not-allowed;
+        }
+
+        /* Articles Panel */
+        .articles-panel {
+            width: 400px;
+            overflow-y: auto;
+            padding: 1rem;
+            background: #16213e;
+        }
+
+        .articles-panel h2 {
+            font-size: 1rem;
+            color: #888;
+            margin-bottom: 1rem;
+            padding-bottom: 0.5rem;
+            border-bottom: 1px solid #0f3460;
+        }
+
+        .article-card {
+            background: #1a1a2e;
+            border: 1px solid #0f3460;
+            border-radius: 8px;
+            padding: 1rem;
+            margin-bottom: 0.75rem;
+        }
+
+        .article-card:hover {
+            border-color: #e94560;
+        }
+
+        .article-card h3 {
+            font-size: 0.95rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .article-card h3 a {
+            color: #e94560;
+            text-decoration: none;
+        }
+
+        .article-card h3 a:hover {
+            text-decoration: underline;
+        }
+
+        .article-meta {
+            font-size: 0.8rem;
+            color: #888;
+            margin-bottom: 0.5rem;
+        }
+
+        .article-snippet {
+            font-size: 0.85rem;
+            color: #aaa;
+            line-height: 1.4;
+        }
+
+        .score-badge {
+            display: inline-block;
+            background: #0f3460;
+            color: #4ecca3;
+            padding: 0.15rem 0.5rem;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            margin-left: 0.5rem;
+        }
+
+        .zim-title {
+            color: #e94560;
+        }
+
+        .zim-badge {
+            display: inline-block;
+            background: #333;
+            color: #888;
+            padding: 0.1rem 0.4rem;
+            border-radius: 3px;
+            font-size: 0.65rem;
+            margin-left: 0.5rem;
+            text-transform: uppercase;
+        }
+
+        .empty-state {
+            text-align: center;
+            color: #666;
+            padding: 2rem;
+        }
+
+        .loading {
+            display: none;
+            text-align: center;
+            padding: 1rem;
+            color: #888;
+        }
+
+        .loading.active {
+            display: block;
+        }
+
+        /* Stats bar */
+        .stats-bar {
+            padding: 0.5rem 1rem;
+            background: #0f3460;
+            font-size: 0.8rem;
+            color: #888;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .stats-bar button {
+            background: transparent;
+            border: 1px solid #4ecca3;
+            color: #4ecca3;
+            padding: 0.25rem 0.75rem;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.8rem;
+        }
+
+        .stats-bar button:hover {
+            background: #4ecca3;
+            color: #1a1a2e;
+        }
+
+        /* Sources Panel */
+        .sources-panel {
+            background: #0f3460;
+            padding: 0;
+            max-height: 0;
+            overflow: hidden;
+            transition: max-height 0.3s ease, padding 0.3s ease;
+        }
+
+        .sources-panel.open {
+            max-height: 300px;
+            padding: 1rem;
+            border-bottom: 1px solid #16213e;
+        }
+
+        .sources-panel h3 {
+            font-size: 0.9rem;
+            color: #e94560;
+            margin-bottom: 0.75rem;
+        }
+
+        .sources-grid {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem 1.5rem;
+        }
+
+        .source-item {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 0.85rem;
+        }
+
+        .source-item input[type="checkbox"] {
+            accent-color: #4ecca3;
+            width: 16px;
+            height: 16px;
+        }
+
+        .source-item label {
+            cursor: pointer;
+            color: #ccc;
+        }
+
+        .source-item label:hover {
+            color: #fff;
+        }
+
+        .source-item .source-count {
+            color: #666;
+            font-size: 0.75rem;
+        }
+
+        .sources-actions {
+            margin-top: 0.75rem;
+            display: flex;
+            gap: 0.5rem;
+        }
+
+        .sources-actions button {
+            background: transparent;
+            border: 1px solid #666;
+            color: #888;
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.75rem;
+        }
+
+        .sources-actions button:hover {
+            border-color: #4ecca3;
+            color: #4ecca3;
+        }
+
+        /* Responsive */
+        @media (max-width: 900px) {
+            .container {
+                flex-direction: column;
+            }
+            .articles-panel {
+                width: 100%;
+                max-height: 300px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>Disaster Clippy</h1>
+        <p>Conversational search for DIY guides and humanitarian resources</p>
+        <p style="margin-top: 0.5rem;">
+            <a href="https://github.com/yourusername/disaster-clippy/blob/main/README.md" target="_blank" style="color: #4ecca3; text-decoration: none;">About this project</a>
+            <span style="color: #555; margin: 0 0.5rem;">|</span>
+            <a href="/useradmin/" style="color: #4ecca3; text-decoration: none;">Settings</a>
+        </p>
+    </header>
+
+    <div class="stats-bar">
+        <span id="indexStats">Loading...</span>
+        <button id="toggleSources">Select Sources</button>
+    </div>
+
+    <div class="sources-panel" id="sourcesPanel">
+        <h3>Search Sources</h3>
+        <div class="sources-grid" id="sourcesGrid">
+            Loading sources...
+        </div>
+        <div class="sources-actions">
+            <button id="selectAll">Select All</button>
+            <button id="selectNone">Select None</button>
+        </div>
+    </div>
+
+    <div class="container">
+        <div class="chat-panel">
+            <div class="chat-messages" id="chatMessages">
+                <div class="message assistant">
+                    <div class="message-content">Hello! I'm Disaster Clippy. I can help you find DIY guides and resources for emergencies, water filtration, shelter, sanitation, and more.
+
+What situation do you need help with?</div>
+                </div>
+            </div>
+            <div class="loading" id="loading">Searching knowledge base...</div>
+            <div class="chat-input">
+                <form id="chatForm">
+                    <textarea id="userInput" placeholder="Describe what you need help with..." rows="2"></textarea>
+                    <button type="submit" id="sendBtn">Send</button>
+                </form>
+            </div>
+        </div>
+
+        <div class="articles-panel">
+            <h2>Recommended Articles</h2>
+            <div id="articlesList">
+                <div class="empty-state">
+                    Ask a question to see relevant articles
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/chat.js"></script>
+</body>
+</html>

@@ -1,0 +1,92 @@
+{
+  "version": 1,
+  "last_updated": "2025-11-29T14:09:21.858468",
+  "sources": {
+    "appropedia": {
+      "name": "Appropedia",
+      "base_url": "https://www.appropedia.org",
+      "license": "CC-BY-SA",
+      "license_url": "https://www.appropedia.org/Appropedia:Copyrights",
+      "license_verified": true,
+      "scraper_type": "mediawiki",
+      "priority": "GUIDE",
+      "tags": [
+        "solar",
+        "DIY",
+        "humanitarian",
+        "water",
+        "shelter"
+      ],
+      "notes": "Main wiki for appropriate technology and sustainability",
+      "status": "active",
+      "last_scraped": "2025-11-29",
+      "page_count": 150
+    },
+    "builditsolar": {
+      "name": "BuildItSolar",
+      "base_url": "https://www.builditsolar.com",
+      "license": "CC-BY-NC-SA",
+      "license_url": "https://www.builditsolar.com/",
+      "license_verified": true,
+      "scraper_type": "static",
+      "priority": "GUIDE",
+      "tags": [
+        "solar",
+        "DIY",
+        "energy",
+        "heating",
+        "cooling"
+      ],
+      "notes": "DIY solar and renewable energy projects",
+      "status": "active",
+      "last_scraped": "2025-11-29",
+      "page_count": 336
+    },
+    "solarcooking": {
+      "name": "Solar Cooking Wiki",
+      "base_url": "https://solarcooking.fandom.com",
+      "license": "CC-BY-SA",
+      "license_url": "https://solarcooking.fandom.com/wiki/Solar_Encyclopaedia:Copyrights",
+      "license_verified": true,
+      "scraper_type": "mediawiki",
+      "priority": "GUIDE",
+      "tags": [
+        "solar",
+        "cooking",
+        "food",
+        "DIY"
+      ],
+      "notes": "Wiki focused on solar cooking technology",
+      "status": "active",
+      "last_scraped": "2025-11-29",
+      "page_count": 88
+    }
+  },
+  "license_options": [
+    "CC-BY",
+    "CC-BY-SA",
+    "CC-BY-NC",
+    "CC-BY-NC-SA",
+    "CC0",
+    "Public Domain",
+    "MIT",
+    "GPL",
+    "Unknown"
+  ],
+  "priority_options": [
+    "LOCAL",
+    "GOVERNMENT",
+    "GUIDE",
+    "RESEARCH",
+    "ARTICLE",
+    "PRODUCT"
+  ],
+  "scraper_types": [
+    "mediawiki",
+    "static",
+    "pdf",
+    "api",
+    "kiwix",
+    "substack"
+  ]
+}

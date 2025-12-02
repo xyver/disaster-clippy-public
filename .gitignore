@@ -1,0 +1,58 @@
+# Environment
+.env
+*.env.local
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+ENV/
+
+# ALL data is local/regenerable - never in repo
+data/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+logs/
+*.log
+
+# ============================================
+# PRIVATE COMPONENTS (Maintainer Only)
+# These are excluded from the public repository
+# ============================================
+
+# Admin dashboard (Streamlit) - has Pinecone write access
+admin/
+
+# Web scrapers - rate-limited APIs, potential for abuse
+scraper/
+
+# CLI tools with elevated access
+ingest.py
+sync.py
+
+# Parent developer docs (describes private tools)
+DEVELOPER-PARENT.md
+
+# Local config with user paths
+config/local_settings.json
+
+# Jobs queue (local state)
+jobs/
+
+# Temp scrape/test files
+*.csv
+ingest_config.json
+test_*.py

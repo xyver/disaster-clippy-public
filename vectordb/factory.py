@@ -1,0 +1,77 @@
+"""
+Factory for creating vector stores based on environment configuration.
+
+Usage:
+    from vectordb import get_vector_store
+
+    # Uses VECTOR_DB_MODE from .env (defaults to 'local')
+    store = get_vector_store()
+
+    # Or specify explicitly
+    store = get_vector_store(mode='pinecone')
+"""
+
+import os
+from typing import Optional
+
+from .store import VectorStore
+from .metadata import MetadataIndex
+
+
+def get_vector_store(mode: Optional[str] = None, **kwargs):
+    """
+    Factory function to get the appropriate vector store.
+
+    Args:
+        mode: 'local', 'pinecone', 'railway', or None (uses env var)
+        **kwargs: Additional arguments passed to store constructor
+
+    Returns:
+        VectorStore or PineconeStore instance
+    """
+    if mode is None:
+        mode = os.getenv("VECTOR_DB_MODE", "local").lower()
+
+    if mode == "local":
+        persist_dir = kwargs.pop("persist_dir", "data/chroma")
+        return VectorStore(persist_dir=persist_dir, **kwargs)
+
+    elif mode == "pinecone":
+        # Import here to avoid requiring pinecone when not used
+        from .pinecone_store import PineconeStore
+        return PineconeStore(**kwargs)
+
+    elif mode == "railway":
+        # Railway uses persistent volume at /data
+        persist_dir = os.getenv("RAILWAY_VOLUME_PATH", "/data/chroma")
+        return VectorStore(persist_dir=persist_dir, **kwargs)
+
+    elif mode == "qdrant":
+        raise NotImplementedError("Qdrant support coming soon")
+
+    else:
+        raise ValueError(f"Unknown vector store mode: {mode}")
+
+
+def get_metadata_store(mode: Optional[str] = None) -> MetadataIndex:
+    """
+    Get metadata index for the current mode.
+
+    The metadata index is always local (for fast comparisons),
+    but the path may vary based on mode.
+    """
+    if mode is None:
+        mode = os.getenv("VECTOR_DB_MODE", "local").lower()
+
+    if mode == "railway":
+        index_dir = os.getenv("RAILWAY_VOLUME_PATH", "/data/metadata")
+        return MetadataIndex(index_dir=index_dir)
+
+    # Default to local metadata
+    return MetadataIndex()
+
+
+# Convenience for backwards compatibility
+def create_store(**kwargs):
+    """Alias for get_vector_store"""
+    return get_vector_store(**kwargs)

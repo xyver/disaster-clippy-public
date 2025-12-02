@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Disaster Clippy Chat Widget - Embed Example</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+
+        h1 {
+            color: #333;
+        }
+
+        .instructions {
+            background: #fff;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        code {
+            background: #e9ecef;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: 'Consolas', 'Monaco', monospace;
+        }
+
+        pre {
+            background: #2d3748;
+            color: #e2e8f0;
+            padding: 15px;
+            border-radius: 8px;
+            overflow-x: auto;
+            font-size: 14px;
+        }
+
+        /* Chat Widget Styles */
+        #clippy-chat {
+            max-width: 500px;
+            margin: 20px auto;
+            background: #fff;
+            border-radius: 12px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            overflow: hidden;
+        }
+
+        #clippy-header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 15px 20px;
+            font-weight: bold;
+            font-size: 18px;
+        }
+
+        #clippy-messages {
+            height: 350px;
+            overflow-y: auto;
+            padding: 15px;
+            background: #fafafa;
+        }
+
+        .clippy-msg {
+            margin: 10px 0;
+            padding: 12px 16px;
+            border-radius: 12px;
+            max-width: 85%;
+            line-height: 1.4;
+        }
+
+        .clippy-user {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            margin-left: auto;
+            text-align: right;
+        }
+
+        .clippy-bot {
+            background: #fff;
+            color: #333;
+            border: 1px solid #e2e8f0;
+            margin-right: auto;
+        }
+
+        .clippy-loading {
+            color: #888;
+            font-style: italic;
+        }
+
+        #clippy-input-area {
+            display: flex;
+            padding: 15px;
+            background: #fff;
+            border-top: 1px solid #e2e8f0;
+        }
+
+        #clippy-input {
+            flex: 1;
+            padding: 12px 15px;
+            border: 1px solid #ddd;
+            border-radius: 25px;
+            font-size: 14px;
+            outline: none;
+        }
+
+        #clippy-input:focus {
+            border-color: #667eea;
+        }
+
+        #clippy-send {
+            width: 50px;
+            height: 50px;
+            margin-left: 10px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 50%;
+            cursor: pointer;
+            font-size: 18px;
+            transition: transform 0.2s;
+        }
+
+        #clippy-send:hover {
+            transform: scale(1.05);
+        }
+
+        #clippy-send:active {
+            transform: scale(0.95);
+        }
+    </style>
+</head>
+<body>
+
+<h1>Disaster Clippy - Embed Widget</h1>
+
+<div class="instructions">
+    <h2>How to Use</h2>
+    <p>This is a simple chat widget that connects to the Disaster Clippy AI. External websites can embed this widget to provide their users with access to DIY, survival, and humanitarian knowledge.</p>
+
+    <h3>API Endpoint</h3>
+    <p>POST to <code>/api/v1/chat</code></p>
+
+    <h3>Request Format</h3>
+    <pre>{
+    "message": "How do I purify water?",
+    "session_id": "optional-session-id"
+}</pre>
+
+    <h3>Response Format</h3>
+    <pre>{
+    "response": "Here are several methods to purify water...",
+    "session_id": "2025-01-15T10:30:00"
+}</pre>
+
+    <h3>Quick Embed</h3>
+    <p>Visit <code>/api/v1/embed</code> to get ready-to-use HTML code for your website.</p>
+</div>
+
+<h2>Live Demo</h2>
+
+<div id="clippy-chat">
+    <div id="clippy-header">Disaster Clippy</div>
+    <div id="clippy-messages">
+        <div class="clippy-msg clippy-bot">
+            Hello! I'm Disaster Clippy. Ask me about DIY projects, survival techniques, emergency preparedness, or humanitarian resources.
+        </div>
+    </div>
+    <div id="clippy-input-area">
+        <input type="text" id="clippy-input" placeholder="Ask about water, shelter, solar, food...">
+        <button id="clippy-send">></button>
+    </div>
+</div>
+
+<script>
+// Configuration - change this to your Railway URL in production
+const CLIPPY_API = window.location.origin + "/api/v1/chat";
+let clippySessionId = null;
+
+async function sendToClippy() {
+    const input = document.getElementById("clippy-input");
+    const messages = document.getElementById("clippy-messages");
+    const message = input.value.trim();
+
+    if (!message) return;
+
+    // Show user message
+    const userDiv = document.createElement("div");
+    userDiv.className = "clippy-msg clippy-user";
+    userDiv.textContent = message;
+    messages.appendChild(userDiv);
+
+    input.value = "";
+    messages.scrollTop = messages.scrollHeight;
+
+    // Show loading indicator
+    const loadingDiv = document.createElement("div");
+    loadingDiv.className = "clippy-msg clippy-bot clippy-loading";
+    loadingDiv.textContent = "Thinking...";
+    messages.appendChild(loadingDiv);
+    messages.scrollTop = messages.scrollHeight;
+
+    try {
+        const response = await fetch(CLIPPY_API, {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({
+                message: message,
+                session_id: clippySessionId
+            })
+        });
+
+        const data = await response.json();
+        clippySessionId = data.session_id;
+
+        // Remove loading indicator
+        messages.removeChild(loadingDiv);
+
+        // Show bot response
+        const botDiv = document.createElement("div");
+        botDiv.className = "clippy-msg clippy-bot";
+        botDiv.textContent = data.response;
+        messages.appendChild(botDiv);
+        messages.scrollTop = messages.scrollHeight;
+
+    } catch (error) {
+        // Remove loading indicator
+        messages.removeChild(loadingDiv);
+
+        const errorDiv = document.createElement("div");
+        errorDiv.className = "clippy-msg clippy-bot";
+        errorDiv.textContent = "Sorry, I could not connect to the server. Please try again.";
+        messages.appendChild(errorDiv);
+    }
+}
+
+document.getElementById("clippy-send").addEventListener("click", sendToClippy);
+document.getElementById("clippy-input").addEventListener("keypress", function(e) {
+    if (e.key === "Enter") sendToClippy();
+});
+</script>
+
+</body>
+</html>
