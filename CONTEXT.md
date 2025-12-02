@@ -3,7 +3,36 @@
 **Purpose:** Complete context for AI assistants working on this codebase. Read this instead of reading all the code.
 
 **Last Updated:** December 2025
-**Version:** 0.9
+**Version:** 1.0
+
+---
+
+## Repository Structure
+
+This project uses TWO repositories:
+
+| Repository | Purpose | Who Uses It |
+|------------|---------|-------------|
+| disaster-clippy-public | Public code for local admins | Anyone |
+| disaster-clippy (private) | Full code + scrapers + admin tools | Maintainer only |
+
+**Public repo contains:**
+- app.py (FastAPI chat - but /useradmin/ enabled for local use)
+- useradmin/ (local admin panel)
+- sourcepacks/, vectordb/, offline_tools/, storage/
+- All documentation except DEVELOPER-PARENT.md
+
+**Private repo adds:**
+- admin/ (Streamlit global admin dashboard)
+- scraper/ (API scrapers)
+- ingest.py, sync.py (CLI tools)
+- Pinecone write access, full R2 access
+
+**Shared tools** (manually synced from private to public):
+- sourcepacks/pack_tools.py
+- offline_tools/*.py
+- storage/r2.py
+- vectordb/*.py
 
 ---
 
@@ -43,6 +72,38 @@ Disaster Clippy is a RAG (Retrieval-Augmented Generation) system that provides e
 
 ---
 
+## User Tiers
+
+| Tier | Access | Vector DB | R2 Storage | Dashboard |
+|------|--------|-----------|------------|-----------|
+| End User | Public website | None (uses cloud) | None | Chat only |
+| Local Admin | Public GitHub | ChromaDB (local) | Read backups/, Write submissions/ | /useradmin/ |
+| Global Admin | Private GitHub | Pinecone (write) | Full access | Streamlit admin/ |
+
+**End Users** just chat on the Railway-hosted site.
+**Local Admins** run their own instance, add personal sources, submit packs for review.
+**Global Admin** (maintainer) curates sources, approves submissions, manages Pinecone.
+
+---
+
+## Data Architecture
+
+Two-layer storage model:
+
+| Layer | What | Where | Purpose |
+|-------|------|-------|---------|
+| Indexes | Vector embeddings | Pinecone (cloud) / ChromaDB (local) | Fast semantic search |
+| Backups | Source files (ZIM, HTML, PDF) | R2 cloud / local disk | Archival, offline use |
+
+**R2 Cloud Storage folders:**
+- `backups/` - Approved source packs (global admin)
+- `submissions/` - Pending review (local admin uploads)
+- `metadata/` - JSON metadata for each source
+
+**Pinecone** stores vectors for production search. Local users use ChromaDB instead.
+
+---
+
 ## Architecture
 
 ```
@@ -50,7 +111,7 @@ User --> FastAPI (app.py) --> Vector Search --> LLM --> Response
                                    |
                               ChromaDB/Pinecone
                                    ^
-                              Scrapers (ingest.py)
+                              Scrapers (ingest.py) [private repo only]
 ```
 
 ### Key Components
@@ -297,19 +358,34 @@ def load_something():
 
 ## File Locations Summary
 
+**PUBLIC REPO (disaster-clippy-public):**
 ```
-disaster-clippy/
-|-- app.py                 # FastAPI backend
-|-- ingest.py              # Ingestion CLI
-|-- sync.py                # Sync CLI
-|-- scraper/               # Content scrapers
-|-- vectordb/              # Vector database layer
-|-- admin/app.py           # Streamlit dashboard
+|-- app.py                 # FastAPI backend (useradmin enabled)
+|-- local_cli.py           # CLI for local admins
+|-- useradmin/             # Local admin panel
+|-- sourcepacks/           # Pack tools (shared)
+|-- vectordb/              # Vector database layer (shared)
+|-- offline_tools/         # Backup/indexing tools (shared)
+|-- storage/               # R2 client (shared)
 |-- config/sources.json    # Source registry
-|-- data/chroma/           # Local vector DB
-|-- data/metadata/         # Metadata index (JSON)
-|-- templates/index.html   # Chat UI template
+|-- templates/             # Web UI templates
 |-- static/                # Frontend assets
+```
+
+**PRIVATE REPO (disaster-clippy) adds:**
+```
+|-- admin/app.py           # Streamlit global admin dashboard
+|-- scraper/               # API scrapers (Appropedia, MediaWiki, etc.)
+|-- ingest.py              # Scraping CLI
+|-- sync.py                # Pinecone sync CLI
+|-- DEVELOPER-PARENT.md    # Maintainer documentation
+```
+
+**Local data (gitignored):**
+```
+|-- data/chroma/           # Local ChromaDB
+|-- data/metadata/         # Metadata index (JSON)
+|-- .env                   # API keys
 ```
 
 ---
@@ -318,20 +394,44 @@ disaster-clippy/
 
 1. **Read this file first** - You now have full context
 
-2. **For code changes** - Check the relevant module (scraper/, vectordb/, app.py)
+2. **Identify which repo you're in:**
+   - Public repo = local admin features, shared tools
+   - Private repo = global admin, scrapers, Pinecone access
 
-3. **For new scrapers** - Extend BaseScraper, register in SCRAPER_REGISTRY
+3. **For local admin features** (public repo):
+   - useradmin/ - Local admin panel
+   - sourcepacks/pack_tools.py - Shared pack utilities
+   - offline_tools/ - Backup and indexing tools
 
-4. **For admin features** - Modify admin/app.py (Streamlit)
+4. **For global admin features** (private repo only):
+   - admin/app.py - Streamlit dashboard
+   - scraper/ - API scrapers
+   - ingest.py, sync.py - CLI tools
 
-5. **For API changes** - Modify app.py (FastAPI endpoints)
+5. **For shared tools** - Edit in private repo, then manually copy to public repo:
+   - sourcepacks/pack_tools.py
+   - offline_tools/*.py
+   - storage/r2.py
+   - vectordb/*.py
 
-6. **Test locally** before pushing:
+6. **Test locally:**
    ```bash
-   python app.py  # Test chat
-   streamlit run admin/app.py  # Test admin
-   python sync.py --remote pinecone compare  # Check sync status
+   # Public repo (local admin)
+   python app.py              # Chat + useradmin at localhost:8000
+
+   # Private repo (global admin)
+   python app.py              # Chat at localhost:8000 (useradmin disabled)
+   streamlit run admin/app.py # Admin at localhost:8501
    ```
+
+---
+
+## Deployment
+
+- **Live site:** https://disaster-clippy.up.railway.app/
+- **Railway** deploys from private repo (disaster-clippy)
+- Railway has /useradmin/ disabled - end users only see chat
+- Public repo users run locally with /useradmin/ enabled
 
 ---
 

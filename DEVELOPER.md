@@ -92,6 +92,7 @@ If you want to:
 
 ## Other Documentation
 
+- [SUMMARY.md](SUMMARY.md) - Executive summary (non-technical overview)
 - [README.md](README.md) - Project overview
 - [CONTEXT.md](CONTEXT.md) - Design decisions and rationale
 - [ROADMAP.md](ROADMAP.md) - Future plans

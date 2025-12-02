@@ -21,14 +21,14 @@ The system searches 800+ documents from trusted sources and provides answers wit
 
 ### Option 1: Use the Hosted Version
 
-Coming soon - a publicly accessible version.
+Try it now: **https://disaster-clippy.up.railway.app/**
 
 ### Option 2: Run Locally
 
 ```bash
 # Clone the repository
-git clone <repo-url>
-cd disaster-clippy
+git clone https://github.com/xyver/disaster-clippy-public.git
+cd disaster-clippy-public
 
 # Install dependencies
 pip install -r requirements.txt
@@ -47,7 +47,7 @@ python app.py
 Embed Disaster Clippy on your website:
 
 ```bash
-curl -X POST "https://your-server/api/v1/chat" \
+curl -X POST "https://disaster-clippy.up.railway.app/api/v1/chat" \
   -H "Content-Type: application/json" \
   -d '{"message": "How do I filter water?"}'
 ```
@@ -119,9 +119,11 @@ All content is Creative Commons or Public Domain with full attribution.
 
 | Document | Purpose |
 |----------|---------|
-| [DEVELOPER.md](DEVELOPER.md) | Setup, configuration, deployment, technical architecture |
-| [ROADMAP.md](ROADMAP.md) | Future plans and feature development |
+| [SUMMARY.md](SUMMARY.md) | Executive summary (non-technical overview) |
+| [DEVELOPER.md](DEVELOPER.md) | Setup, configuration, deployment |
+| [DEVELOPER-LOCAL.md](DEVELOPER-LOCAL.md) | Local admin guide |
 | [CONTEXT.md](CONTEXT.md) | Complete project context for AI assistants |
+| [ROADMAP.md](ROADMAP.md) | Future plans and feature development |
 
 ---
 
@@ -156,4 +158,4 @@ Key areas:
 
 ---
 
-*Version 0.8 - December 2025*
+*Version 1.0 - December 2025*
