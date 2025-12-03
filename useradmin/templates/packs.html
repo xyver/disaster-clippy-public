@@ -348,6 +348,7 @@
         <div class="nav-links">
             <a href="/useradmin/">Settings</a>
             <a href="/useradmin/packs" class="active">Source Packs</a>
+            <a href="/useradmin/source-tools">Source Tools</a>
             <a href="/useradmin/cloud-upload">Cloud Upload</a>
             <a href="/">Chat</a>
         </div>
@@ -467,7 +468,8 @@
                         <div class="pack-description">${escapeHtml(pack.description || '')}</div>
                         <div class="pack-actions">
                             ${hasLocal
-                                ? '<button class="btn btn-installed" disabled>Already Have Local</button>'
+                                ? `<button class="btn btn-installed" disabled>Installed</button>
+                                   <button class="btn btn-secondary" onclick="redownloadPack('${pack.source_id}')">Redownload</button>`
                                 : `<button class="btn btn-primary" onclick="downloadPack('${pack.source_id}')">Download</button>`
                             }
                         </div>
@@ -481,23 +483,34 @@
             const container = document.getElementById('localSources');
 
             if (localSources.length === 0) {
-                container.innerHTML = '<div class="empty-state">No sources configured. Add sources to config/sources.json</div>';
+                container.innerHTML = '<div class="empty-state">No local sources installed. Download packs from the Cloud Packs section above.</div>';
                 return;
             }
 
             container.innerHTML = localSources.map(source => {
-                const statusClass = source.is_complete ? 'complete' : 'incomplete';
-                const badgeClass = source.is_complete ? 'tier-official' : 'tier-community';
-                const badgeText = source.is_complete ? 'Complete' : 'Incomplete';
+                const statusClass = source.production_ready ? 'complete' : 'incomplete';
+
+                // Determine badge based on status
+                let badgeClass, badgeText;
+                if (source.production_ready) {
+                    badgeClass = 'tier-official';
+                    badgeText = 'Ready';
+                } else if (source.is_complete) {
+                    badgeClass = 'tier-community';
+                    badgeText = 'Complete';
+                } else {
+                    badgeClass = 'tier-personal';
+                    badgeText = 'Incomplete';
+                }
 
                 // Determine which action buttons to show
                 let actionButtons = '';
-                if (source.has_backup && !source.has_metadata) {
-                    actionButtons = `<button class="btn btn-secondary" onclick="generateMetadata('${source.source_id}')">Generate Metadata</button>`;
-                } else if (source.has_metadata && !source.is_complete) {
-                    actionButtons = `<button class="btn btn-secondary" onclick="indexSource('${source.source_id}')">Index to ChromaDB</button>`;
-                } else if (source.is_complete) {
-                    actionButtons = `<a href="/useradmin/cloud-upload" class="btn btn-primary">Ready to Upload</a>`;
+                if (source.production_ready) {
+                    // Ready for upload - show upload button
+                    actionButtons = `<a href="/useradmin/cloud-upload" class="btn btn-primary">Upload to Cloud</a>`;
+                } else {
+                    // Not ready - show edit button to fix issues
+                    actionButtons = `<a href="/useradmin/source-tools?source=${source.source_id}" class="btn btn-secondary">Edit Source</a>`;
                 }
 
                 return `
@@ -515,6 +528,7 @@
                             <span class="check-item ${source.has_config ? 'status-complete' : 'status-incomplete'}">[${source.has_config ? 'x' : ' '}] Config</span>
                             <span class="check-item ${source.has_metadata ? 'status-complete' : 'status-incomplete'}">[${source.has_metadata ? 'x' : ' '}] Metadata</span>
                             <span class="check-item ${source.has_backup ? 'status-complete' : 'status-incomplete'}">[${source.has_backup ? 'x' : ' '}] Backup</span>
+                            <span class="check-item ${source.has_embeddings ? 'status-complete' : 'status-incomplete'}">[${source.has_embeddings ? 'x' : ' '}] Embeddings</span>
                             <span class="check-item ${source.license_verified ? 'status-complete' : 'status-incomplete'}">[${source.license_verified ? 'x' : ' '}] License</span>
                         </div>
                         ${source.missing && source.missing.length > 0 ? `
@@ -570,9 +584,125 @@
             }
         }
 
-        // Download a pack from cloud (placeholder)
+        // Redownload a pack - delete local first, then download fresh
+        async function redownloadPack(sourceId) {
+            const btn = event.target;
+
+            if (!confirm(`Redownload ${sourceId}?\n\nThis will delete your local copy and download fresh from the cloud. Any local changes will be lost.`)) {
+                return;
+            }
+
+            const originalText = btn.textContent;
+            btn.textContent = 'Deleting...';
+            btn.disabled = true;
+
+            try {
+                // First delete the local source
+                const deleteResponse = await fetch('/useradmin/api/delete-source', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ source_id: sourceId, delete_files: true })
+                });
+
+                if (!deleteResponse.ok) {
+                    const deleteData = await deleteResponse.json();
+                    throw new Error(deleteData.detail || 'Failed to delete local source');
+                }
+
+                btn.textContent = 'Downloading...';
+
+                // Now download fresh from R2
+                const downloadResponse = await fetch('/useradmin/api/download-pack', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ source_id: sourceId })
+                });
+
+                const downloadData = await downloadResponse.json();
+
+                if (!downloadResponse.ok) {
+                    throw new Error(downloadData.detail || 'Download failed');
+                }
+
+                showToast(downloadData.message || `Redownloaded ${sourceId} successfully!`, false);
+
+                // Refresh both lists
+                await loadLocalSources();
+                renderAvailablePacks();
+
+                btn.textContent = 'Done';
+
+            } catch (error) {
+                showToast('Redownload failed: ' + error.message, true);
+                btn.textContent = originalText;
+                btn.disabled = false;
+            }
+        }
+
+        // Download a pack from R2 cloud storage
         async function downloadPack(sourceId) {
-            showToast('Download feature coming soon! Use Cloud Upload to submit your own sources.', false);
+            const btn = event.target;
+            const originalText = btn.textContent;
+
+            // Check if a job is already running for this source
+            if (window.jobMonitor && window.jobMonitor.hasActiveJob(sourceId)) {
+                showToast('Download already in progress for this source', true);
+                return;
+            }
+
+            btn.textContent = 'Starting...';
+            btn.disabled = true;
+
+            try {
+                const response = await fetch('/useradmin/api/download-pack', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ source_id: sourceId })
+                });
+
+                const data = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(data.detail || 'Download failed');
+                }
+
+                if (data.status === 'submitted') {
+                    // Job submitted - it will run in background
+                    showToast(`Download started for ${sourceId} - check progress below`);
+                    btn.textContent = 'Downloading...';
+
+                    // Trigger job monitor refresh
+                    if (window.jobMonitor) {
+                        window.jobMonitor.refresh();
+
+                        // Register callback for when job completes
+                        window.jobMonitor.onComplete(data.job_id, (job) => {
+                            if (job.status === 'completed') {
+                                btn.textContent = 'Installed';
+                                btn.classList.remove('btn-primary');
+                                btn.classList.add('btn-success');
+                                loadLocalSources();
+                                renderAvailablePacks();
+                            } else {
+                                btn.textContent = originalText;
+                                btn.disabled = false;
+                            }
+                        });
+                    }
+                } else {
+                    // Synchronous completion (fallback)
+                    showToast(data.message || `Downloaded ${sourceId} successfully!`, false);
+                    loadLocalSources();
+                    btn.textContent = 'Installed';
+                    btn.classList.remove('btn-primary');
+                    btn.classList.add('btn-success');
+                }
+
+            } catch (error) {
+                showToast('Download failed: ' + error.message, true);
+                btn.textContent = originalText;
+                btn.disabled = false;
+            }
         }
 
         function showToast(message, isError = false) {
@@ -596,6 +726,19 @@
         // Initialize
         loadLocalSources();
         fetchAvailablePacks();
+
+        // Listen for job completions to refresh the UI
+        window.addEventListener('jobComplete', (event) => {
+            const job = event.detail;
+            if (job.job_type === 'download') {
+                showToast(`Download completed: ${job.source_id}`, job.status !== 'completed');
+                loadLocalSources();
+                renderAvailablePacks();
+            }
+        });
     </script>
+
+    <!-- Job Monitor - shows active background jobs -->
+    <script src="/useradmin/static/job-monitor.js"></script>
 </body>
 </html>

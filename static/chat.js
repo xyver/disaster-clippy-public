@@ -108,7 +108,8 @@ async function sendMessage(message) {
         };
 
         // Add source filter if not all sources selected
-        if (selectedSources !== null && selectedSources.length > 0) {
+        // null = all sources, [] = none, [ids] = specific sources
+        if (selectedSources !== null) {
             requestBody.sources = selectedSources;
         }
 

@@ -143,7 +143,7 @@ async def get_pack_manifest(source_id: str):
     if not pack:
         raise HTTPException(404, f"Source pack not found: {source_id}")
 
-    # Load sources.json for this source's config
+    # Load source config (discovered from _source.json files)
     sources_config = registry._load_sources_config()
     source_config = sources_config.get("sources", {}).get(source_id, {})
 

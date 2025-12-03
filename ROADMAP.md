@@ -49,6 +49,74 @@ Added support for Substack newsletters using CSV export.
 
 ## Near Term
 
+### PDF Collection System
+
+Structured ingestion and management for PDF documents.
+
+**Status:** In Progress
+
+**Features:**
+- Collection-based organization (group PDFs by topic/author)
+- Two-level metadata (collection + document)
+- DOI detection and CrossRef citation lookup
+- License classification (public domain, open access, restricted)
+- R2 hosting for public domain PDFs
+- Smart chunking with section header detection
+
+**Input Methods:**
+- Single PDF file
+- Folder of PDFs
+- ZIP archive
+- URL download
+
+**Collection Structure:**
+```
+pdf_inbox/
+  flu_preparedness/
+    _collection.json    # Collection metadata
+    FluSCIM_Guide.pdf
+    CDC_Plan.pdf
+  uncategorized/        # Default landing spot
+```
+
+**CLI Commands:**
+```bash
+python ingest.py pdf add <file_or_folder> --collection <name>
+python ingest.py pdf list
+python ingest.py pdf create-collection <name> --license <type>
+```
+
+---
+
+### Export Formats
+
+Support multiple export formats for different use cases.
+
+**Status:** Planning
+
+**Formats:**
+
+| Format | Use Case | Add/Remove | Best For |
+|--------|----------|------------|----------|
+| Folder + manifest | Working copy | Easy | Active development |
+| ZIP (.dcpack) | Distribution | Rebuild | Sharing collections |
+| ZIM | Offline browsing | Rebuild | HTML website snapshots |
+
+**ZIM Conversion (Future):**
+- Convert HTML backups (builditsolar, solarcooking) to ZIM
+- Requires zimwriterfs tool
+- Best for stable, rarely-updated content
+- Enables Kiwix offline browsing
+
+**Implementation:**
+```bash
+python pack_tools.py export <source> --format zip     # Current
+python pack_tools.py export <source> --format dcpack  # Our format
+python pack_tools.py export <source> --format zim     # Future
+```
+
+---
+
 ### Knowledge Map Visualization
 
 Interactive graph showing document relationships based on embedding similarity.
@@ -334,6 +402,14 @@ Provide AI capabilities without internet.
 ---
 
 ## Technical Debt
+
+### Known Bugs
+
+**EMBEDDING_MODE=local not respected**
+- Location: `vectordb/embeddings.py`
+- Issue: EmbeddingService always tries to initialize OpenAI client even when EMBEDDING_MODE=local
+- Impact: Public repo crashes without OPENAI_API_KEY even if user wants local embeddings
+- Fix: Check EMBEDDING_MODE before initializing OpenAI client, only init sentence-transformers for local mode
 
 ### Testing
 - Unit tests for scrapers (mock HTTP)

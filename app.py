@@ -79,6 +79,11 @@ app.add_middleware(
 # Serve static files
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 
+# Serve useradmin static files
+useradmin_static = BASE_DIR / "useradmin" / "static"
+if useradmin_static.exists():
+    app.mount("/useradmin/static", StaticFiles(directory=str(useradmin_static)), name="useradmin_static")
+
 # Include user admin panel routes
 app.include_router(useradmin_router)
 
@@ -98,6 +103,12 @@ def get_vector_store():
         vector_store = create_vector_store(mode=mode)
         print(f"Vector store ready: {type(vector_store).__name__}")
     return vector_store
+
+def reload_vector_store():
+    """Force reload the vector store (called when backup path changes)"""
+    global vector_store
+    vector_store = None
+    return get_vector_store()
 
 def get_llm():
     global llm
@@ -304,17 +315,26 @@ async def get_sources():
     stats = store.get_stats()
     sources_counts = stats.get("sources", {})
 
-    # Load source names from config if available
-    config_path = BASE_DIR / "config" / "sources.json"
+    # Load source names from _source.json files in backup folder
+    from useradmin.local_config import get_local_config
+    local_config = get_local_config()
+    backup_folder = local_config.get_backup_folder()
+
     source_names = {}
-    if config_path.exists():
-        try:
-            with open(config_path) as f:
-                config = json.load(f)
-                for source_id, source_data in config.get("sources", {}).items():
-                    source_names[source_id] = source_data.get("name", source_id)
-        except Exception:
-            pass
+    if backup_folder:
+        backup_path = Path(backup_folder)
+        if backup_path.exists():
+            for source_folder in backup_path.iterdir():
+                if source_folder.is_dir():
+                    source_id = source_folder.name
+                    source_file = source_folder / f"{source_id}_source.json"
+                    if source_file.exists():
+                        try:
+                            with open(source_file) as f:
+                                source_data = json.load(f)
+                                source_names[source_id] = source_data.get("name", source_id)
+                        except Exception:
+                            pass
 
     # Build sources dict with names and counts
     sources = {}
@@ -330,14 +350,186 @@ async def get_sources():
     }
 
 
+def get_connection_mode() -> str:
+    """Get current connection mode from local config"""
+    try:
+        from useradmin.local_config import get_local_config
+        config = get_local_config()
+        return config.get_offline_mode()
+    except Exception:
+        return "hybrid"  # Default to hybrid
+
+
+def search_articles(query: str, n_results: int = 10,
+                   source_filter: dict = None, mode: str = None) -> list:
+    """
+    Search for articles using the appropriate method based on connection mode.
+
+    Args:
+        query: Search query
+        n_results: Number of results
+        source_filter: ChromaDB filter dict
+        mode: Connection mode (online_only, offline_only, hybrid)
+
+    Returns:
+        List of matching articles
+    """
+    if mode is None:
+        mode = get_connection_mode()
+
+    store = get_vector_store()
+
+    if mode == "offline_only":
+        # Use keyword search - no API calls
+        return store.search_offline(query, n_results=n_results, filter=source_filter)
+
+    elif mode == "hybrid":
+        # Try online first, fall back to offline on error
+        try:
+            return store.search(query, n_results=n_results, filter=source_filter)
+        except Exception as e:
+            print(f"Online search failed, falling back to offline: {e}")
+            return store.search_offline(query, n_results=n_results, filter=source_filter)
+
+    else:  # online_only
+        # Use semantic search with embeddings API
+        return store.search(query, n_results=n_results, filter=source_filter)
+
+
+def generate_response(query: str, context: str, history: list, mode: str = None) -> str:
+    """
+    Generate a response using the appropriate method based on connection mode.
+
+    Args:
+        query: User's question
+        context: Formatted article context
+        history: Conversation history
+        mode: Connection mode
+
+    Returns:
+        Response text
+    """
+    if mode is None:
+        mode = get_connection_mode()
+
+    if mode == "offline_only":
+        # Try Ollama first if enabled, fall back to simple response
+        return generate_offline_response(query, context, history)
+
+    elif mode == "hybrid":
+        # Try online LLM first
+        try:
+            chain = chat_prompt | get_llm()
+            response = chain.invoke({
+                "query": query,
+                "context": context,
+                "history": history
+            })
+            return response.content
+        except Exception as e:
+            print(f"LLM call failed, trying offline: {e}")
+            # Fall back to offline (Ollama or simple response)
+            return generate_offline_response(query, context, history)
+
+    else:  # online_only
+        chain = chat_prompt | get_llm()
+        response = chain.invoke({
+            "query": query,
+            "context": context,
+            "history": history
+        })
+        return response.content
+
+
+def generate_offline_response(query: str, context: str, history: list) -> str:
+    """
+    Generate response using local Ollama if available, otherwise simple format.
+    """
+    # Check if Ollama is enabled
+    try:
+        from useradmin.local_config import get_local_config
+        config = get_local_config()
+
+        if config.is_ollama_enabled():
+            from useradmin.ollama_manager import get_ollama_manager
+            ollama = get_ollama_manager()
+
+            # Build system prompt
+            system = """You are Disaster Clippy, a helpful assistant for DIY and humanitarian resources.
+Your role is to help users find relevant articles and answer questions based on the provided context.
+Be concise, practical, and helpful. Focus on actionable information.
+Only recommend articles that are in the provided context - do not make up articles."""
+
+            # Build conversation messages
+            messages = []
+            for msg in history[-10:]:  # Last 5 exchanges
+                if hasattr(msg, 'content'):
+                    role = "user" if msg.__class__.__name__ == "HumanMessage" else "assistant"
+                    messages.append({"role": role, "content": msg.content})
+
+            # Add current query with context
+            user_message = f"""User query: {query}
+
+Relevant articles from knowledge base:
+{context}
+
+Based on these search results, help the user find what they need."""
+            messages.append({"role": "user", "content": user_message})
+
+            # Generate with Ollama
+            response = ollama.chat(messages, system=system)
+            if response:
+                return response
+
+            # Ollama failed, fall through to simple response
+            print("Ollama response failed, using simple format")
+
+    except Exception as e:
+        print(f"Ollama error: {e}")
+
+    # Fall back to simple formatted response
+    return format_offline_response(query, context)
+
+
+def format_offline_response(query: str, context: str) -> str:
+    """
+    Generate a simple response without LLM for offline mode.
+    Returns article summaries directly.
+    """
+    if "No relevant articles found" in context:
+        return "I couldn't find any matching articles in my offline database. Try different search terms or check that you have source packs installed."
+
+    # Extract article titles and snippets from context
+    lines = context.split("\n")
+    articles = []
+    current_title = None
+
+    for line in lines:
+        if line.startswith("Article #"):
+            current_title = line.split(": ", 1)[-1] if ": " in line else line
+        elif line.startswith("Content Preview:") and current_title:
+            articles.append(current_title)
+            current_title = None
+
+    if articles:
+        article_list = "\n".join(f"- {a}" for a in articles[:5])
+        return f"Based on your search for \"{query}\", I found these relevant articles:\n\n{article_list}\n\nCheck the articles panel for more details and links. (Running in offline mode - install a local LLM for conversational responses)"
+
+    return "I found some articles that might help. Check the articles panel on the right for details. (Running in offline mode)"
+
+
 @app.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
     """
     Main chat endpoint.
     Handles conversational queries with context from vector store.
+    Respects connection mode setting (online_only, hybrid, offline_only).
     """
     session_id = request.session_id or datetime.utcnow().isoformat()
     message = request.message.strip()
+
+    # Get connection mode
+    mode = get_connection_mode()
 
     # Get or create session
     if session_id not in sessions:
@@ -356,19 +548,26 @@ async def chat(request: ChatRequest):
         # Try to find which article they're referring to
         articles = handle_similarity_query(message, session["last_results"])
     else:
-        # Regular semantic search - fetch more results for re-ranking
-        # Build filter for source selection
+        # Search using appropriate method based on connection mode
+        # request.sources: None = all, [] = none, [ids] = specific
         source_filter = None
-        if request.sources and len(request.sources) > 0:
-            source_filter = {"source": {"$in": request.sources}}
-
-        articles = get_vector_store().search(message, n_results=10, filter=source_filter)
+        if request.sources is not None:
+            if len(request.sources) == 0:
+                # Empty list = no sources selected, return empty results
+                articles = []
+            else:
+                source_filter = {"source": {"$in": request.sources}}
+                articles = search_articles(message, n_results=10,
+                                          source_filter=source_filter, mode=mode)
+        else:
+            articles = search_articles(message, n_results=10,
+                                       source_filter=source_filter, mode=mode)
 
     # Prioritize results by doc_type (guides by default, unless user asked for something else)
     articles = prioritize_results_by_doc_type(articles, preferred_doc_type)
 
     # Filter by sources if specified (post-filter for similarity queries)
-    if request.sources and len(request.sources) > 0:
+    if request.sources is not None and len(request.sources) > 0:
         articles = [a for a in articles if a.get("metadata", {}).get("source") in request.sources]
 
     # Return top 5 after re-ranking
@@ -383,18 +582,12 @@ async def chat(request: ChatRequest):
     # Build conversation history (last 10 exchanges)
     history = session["history"][-20:]  # 20 messages = 10 exchanges
 
-    # Generate response
-    chain = chat_prompt | get_llm()
-
-    response = chain.invoke({
-        "query": message,
-        "context": context,
-        "history": history
-    })
+    # Generate response using appropriate method based on connection mode
+    response_text = generate_response(message, context, history, mode)
 
     # Update history
     session["history"].append(HumanMessage(content=message))
-    session["history"].append(AIMessage(content=response.content))
+    session["history"].append(AIMessage(content=response_text))
 
     # Format articles for response
     formatted_articles = [
@@ -410,7 +603,7 @@ async def chat(request: ChatRequest):
     ]
 
     return ChatResponse(
-        response=response.content,
+        response=response_text,
         articles=formatted_articles,
         session_id=session_id
     )
@@ -966,6 +1159,89 @@ def detect_doc_type_preference(message: str) -> Optional[str]:
     return None
 
 
+# Cache for source base_urls
+_source_base_urls = {}
+
+
+def _get_source_base_url(source_id: str) -> Optional[str]:
+    """Get the base_url for a source from _source.json or known mappings"""
+    global _source_base_urls
+
+    if source_id in _source_base_urls:
+        return _source_base_urls[source_id]
+
+    # Known ZIM sources (Kiwix convention)
+    known_urls = {
+        "bitcoin": "https://en.bitcoin.it/wiki/",
+        "wikipedia": "https://en.wikipedia.org/wiki/",
+        "wiktionary": "https://en.wiktionary.org/wiki/",
+        "wikihow": "https://www.wikihow.com/",
+        "stackexchange": "https://stackexchange.com/",
+        "stackoverflow": "https://stackoverflow.com/",
+        "gutenberg": "https://www.gutenberg.org/",
+    }
+
+    if source_id in known_urls:
+        _source_base_urls[source_id] = known_urls[source_id]
+        return known_urls[source_id]
+
+    # Try to load from {source_id}_source.json in backup folder
+    try:
+        local_config = get_local_config()
+        backup_folder = local_config.get_backup_folder()
+
+        if backup_folder:
+            source_file = Path(backup_folder) / source_id / f"{source_id}_source.json"
+            if source_file.exists():
+                with open(source_file) as f:
+                    source_data = json.load(f)
+                    base_url = source_data.get("base_url")
+                    if base_url:
+                        _source_base_urls[source_id] = base_url
+                        return base_url
+    except Exception:
+        pass
+
+    return None
+
+
+def _convert_zim_url(zim_url: str, source_id: str) -> Optional[str]:
+    """
+    Convert a zim:// URL to a real web URL.
+
+    Args:
+        zim_url: URL in format zim://{source_id}/{article_path}
+        source_id: The source identifier
+
+    Returns:
+        Real URL or None if can't convert
+    """
+    if not zim_url.startswith('zim://'):
+        return zim_url
+
+    # Parse zim:// URL
+    # Format: zim://{source_id}/{article_path}
+    parts = zim_url[6:].split('/', 1)
+    if len(parts) < 2:
+        return None
+
+    zim_source = parts[0]
+    article_path = parts[1]
+
+    # Get base URL for this source
+    base_url = _get_source_base_url(zim_source) or _get_source_base_url(source_id)
+    if not base_url:
+        return None
+
+    # Combine base URL with article path
+    # Make sure base_url ends with / and article_path doesn't start with /
+    if not base_url.endswith('/'):
+        base_url += '/'
+    article_path = article_path.lstrip('/')
+
+    return base_url + article_path
+
+
 def prioritize_results_by_doc_type(articles: List[dict],
                                     preferred_type: Optional[str] = None) -> List[dict]:
     """
@@ -1047,10 +1323,16 @@ def format_articles_for_context(articles: List[dict]) -> str:
             DOC_TYPE_ACADEMIC: "Academic (research paper/study)"
         }.get(doc_type, "Article")
 
-        # Handle ZIM URLs - these are offline-only and not linkable
+        # Handle ZIM URLs - convert to real URLs if base_url is known
         url = metadata.get('url', 'N/A')
         if url.startswith('zim://'):
-            url_line = "URL: (offline archive - not linkable)"
+            # Try to convert zim:// URL to real URL
+            # Format: zim://{source_id}/{article_path}
+            real_url = _convert_zim_url(url, metadata.get('source', ''))
+            if real_url:
+                url_line = f"URL: {real_url}"
+            else:
+                url_line = "URL: (offline archive)"
         else:
             url_line = f"URL: {url}"
 

@@ -33,7 +33,8 @@ def get_vector_store(mode: Optional[str] = None, **kwargs):
         mode = os.getenv("VECTOR_DB_MODE", "local").lower()
 
     if mode == "local":
-        persist_dir = kwargs.pop("persist_dir", "data/chroma")
+        # VectorStore now uses BACKUP_PATH/chroma by default
+        persist_dir = kwargs.pop("persist_dir", None)
         return VectorStore(persist_dir=persist_dir, **kwargs)
 
     elif mode == "pinecone":

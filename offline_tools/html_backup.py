@@ -52,14 +52,29 @@ class HTMLBackupScraper:
         self.session.headers.update(self.headers)
 
         # Load existing manifest if resuming
-        self.manifest_path = self.output_dir / "manifest.json"
+        # New naming convention: {source_id}_backup_manifest.json
+        self.manifest_path = self.output_dir / f"{source_id}_backup_manifest.json"
+        # Also check for legacy manifest.json and migrate if needed
+        self.legacy_manifest_path = self.output_dir / "manifest.json"
         self.manifest = self._load_manifest()
 
     def _load_manifest(self):
-        """Load existing manifest or create new one"""
+        """Load existing manifest or create new one. Migrates from legacy manifest.json if needed."""
+        # Try new naming convention first
         if self.manifest_path.exists():
             with open(self.manifest_path, 'r', encoding='utf-8') as f:
                 return json.load(f)
+        # Check for legacy manifest.json and migrate
+        if self.legacy_manifest_path.exists():
+            print(f"Migrating legacy manifest.json to {self.manifest_path.name}")
+            with open(self.legacy_manifest_path, 'r', encoding='utf-8') as f:
+                manifest = json.load(f)
+            # Save to new location
+            with open(self.manifest_path, 'w', encoding='utf-8') as f:
+                json.dump(manifest, f, indent=2, ensure_ascii=False)
+            # Remove legacy file
+            self.legacy_manifest_path.unlink()
+            return manifest
         return {
             "source_id": self.source_id,
             "base_url": self.base_url,
@@ -405,7 +420,8 @@ class HTMLBackupScraper:
             "errors": errors
         }
 
-    def backup(self, page_limit=100, include_assets=True, progress_callback=None, priority_urls=None):
+    def backup(self, page_limit=100, include_assets=True, progress_callback=None, priority_urls=None,
+               max_consecutive_failures=5, stop_callback=None):
         """
         Main backup method.
 
@@ -414,6 +430,8 @@ class HTMLBackupScraper:
             include_assets: Whether to download images/CSS
             progress_callback: Function(current, total, message) for progress updates
             priority_urls: List of URLs to prioritize (e.g., already indexed pages)
+            max_consecutive_failures: Stop after this many consecutive failures (default 5)
+            stop_callback: Function() that returns True if backup should stop
         """
         print(f"Starting HTML backup of {self.source_id}")
         print(f"Output directory: {self.output_dir}")
@@ -470,7 +488,16 @@ class HTMLBackupScraper:
             print(f"Priority (indexed) pages to backup: {priority_to_backup}")
 
         # Download each NEW page (skip already backed up)
+        consecutive_failures = 0
+        stopped_early = False
+
         for i, page in enumerate(new_pages):
+            # Check if we should stop
+            if stop_callback and stop_callback():
+                print("Backup stopped by user")
+                stopped_early = True
+                break
+
             url = page["url"]
             title = page["title"]
 
@@ -484,7 +511,17 @@ class HTMLBackupScraper:
 
             html = self._fetch_page(url)
             if not html:
+                consecutive_failures += 1
+                if consecutive_failures >= max_consecutive_failures:
+                    error_msg = f"Stopping after {max_consecutive_failures} consecutive failures. Last errors: {self.errors[-3:]}"
+                    print(f"\n{error_msg}")
+                    self.errors.append(error_msg)
+                    stopped_early = True
+                    break
                 continue
+
+            # Reset consecutive failures on success
+            consecutive_failures = 0
 
             # Process HTML
             processed_html = self._process_html(html, url, include_assets)
@@ -568,7 +605,8 @@ class HTMLBackupScraper:
             "assets_downloaded": len(self.downloaded_assets),
             "output_dir": str(self.output_dir),
             "errors": self.errors,
-            "error_summary": error_types if self.errors else {}
+            "error_summary": error_types if self.errors else {},
+            "stopped_early": stopped_early
         }
 
     def _create_index(self):
@@ -610,7 +648,8 @@ class HTMLBackupScraper:
 
 
 def run_backup(backup_path, source_id, base_url, scraper_type="mediawiki",
-               page_limit=100, include_assets=True, progress_callback=None, priority_urls=None):
+               page_limit=100, include_assets=True, progress_callback=None, priority_urls=None,
+               max_consecutive_failures=5, stop_callback=None):
     """
     Convenience function to run a backup.
 
@@ -623,11 +662,14 @@ def run_backup(backup_path, source_id, base_url, scraper_type="mediawiki",
         include_assets: Download images/CSS
         progress_callback: Progress update function
         priority_urls: URLs to backup first (e.g., already indexed pages)
+        max_consecutive_failures: Stop after this many consecutive failures (default 5)
+        stop_callback: Function that returns True to stop backup
 
     Returns dict with success status, pages saved, errors, etc.
     """
     scraper = HTMLBackupScraper(backup_path, source_id, base_url, scraper_type)
-    return scraper.backup(page_limit, include_assets, progress_callback, priority_urls)
+    return scraper.backup(page_limit, include_assets, progress_callback, priority_urls,
+                         max_consecutive_failures, stop_callback)
 
 
 def repair_backup(backup_path, source_id, base_url, scraper_type="mediawiki",
@@ -670,7 +712,10 @@ def get_backup_status(backup_path, source_id):
     Returns dict with backed_up_count, backed_up_urls, manifest info.
     """
     backup_dir = Path(backup_path) / source_id
-    manifest_path = backup_dir / "manifest.json"
+    # Check new naming convention first, then legacy
+    manifest_path = backup_dir / f"{source_id}_backup_manifest.json"
+    if not manifest_path.exists():
+        manifest_path = backup_dir / "manifest.json"  # Legacy fallback
 
     if not manifest_path.exists():
         return {

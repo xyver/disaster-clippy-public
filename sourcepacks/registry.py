@@ -71,23 +71,68 @@ class SourcePackRegistry:
     """
     Manages the catalog of source packs available for download.
 
-    Combines data from:
-    - config/sources.json (source definitions with licenses)
+    Discovers sources from:
+    - {source_id}_source.json files in backup folder
     - data/metadata/_master.json (document counts, topics)
     - Backup folder scanning (for offline availability)
     """
 
     def __init__(self, base_dir: Optional[Path] = None):
         self.base_dir = base_dir or Path(__file__).parent.parent
-        self.sources_config_path = self.base_dir / "config" / "sources.json"
-        self.metadata_path = self.base_dir / "data" / "metadata" / "_master.json"
+        # Sources and metadata are in BACKUP_PATH, not config/data folders
+        self.sources_config_path = self._get_sources_path()
+        self.metadata_path = self._get_metadata_path()
+
+    def _get_backup_folder(self) -> str:
+        """Get backup folder from local_config or BACKUP_PATH env var"""
+        import os
+        # Try local_config first (user's GUI setting)
+        try:
+            from useradmin.local_config import get_local_config
+            config = get_local_config()
+            backup_folder = config.get_backup_folder()
+            if backup_folder:
+                return backup_folder
+        except ImportError:
+            pass
+        return os.getenv("BACKUP_PATH", "")
+
+    def _get_sources_path(self) -> Path:
+        """DEPRECATED: Returns backup folder path. Sources are discovered from _source.json files."""
+        backup_path = self._get_backup_folder()
+        if backup_path:
+            return Path(backup_path)
+        return self.base_dir / "config"
+
+    def _get_metadata_path(self) -> Path:
+        """Get path to _master.json - check backup folder first"""
+        backup_path = self._get_backup_folder()
+        if backup_path:
+            metadata_path = Path(backup_path) / "_master.json"
+            if metadata_path.exists():
+                return metadata_path
+        return self.base_dir / "data" / "metadata" / "_master.json"
 
     def _load_sources_config(self) -> Dict[str, Any]:
-        """Load source definitions from config"""
-        if self.sources_config_path.exists():
-            with open(self.sources_config_path, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        return {"sources": {}}
+        """Load source definitions by discovering _source.json files in backup folder"""
+        backup_path = self._get_backup_folder()
+        sources = {}
+
+        if backup_path:
+            backup_folder = Path(backup_path)
+            if backup_folder.exists():
+                for source_folder in backup_folder.iterdir():
+                    if source_folder.is_dir():
+                        source_id = source_folder.name
+                        source_file = source_folder / f"{source_id}_source.json"
+                        if source_file.exists():
+                            try:
+                                with open(source_file, 'r', encoding='utf-8') as f:
+                                    sources[source_id] = json.load(f)
+                            except Exception:
+                                pass
+
+        return {"sources": sources}
 
     def _load_metadata(self) -> Dict[str, Any]:
         """Load metadata master index"""
@@ -104,9 +149,7 @@ class SourcePackRegistry:
         Note: Backups may exist but not be available for download from a remote server.
         This checks LOCAL availability only.
         """
-        import os
-
-        backup_path = os.getenv("BACKUP_PATH", "")
+        backup_path = self._get_backup_folder()
         if not backup_path:
             return False, None, 0.0
 
@@ -149,7 +192,7 @@ class SourcePackRegistry:
         """
         Determine the quality tier for a source based on completeness.
 
-        Official: license_verified + in sources.json (backup is bonus, not required)
+        Official: license_verified in _source.json (backup is bonus, not required)
         Community: license reported but not verified
         Personal: No license info
         """

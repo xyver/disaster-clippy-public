@@ -2,8 +2,8 @@
 
 **Purpose:** Complete context for AI assistants working on this codebase. Read this instead of reading all the code.
 
-**Last Updated:** December 2025
-**Version:** 1.0
+**Last Updated:** December 2, 2025
+**Version:** 1.1
 
 ---
 
@@ -436,3 +436,453 @@ def load_something():
 ---
 
 *This document should be updated when significant architecture changes occur.*
+
+---
+
+## Metadata Schema Redesign (December 2025)
+
+This section documents the target metadata architecture. The current implementation is inconsistent and needs migration to this design.
+
+### Design Goals
+
+1. **Scalability** - Work for small sources (100 docs) and large sources (50,000+ docs)
+2. **Portability** - Each source is a self-contained folder that can be moved/shared
+3. **Diffing** - Enable fast comparison between scrapes without loading large files
+4. **Incremental updates** - Only re-embed changed documents
+5. **Merging** - Combine partial scrapes into unified sources
+
+### Two Processing Pipelines
+
+**Pipeline 1: Backup** (source-specific)
+- Input: Raw source (ZIM file, PDF folder, website URL)
+- Output: Backup files + backup metadata
+- Creates: `backup_manifest.json` + actual files (pages/, *.zim, *.pdf)
+
+**Pipeline 2: Index** (universal)
+- Input: Backup folder (any type)
+- Output: Embeddings + index metadata
+- Creates: `_metadata.json` + `_index.json`
+
+Both pipelines contribute to `_manifest.json` which describes the whole source.
+
+---
+
+### Source Types
+
+| Type | Backup Format | Examples |
+|------|---------------|----------|
+| html | `pages/` folder with HTML files | BuildItSolar, SolarCooking, Appropedia |
+| zim | Single `.zim` file | Bitcoin Wiki, Wikipedia subsets |
+| pdf | PDF files in folder | Humanitarian Standards, FluSCIM guides |
+| substack | `pages/` folder (like html) | The Barracks |
+
+Future types: academic papers, government reports, zip archives
+
+---
+
+### Structure Types: Flat vs Hierarchical
+
+Sources can be structured two ways, declared in the manifest:
+
+**Flat** (default, for most sources < 2,000 docs):
+```
+source/
+  _manifest.json
+  _metadata.json
+  _index.json
+  backup_manifest.json  (HTML only)
+  pages/ or *.zim or *.pdf
+```
+
+**Hierarchical** (for large or naturally categorized sources):
+```
+source/
+  _manifest.json          # Identity for whole collection
+  _master.json            # Index of child sources
+  backup_manifest.json    # SHARED - all URL->file mappings
+  pages/                  # SHARED - all backup files
+  chroma/                 # SHARED - combined vector DB (optional)
+
+  water/                  # Child source (flat structure)
+    _manifest.json
+    _metadata.json
+    _index.json
+
+  solar/                  # Another child source
+    _manifest.json
+    _metadata.json
+    _index.json
+```
+
+Key insight: A **collection** contains child **sources**. Each child is a flat source. The structure is recursive - collections can contain collections if needed (e.g., Wikipedia > Science > Physics).
+
+**What's shared vs layered:**
+
+| Component | Shared at Collection Root | Per Child Source |
+|-----------|---------------------------|------------------|
+| Backup files (pages/, *.zim) | Yes | No - single copy |
+| ChromaDB | Yes (optional) | No |
+| `_manifest.json` | Yes (collection identity) | Yes (child identity) |
+| `_master.json` | Yes (lists children) | No |
+| `_metadata.json` | No | Yes |
+| `_index.json` | No | Yes |
+| `backup_manifest.json` | Yes | No |
+
+---
+
+### File Schemas
+
+#### 1. `_manifest.json` - Source Identity (tiny, never grows with doc count)
+
+```json
+{
+  "schema_version": 2,
+  "source_id": "builditsolar",
+
+  // === IDENTITY ===
+  "name": "BuildItSolar",
+  "description": "DIY solar energy projects",
+  "source_type": "html",
+  "base_url": "https://builditsolar.com",
+
+  // === STRUCTURE ===
+  "structure": "flat",
+  // OR for collections:
+  // "structure": "hierarchical",
+  // "child_count": 12,
+
+  // For children of a collection:
+  // "parent_id": "appropedia",
+
+  // === LICENSING ===
+  "license": "Fair Use",
+  "license_url": "",
+  "license_verified": true,
+  "license_notes": "",
+
+  // === TAGS (for filtering/discovery, ~12 max) ===
+  "tags": ["solar", "DIY", "energy", "heating", "cooling"],
+
+  // === STATS (summary only) ===
+  "document_count": 337,
+  "total_chars": 2555673,
+
+  // === BACKUP INFO (from backup pipeline) ===
+  "backup": {
+    "type": "html",
+    "created_at": "2025-12-02",
+    "size_bytes": 150000000
+  },
+
+  // === INDEX INFO (from index pipeline) ===
+  "index": {
+    "indexed_at": "2025-12-02",
+    "embedding_model": "text-embedding-3-small",
+    "dimensions": 1536
+  }
+}
+```
+
+For PDF collections, add:
+```json
+{
+  "pdf_documents": {
+    "Sphere-Handbook-2018-EN.pdf": {
+      "title": "The Sphere Handbook",
+      "authors": ["Sphere Association"],
+      "publication_date": "2018-10-10",
+      "page_count": 458,
+      "chunk_count": 297
+    }
+  }
+}
+```
+
+#### 2. `_metadata.json` - Document Lookup Table (small, for diffing)
+
+```json
+{
+  "schema_version": 2,
+  "source_id": "builditsolar",
+  "document_count": 337,
+  "total_chars": 2555673,
+  "last_updated": "2025-12-02",
+  "documents": {
+    "abc123def456": {
+      "title": "Solar Water Heater",
+      "url": "/Projects/Water/SolarHeater",
+      "content_hash": "abc123def456",
+      "char_count": 5000,
+      "categories": [],
+      "scraped_at": "2025-12-02T10:00:00"
+    }
+  }
+}
+```
+
+Key fields for diffing:
+- `url` - Unique identifier across scrapes
+- `content_hash` - Detect content changes (same hash = skip)
+- `scraped_at` - Know which scrape is newer
+
+#### 3. `_index.json` - Vectors + Content (large, for search)
+
+```json
+{
+  "schema_version": 2,
+  "source_id": "builditsolar",
+  "embedding_model": "text-embedding-3-small",
+  "dimensions": 1536,
+  "document_count": 337,
+  "documents": {
+    "abc123def456": {
+      "content": "Full text content here...",
+      "embedding": [0.1, 0.2, ...]
+    }
+  }
+}
+```
+
+#### 4. `backup_manifest.json` - URL to File Mapping (HTML sources only)
+
+```json
+{
+  "schema_version": 2,
+  "source_id": "solarcooking",
+  "created_at": "2025-12-02",
+  "page_count": 173,
+  "total_size_bytes": 27133679,
+  "pages": {
+    "/wiki/Solar_Cooker": {
+      "filename": "wiki_Solar_Cooker.html",
+      "title": "Solar Cooker | Fandom",
+      "size": 150000
+    }
+  }
+}
+```
+
+#### 5. `_master.json` - Collection Index (hierarchical sources only)
+
+At root level (D:\disaster-backups\_master.json):
+```json
+{
+  "schema_version": 2,
+  "last_updated": "2025-12-02",
+  "sources": {
+    "builditsolar": { "type": "source", "path": "builditsolar/" },
+    "appropedia": { "type": "collection", "path": "appropedia/" },
+    "bitcoin": { "type": "source", "path": "bitcoin/" }
+  }
+}
+```
+
+At collection level (appropedia/_master.json):
+```json
+{
+  "schema_version": 2,
+  "parent": "appropedia",
+  "sources": {
+    "water": { "type": "source", "path": "water/", "document_count": 500 },
+    "solar": { "type": "source", "path": "solar/", "document_count": 800 },
+    "food": { "type": "source", "path": "food/", "document_count": 300 }
+  }
+}
+```
+
+---
+
+### Folder Structure Examples
+
+**Flat source (BuildItSolar):**
+```
+builditsolar/
+  _manifest.json
+  _metadata.json
+  _index.json
+  backup_manifest.json
+  pages/
+  assets/
+```
+
+**ZIM source (Bitcoin):**
+```
+bitcoin/
+  _manifest.json
+  _metadata.json
+  _index.json
+  bitcoin.zim
+```
+
+**PDF collection:**
+```
+pdf_humanitarian_standards/
+  _manifest.json
+  _metadata.json
+  _index.json
+  Sphere-Handbook-2018-EN.pdf
+  Base-Camp-Handbook.pdf
+```
+
+**Hierarchical collection (Appropedia):**
+```
+appropedia/
+  _manifest.json
+  _master.json
+  backup_manifest.json
+  pages/
+
+  water/
+    _manifest.json
+    _metadata.json
+    _index.json
+
+  solar/
+    _manifest.json
+    _metadata.json
+    _index.json
+```
+
+**Root backup folder:**
+```
+D:\disaster-backups\
+  _master.json
+  chroma/
+  builditsolar/
+  bitcoin/
+  appropedia/
+  pdf_humanitarian_standards/
+```
+
+---
+
+### How Search Works (Reference)
+
+Understanding how search works clarifies what each file is for:
+
+1. **User asks question** - "How do I purify water in an emergency?"
+2. **Query embedded** - Question becomes a vector using same model as index
+3. **Vector similarity search** - ChromaDB/Pinecone finds closest document vectors
+4. **Results returned with metadata** - Each result includes title, URL, source
+5. **LLM reads content** - Full text sent to LLM for answer synthesis
+6. **Response with links** - User sees answer + clickable source links
+
+**Where the URL lives:**
+- Stored in ChromaDB/Pinecone metadata (returned with search results)
+- Stored in `_metadata.json` (for diffing/merging operations)
+- Base URL in `_manifest.json` (combined at display time)
+- `backup_manifest.json` maps URL to local filename for offline access
+
+**What each file does:**
+
+| File | Used For | When |
+|------|----------|------|
+| `_index.json` | Vector similarity search | Every query |
+| `_metadata.json` | Get title/URL after match, diffing | Every query + maintenance |
+| `_manifest.json` | Filter by source, show license | UI display |
+| Tags | Pre-filter before search, faceted browse | Optional filtering |
+
+**Tags vs Vectors:**
+- Tags are for organization and filtering (surface level)
+- Vectors capture semantic meaning (deep level)
+- A query "make water safe using sunlight" matches "Solar Water Disinfection" via vectors even if those exact words aren't in tags
+
+---
+
+### Metadata Use Cases
+
+**1. Detecting changes over time:**
+```python
+old_docs = old_metadata["documents"]
+new_docs = new_metadata["documents"]
+
+added = new_docs.keys() - old_docs.keys()
+removed = old_docs.keys() - new_docs.keys()
+changed = [k for k in old_docs
+           if k in new_docs
+           and old_docs[k]["content_hash"] != new_docs[k]["content_hash"]]
+```
+
+**2. Merging partial scrapes:**
+```python
+combined = {}
+for partial in [water_meta, solar_meta, food_meta]:
+    for doc_id, doc in partial["documents"].items():
+        if doc_id not in combined:
+            combined[doc_id] = doc
+        elif doc["content_hash"] != combined[doc_id]["content_hash"]:
+            handle_conflict(doc)
+```
+
+**3. Incremental index updates:**
+```python
+existing = existing_metadata["documents"].keys()
+new = new_metadata["documents"].keys()
+to_embed = new - existing  # Only embed these
+```
+
+---
+
+### Migration from Current State
+
+Current files (inconsistent):
+- `_source.json` - source config
+- `_documents.json` - doc metadata
+- `_embeddings.json` - vectors + content
+- `_manifest.json` - mixed purpose
+- `_collection.json` - PDF-specific
+- `_backup_manifest.json` - URL mappings
+- `manifest.json` - duplicate
+
+Target files (clean):
+- `_manifest.json` - Source identity (merge _manifest + _source + _collection)
+- `_metadata.json` - Doc lookup (rename from _documents)
+- `_index.json` - Vectors + content (rename from _embeddings)
+- `backup_manifest.json` - URL mappings (rename from _backup_manifest)
+
+Files to delete after migration:
+- `_source.json` (merged into _manifest)
+- `_documents.json` (renamed to _metadata)
+- `_embeddings.json` (renamed to _index)
+- `_collection.json` (merged into _manifest)
+- `manifest.json` (duplicate, delete)
+
+---
+
+### Open Questions
+
+**Tags:**
+- What's the standard vocabulary? Controlled list vs free-form?
+- How do tags roll up from documents to source level?
+- Current code has some tag handling - needs review before changes
+
+**Categories in hierarchical:**
+- Categories derived from document tags
+- Tooling groups docs by primary tag, suggests category structure
+- Manual override available via `_master.json` edits
+- Threshold for flat vs hierarchical: manual decision with tooling suggestions
+
+**Future structure types:**
+- Could add `"structure": "sqlite"` for massive sources if JSON files become unwieldy
+- Current flat/hierarchical covers expected use cases through 50K+ docs
+
+---
+
+### Implementation Status
+
+**Working (needs cleanup):**
+- Flat source structure (files exist but inconsistent naming)
+- Backup pipeline for HTML, ZIM, PDF
+- Index pipeline with embeddings
+- ChromaDB storage with URL in metadata
+
+**Needs implementation:**
+- Consistent file naming per this schema
+- Hierarchical collection support
+- Migration script for existing sources
+- Tooling to auto-detect structure type
+
+**Upcoming sources requiring this:**
+- Appropedia (full site, 5000+ docs) - needs hierarchical
+- Akvopedia (2211 articles) - could be flat or hierarchical
+- Wikipedia subsets via Kiwix ZIM - definitely hierarchical

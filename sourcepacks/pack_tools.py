@@ -1,6 +1,9 @@
 """
 Shared Pack Tools
 Common functions for pack management used by both admin and useradmin.
+
+Source of truth is the backup folder - sources are discovered from
+{source_id}_source.json files in each source subfolder.
 """
 
 from pathlib import Path
@@ -8,11 +11,458 @@ from typing import Dict, Any, List, Optional
 from datetime import datetime
 import json
 import hashlib
+import os
+
+
+# =============================================================================
+# CONSTANTS - Hardcoded options for UI dropdowns
+# =============================================================================
+
+LICENSE_OPTIONS = [
+    "CC-BY",
+    "CC-BY-SA",
+    "CC-BY-NC",
+    "CC-BY-NC-SA",
+    "CC0",
+    "Public Domain",
+    "MIT",
+    "GPL",
+    "Unknown"
+]
+
+PRIORITY_OPTIONS = [
+    "LOCAL",
+    "GOVERNMENT",
+    "GUIDE",
+    "RESEARCH",
+    "ARTICLE",
+    "PRODUCT"
+]
+
+SCRAPER_TYPES = [
+    "mediawiki",
+    "static",
+    "pdf",
+    "api",
+    "substack",
+    "kiwix"
+]
 
 
 def get_project_root() -> Path:
     """Get project root directory"""
     return Path(__file__).parent.parent
+
+
+def get_backup_path() -> Path:
+    """Get backup path from local_config (GUI setting) or BACKUP_PATH env var"""
+    # Try local_config first (user's GUI setting)
+    try:
+        from useradmin.local_config import get_local_config
+        config = get_local_config()
+        backup_folder = config.get_backup_folder()
+        if backup_folder:
+            return Path(backup_folder)
+    except ImportError:
+        pass
+
+    # Fallback to env var
+    backup_path = os.getenv("BACKUP_PATH", "")
+    if backup_path:
+        return Path(backup_path)
+    return get_project_root() / "data" / "metadata"
+
+
+def get_sources_path(prefer_config: bool = False) -> Path:
+    """
+    DEPRECATED: Sources are now discovered from backup folder.
+    This function is kept for backwards compatibility but returns
+    a path that may not exist.
+    """
+    return get_backup_path() / "sources.json"
+
+
+# =============================================================================
+# BACKUP DETECTION - Unified logic for detecting backup type and status
+# =============================================================================
+
+def detect_backup_status(source_id: str, backup_folder: Optional[Path] = None) -> Dict[str, Any]:
+    """
+    Detect backup type and status for a source.
+
+    This is the single source of truth for backup detection, used by:
+    - useradmin/app.py (get_local_sources)
+    - useradmin/cloud_upload.py (get_sources_for_upload)
+    - sourcepacks/pack_tools.py (get_source_sync_status)
+
+    Args:
+        source_id: Source identifier
+        backup_folder: Optional backup folder path. If not provided, uses get_backup_path()
+
+    Returns:
+        Dict with:
+        - has_backup: bool - Whether backup files exist
+        - backup_type: str or None - "zim", "html", or "pdf"
+        - backup_path: str or None - Path to backup file/folder
+        - backup_size_mb: float - Size in MB
+    """
+    if backup_folder is None:
+        backup_folder = get_backup_path()
+
+    result = {
+        "has_backup": False,
+        "backup_type": None,
+        "backup_path": None,
+        "backup_size_mb": 0.0
+    }
+
+    if not backup_folder:
+        return result
+
+    source_folder = Path(backup_folder) / source_id
+    if not source_folder.exists():
+        return result
+
+    # Check ZIM file - first inside source folder, then root (legacy)
+    zim_path = source_folder / f"{source_id}.zim"
+    if not zim_path.exists():
+        # Also check for any .zim file in the source folder
+        zim_files = list(source_folder.glob("*.zim"))
+        if zim_files:
+            zim_path = zim_files[0]
+        else:
+            # Legacy: check root folder
+            legacy_zim = Path(backup_folder) / f"{source_id}.zim"
+            if legacy_zim.exists():
+                zim_path = legacy_zim
+
+    if zim_path.exists():
+        result["has_backup"] = True
+        result["backup_type"] = "zim"
+        result["backup_path"] = str(zim_path)
+        # Calculate FULL folder size for accurate package size
+        try:
+            total_size = sum(f.stat().st_size for f in source_folder.rglob('*') if f.is_file())
+            result["backup_size_mb"] = round(total_size / (1024*1024), 2)
+        except Exception:
+            # Fallback to just ZIM size
+            result["backup_size_mb"] = round(zim_path.stat().st_size / (1024*1024), 2)
+        return result
+
+    # Check HTML folder
+    html_files = list(source_folder.glob("*.html")) + list(source_folder.glob("**/*.html"))
+    pages_folder = source_folder / "pages"
+    if html_files or pages_folder.exists():
+        result["has_backup"] = True
+        result["backup_type"] = "html"
+        result["backup_path"] = str(source_folder)
+        try:
+            total_size = sum(f.stat().st_size for f in source_folder.rglob('*') if f.is_file())
+            result["backup_size_mb"] = round(total_size / (1024*1024), 2)
+        except Exception:
+            pass
+        return result
+
+    # Check PDF collection (_collection.json is the definitive marker)
+    collection_file = source_folder / "_collection.json"
+    if collection_file.exists():
+        result["has_backup"] = True
+        result["backup_type"] = "pdf"
+        result["backup_path"] = str(source_folder)
+        try:
+            total_size = sum(f.stat().st_size for f in source_folder.rglob('*') if f.is_file())
+            result["backup_size_mb"] = round(total_size / (1024*1024), 2)
+        except Exception:
+            pass
+        return result
+
+    return result
+
+
+# =============================================================================
+# SUBMISSION VALIDATION - Unified logic for validating submitted files
+# =============================================================================
+
+def validate_submission_files(files: List[Dict[str, Any]], source_id: str = None) -> Dict[str, Any]:
+    """
+    Validate a list of submitted files against the v2 schema requirements.
+
+    This is the single source of truth for submission validation, used by:
+    - admin/app.py (approve_submission)
+    - Any other submission validation needs
+
+    Args:
+        files: List of file dicts with 'key' (path) and optionally 'size_mb'
+               Files can be R2 keys like "submissions/timestamp_source/file.json"
+               or local paths
+        source_id: Optional source ID (extracted from files if not provided)
+
+    Returns:
+        Dict with:
+        - is_valid: bool - Whether submission meets all requirements
+        - missing: list - List of missing required items
+        - has_backup: bool
+        - has_metadata: bool
+        - has_embeddings: bool
+        - has_source_config: bool
+        - has_license: bool
+        - backup_type: str or None - "zim", "html", "pdf", or "zip"
+        - source_id: str - Detected or provided source_id
+        - files_found: dict - Which specific files were found
+    """
+    result = {
+        "is_valid": False,
+        "missing": [],
+        "has_backup": False,
+        "has_metadata": False,
+        "has_embeddings": False,
+        "has_source_config": False,
+        "has_license": False,
+        "backup_type": None,
+        "source_id": source_id,
+        "files_found": {
+            "backup": None,
+            "metadata": None,
+            "embeddings": None,
+            "source_config": None,
+            "submission_manifest": None,
+            "documents": None
+        }
+    }
+
+    # Extract filenames and categorize
+    for f in files:
+        key = f.get("key", f) if isinstance(f, dict) else str(f)
+        filename = key.split("/")[-1] if "/" in key else key
+
+        # Try to extract source_id from filename if not provided
+        if not result["source_id"] and "_" in filename:
+            # Pattern: {source_id}_source.json, {source_id}_metadata.json, etc.
+            parts = filename.rsplit("_", 1)
+            if len(parts) == 2 and parts[1] in ["source.json", "metadata.json", "embeddings.json", "documents.json"]:
+                result["source_id"] = parts[0]
+
+        # Backup files (.zim or .zip)
+        if filename.endswith('.zim'):
+            result["has_backup"] = True
+            result["backup_type"] = "zim"
+            result["files_found"]["backup"] = filename
+        elif filename.endswith('.zip'):
+            result["has_backup"] = True
+            if '-html.zip' in filename:
+                result["backup_type"] = "html"
+            elif '-pdf.zip' in filename:
+                result["backup_type"] = "pdf"
+            else:
+                result["backup_type"] = "zip"
+            result["files_found"]["backup"] = filename
+
+        # V2 schema: {source_id}_source.json - contains license info
+        elif filename.endswith("_source.json"):
+            result["has_source_config"] = True
+            result["files_found"]["source_config"] = filename
+
+        # V2 schema: {source_id}_metadata.json (or legacy metadata.json)
+        elif filename.endswith("_metadata.json") or filename == "metadata.json":
+            result["has_metadata"] = True
+            result["files_found"]["metadata"] = filename
+
+        # V2 schema: {source_id}_embeddings.json (or legacy index.json)
+        elif filename.endswith("_embeddings.json") or filename.endswith("_index.json") or filename == "index.json":
+            result["has_embeddings"] = True
+            result["files_found"]["embeddings"] = filename
+
+        # V2 schema: {source_id}_documents.json
+        elif filename.endswith("_documents.json"):
+            result["files_found"]["documents"] = filename
+
+        # Submission manifest (has source_config embedded)
+        elif filename == "submission_manifest.json" or filename == "manifest.json":
+            result["files_found"]["submission_manifest"] = filename
+
+    # Build missing list
+    if not result["has_backup"]:
+        result["missing"].append("backup file (.zim or .zip)")
+    if not result["has_metadata"]:
+        result["missing"].append("metadata file")
+    if not result["has_embeddings"]:
+        result["missing"].append("embeddings file (for offline search)")
+    if not result["has_source_config"] and not result["files_found"]["submission_manifest"]:
+        result["missing"].append("source config file")
+
+    # Determine overall validity
+    result["is_valid"] = len(result["missing"]) == 0
+
+    return result
+
+
+def validate_submission_content(
+    source_config: Dict[str, Any],
+    metadata: Dict[str, Any] = None
+) -> Dict[str, Any]:
+    """
+    Validate the content of submission files (after downloading/loading them).
+
+    Args:
+        source_config: Loaded source config (from _source.json or submission_manifest.source_config)
+        metadata: Optional loaded metadata
+
+    Returns:
+        Dict with:
+        - is_valid: bool
+        - missing: list
+        - has_license: bool
+        - license_verified: bool
+        - license_value: str
+    """
+    result = {
+        "is_valid": True,
+        "missing": [],
+        "has_license": False,
+        "license_verified": False,
+        "license_value": ""
+    }
+
+    # Check license
+    license_val = source_config.get("license", "")
+    result["license_value"] = license_val
+    result["license_verified"] = source_config.get("license_verified", False)
+    result["has_license"] = license_val and license_val.lower() not in ["unknown", ""]
+
+    if not result["has_license"]:
+        result["missing"].append("license in source config")
+        result["is_valid"] = False
+
+    return result
+
+
+# =============================================================================
+# UNIFIED SOURCE MANAGEMENT
+# =============================================================================
+
+def load_sources(prefer_config: bool = False) -> Dict[str, Any]:
+    """
+    Get source configuration constants.
+
+    NOTE: Sources are now discovered from the backup folder, not from
+    sources.json. This function returns the constants for UI dropdowns.
+    The 'sources' dict is empty - actual sources are discovered at runtime.
+
+    Returns:
+        Configuration dict with empty sources and option constants
+    """
+    return {
+        "sources": {},
+        "license_options": LICENSE_OPTIONS,
+        "priority_options": PRIORITY_OPTIONS,
+        "scraper_types": SCRAPER_TYPES
+    }
+
+
+def save_sources(config: Dict[str, Any], prefer_config: bool = False) -> bool:
+    """
+    DEPRECATED: Sources are now stored in {source_id}_source.json files
+    in the backup folder. This function is a no-op for backwards compatibility.
+
+    To update a source, modify its _source.json file directly.
+
+    Returns:
+        True (always succeeds as no-op)
+    """
+    # No-op - sources are discovered from backup folder
+    return True
+
+
+def load_master_metadata() -> Dict[str, Any]:
+    """
+    Load the master metadata index from backup folder.
+
+    Returns:
+        Master metadata dict with source counts and totals
+    """
+    master_file = get_backup_path() / "_master.json"
+
+    if master_file.exists():
+        try:
+            with open(master_file, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except (json.JSONDecodeError, IOError) as e:
+            print(f"Warning: Failed to load master metadata: {e}")
+
+    return {"total_documents": 0, "sources": {}}
+
+
+def sync_sources_from_master(prefer_config: bool = False) -> bool:
+    """
+    DEPRECATED: No longer needed since sources are discovered from backup folder.
+    Kept for backwards compatibility as a no-op.
+
+    Returns:
+        False (no changes made)
+    """
+    # No-op - sources are discovered from backup folder
+    return False
+
+
+def get_source_sync_status(source_id: str) -> Dict[str, Any]:
+    """
+    Get sync status between indexed (vector DB) and backed up (HTML) content.
+
+    Args:
+        source_id: Source identifier
+
+    Returns:
+        Dict with indexed/backed up counts and what needs attention
+    """
+    backup_path = get_backup_path()
+
+    result = {
+        "indexed_count": 0,
+        "indexed_urls": [],
+        "backed_up_count": 0,
+        "backed_up_urls": [],
+        "needs_backup": [],
+        "needs_indexing": [],
+        "synced": []
+    }
+
+    # Get indexed URLs from metadata
+    metadata_file = backup_path / source_id / f"{source_id}_metadata.json"
+    if metadata_file.exists():
+        try:
+            with open(metadata_file, 'r', encoding='utf-8') as f:
+                meta = json.load(f)
+                result["indexed_urls"] = [
+                    doc.get("url") for doc in meta.get("documents", {}).values()
+                    if doc.get("url")
+                ]
+                result["indexed_count"] = len(result["indexed_urls"])
+        except Exception:
+            pass
+
+    # Get backed up URLs from backup manifest
+    manifest_file = backup_path / source_id / f"{source_id}_backup_manifest.json"
+    if not manifest_file.exists():
+        manifest_file = backup_path / source_id / "manifest.json"
+
+    if manifest_file.exists():
+        try:
+            with open(manifest_file, 'r', encoding='utf-8') as f:
+                manifest = json.load(f)
+                result["backed_up_urls"] = manifest.get("urls", [])
+                result["backed_up_count"] = len(result["backed_up_urls"])
+        except Exception:
+            pass
+
+    # Calculate what needs attention
+    indexed_set = set(result["indexed_urls"])
+    backed_up_set = set(result["backed_up_urls"])
+
+    result["needs_backup"] = list(indexed_set - backed_up_set)
+    result["needs_indexing"] = list(backed_up_set - indexed_set)
+    result["synced"] = list(indexed_set & backed_up_set)
+
+    return result
 
 
 def generate_metadata_from_html(
@@ -104,11 +554,14 @@ def generate_metadata_from_html(
 
 
 def save_metadata(source_id: str, metadata: Dict[str, Any]) -> Path:
-    """Save metadata to the standard location"""
-    metadata_dir = get_project_root() / "data" / "metadata"
-    metadata_dir.mkdir(parents=True, exist_ok=True)
+    """Save metadata to the backup folder location"""
+    backup_dir = get_backup_path()
+    backup_dir.mkdir(parents=True, exist_ok=True)
 
-    metadata_file = metadata_dir / f"{source_id}.json"
+    # Source-specific metadata goes in source subfolder
+    source_dir = backup_dir / source_id
+    source_dir.mkdir(parents=True, exist_ok=True)
+    metadata_file = source_dir / f"{source_id}_metadata.json"
     with open(metadata_file, 'w', encoding='utf-8') as f:
         json.dump(metadata, f, indent=2)
 
@@ -119,9 +572,10 @@ def save_metadata(source_id: str, metadata: Dict[str, Any]) -> Path:
 
 
 def update_master_metadata(source_id: str, metadata: Dict[str, Any]) -> None:
-    """Update the master metadata index"""
-    metadata_dir = get_project_root() / "data" / "metadata"
-    master_file = metadata_dir / "_master.json"
+    """Update the master metadata index in backup folder"""
+    backup_dir = get_backup_path()
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    master_file = backup_dir / "_master.json"
 
     if master_file.exists():
         with open(master_file, 'r', encoding='utf-8') as f:
@@ -137,9 +591,9 @@ def update_master_metadata(source_id: str, metadata: Dict[str, Any]) -> None:
         "topics": []
     }
 
-    # Recalculate totals
-    master["total_documents"] = sum(s["count"] for s in master["sources"].values())
-    master["total_chars"] = sum(s["chars"] for s in master["sources"].values())
+    # Recalculate totals (use .get() for backwards compatibility with old entries)
+    master["total_documents"] = sum(s.get("count", 0) for s in master["sources"].values())
+    master["total_chars"] = sum(s.get("chars", 0) for s in master["sources"].values())
     master["last_updated"] = datetime.now().isoformat()
 
     with open(master_file, 'w', encoding='utf-8') as f:
@@ -147,10 +601,17 @@ def update_master_metadata(source_id: str, metadata: Dict[str, Any]) -> None:
 
 
 def load_metadata(source_id: str) -> Optional[Dict[str, Any]]:
-    """Load metadata for a source"""
-    metadata_path = get_project_root() / "data" / "metadata" / f"{source_id}.json"
+    """Load metadata for a source from backup folder"""
+    backup_dir = get_backup_path()
+    # Try new location first: backup_path/source_id/source_id_metadata.json
+    metadata_path = backup_dir / source_id / f"{source_id}_metadata.json"
     if metadata_path.exists():
         with open(metadata_path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    # Fallback to legacy location
+    legacy_path = get_project_root() / "data" / "metadata" / f"{source_id}.json"
+    if legacy_path.exists():
+        with open(legacy_path, 'r', encoding='utf-8') as f:
             return json.load(f)
     return None
 
@@ -176,7 +637,7 @@ def index_html_to_chromadb(
         source_id=source_id
     )
 
-    return indexer.index_all()
+    return indexer.index()
 
 
 def index_zim_to_chromadb(
@@ -200,7 +661,32 @@ def index_zim_to_chromadb(
         source_id=source_id
     )
 
-    return indexer.index_all()
+    return indexer.index()
+
+
+def index_pdf_to_chromadb(
+    pdf_path: str,
+    source_id: str,
+    skip_existing: bool = True
+) -> Dict[str, Any]:
+    """
+    Index PDF file or folder content to ChromaDB.
+
+    Args:
+        pdf_path: Path to PDF file or folder containing PDFs
+        source_id: Source identifier
+
+    Returns:
+        Dict with indexed count and status
+    """
+    from offline_tools.indexer import PDFIndexer
+
+    indexer = PDFIndexer(
+        source_path=pdf_path,
+        source_id=source_id
+    )
+
+    return indexer.index(skip_existing=skip_existing)
 
 
 def export_chromadb_index(source_id: str) -> Dict[str, Any]:
@@ -289,22 +775,25 @@ def get_source_completeness(source_id: str, backup_folder: str = None) -> Dict[s
     }
 
     root = get_project_root()
+    backup_folder = get_backup_path()
 
-    # Check sources.json config
-    sources_path = root / "config" / "sources.json"
-    if sources_path.exists():
-        with open(sources_path, 'r', encoding='utf-8') as f:
-            sources_data = json.load(f)
-        if source_id in sources_data.get("sources", {}):
-            status["has_config"] = True
-            source_config = sources_data["sources"][source_id]
-            status["license_verified"] = source_config.get("license_verified", False)
-            if not status["license_verified"]:
-                status["missing"].append("verified license")
+    # Check source config from {source_id}_source.json in backup folder
+    if backup_folder:
+        source_file = Path(backup_folder) / source_id / f"{source_id}_source.json"
+        if source_file.exists():
+            try:
+                with open(source_file, 'r', encoding='utf-8') as f:
+                    source_config = json.load(f)
+                status["has_config"] = True
+                status["license_verified"] = source_config.get("license_verified", False)
+                if not status["license_verified"]:
+                    status["missing"].append("verified license")
+            except Exception:
+                status["missing"].append("source config (file unreadable)")
         else:
-            status["missing"].append("config in sources.json")
+            status["missing"].append("source config file")
     else:
-        status["missing"].append("sources.json file")
+        status["missing"].append("backup folder not configured")
 
     # Check metadata
     metadata = load_metadata(source_id)
@@ -314,28 +803,14 @@ def get_source_completeness(source_id: str, backup_folder: str = None) -> Dict[s
     else:
         status["missing"].append("metadata")
 
-    # Check backup
-    if backup_folder:
-        html_path = Path(backup_folder) / source_id
-        zim_path = Path(backup_folder) / f"{source_id}.zim"
+    # Check backup using unified detection
+    backup_status = detect_backup_status(source_id, backup_folder)
+    status["has_backup"] = backup_status["has_backup"]
+    status["backup_type"] = backup_status["backup_type"]
+    status["backup_size_mb"] = backup_status["backup_size_mb"]
 
-        if zim_path.exists():
-            status["has_backup"] = True
-            status["backup_type"] = "zim"
-            status["backup_size_mb"] = round(zim_path.stat().st_size / (1024*1024), 2)
-        elif html_path.exists() and html_path.is_dir():
-            html_files = list(html_path.rglob('*.html'))
-            if html_files:
-                status["has_backup"] = True
-                status["backup_type"] = "html"
-                try:
-                    total_size = sum(f.stat().st_size for f in html_path.rglob('*') if f.is_file())
-                    status["backup_size_mb"] = round(total_size / (1024*1024), 2)
-                except Exception:
-                    pass
-
-        if not status["has_backup"]:
-            status["missing"].append("backup file")
+    if not status["has_backup"]:
+        status["missing"].append("backup file")
 
     # Check ChromaDB index
     try:
@@ -375,7 +850,7 @@ def create_pack_manifest(
 
     Args:
         source_id: Source identifier
-        source_config: Source configuration from sources.json
+        source_config: Source configuration from _source.json
         metadata: Document metadata
         backup_info: Info about the backup file (type, size)
         approval_info: Optional approval information
@@ -388,12 +863,15 @@ def create_pack_manifest(
         "source_id": source_id,
         "created_at": datetime.now().isoformat(),
 
-        # Source info
+        # Source info (flattened for quick access)
         "name": source_config.get("name", source_id),
         "description": source_config.get("description", ""),
-        "url": source_config.get("url", ""),
+        "url": source_config.get("base_url", source_config.get("url", "")),
         "license": source_config.get("license", "Unknown"),
         "license_verified": source_config.get("license_verified", False),
+
+        # Full source config for local users to import
+        "source_config": source_config,
 
         # Pack info
         "pack_info": {

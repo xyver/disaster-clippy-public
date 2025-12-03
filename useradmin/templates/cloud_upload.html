@@ -349,6 +349,7 @@
         <div class="nav-links">
             <a href="/useradmin/">Settings</a>
             <a href="/useradmin/packs">Source Packs</a>
+            <a href="/useradmin/source-tools">Source Tools</a>
             <a href="/useradmin/cloud-upload" class="active">Cloud Upload</a>
             <a href="/">Chat</a>
         </div>
@@ -485,7 +486,7 @@
                 }
 
                 if (!data.sources || data.sources.length === 0) {
-                    container.innerHTML = '<div class="empty-state">No sources configured. Add sources to config/sources.json</div>';
+                    container.innerHTML = '<div class="empty-state">No sources configured. Install packs from Cloud Packs or add sources to your backup folder.</div>';
                     return;
                 }
 
@@ -557,7 +558,13 @@
                 return;
             }
 
-            showToast(`Uploading ${sourceId}...`);
+            // Check if a job is already running for this source
+            if (window.jobMonitor && window.jobMonitor.hasActiveJob(sourceId)) {
+                showToast('Upload already in progress for this source', true);
+                return;
+            }
+
+            showToast(`Starting upload for ${sourceId}...`);
 
             try {
                 const response = await fetch('/useradmin/api/upload-backup', {
@@ -568,7 +575,27 @@
 
                 const data = await response.json();
 
-                if (response.ok && data.status === 'success') {
+                if (response.ok && data.status === 'submitted') {
+                    // Job submitted - it will run in background
+                    showToast(`Upload job started - check progress below`);
+
+                    // Trigger job monitor refresh
+                    if (window.jobMonitor) {
+                        window.jobMonitor.refresh();
+
+                        // Register callback for when job completes
+                        window.jobMonitor.onComplete(data.job_id, (job) => {
+                            if (job.status === 'completed') {
+                                uploadedSources.add(sourceId);
+                                loadSources();
+                                loadCloudBackups();
+                            }
+                        });
+                    }
+
+                    loadSources(); // Update button state
+                } else if (response.ok && data.status === 'success') {
+                    // Synchronous completion (fallback)
                     uploadedSources.add(sourceId);
                     showToast(`Submitted ${sourceId} for review (${data.size_mb} MB)`);
                     loadSources();
@@ -691,10 +718,12 @@
             return div.innerHTML;
         }
 
-        // Initialize
+        // Initialize - load cloud backups first so we know which sources are already submitted
         checkCloudStatus();
-        loadSources();
-        loadCloudBackups();
+        loadCloudBackups().then(() => {
+            loadSources();
+        });
     </script>
+    <script src="/useradmin/static/job-monitor.js"></script>
 </body>
 </html>

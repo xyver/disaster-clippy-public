@@ -86,7 +86,7 @@
 ## Links
 
 - Public Repository: https://github.com/xyver/disaster-clippy-public
-- Live Demo: (Railway deployment URL)
+- Live Demo: [(Railway deployment URL)](https://disaster-clippy.up.railway.app/)
 
 ---
 

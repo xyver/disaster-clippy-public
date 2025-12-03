@@ -29,6 +29,13 @@ class LocalConfig:
             "theme": "dark",
             "show_scores": True,
             "articles_per_page": 10
+        },
+        "ollama": {
+            "enabled": False,          # Use Ollama for offline LLM
+            "url": "http://localhost:11434",  # Ollama API URL
+            "model": "mistral",        # Model to use
+            "auto_start": True,        # Auto-start portable Ollama when in offline mode
+            "portable_path": ""        # Path to portable Ollama (empty = use BACKUP_PATH/ollama)
         }
     }
 
@@ -120,6 +127,39 @@ class LocalConfig:
         self.config["backup_paths"]["html_folder"] = path
         self.config["backup_paths"]["pdf_folder"] = path
 
+        # Also update .env file so all code sees the same path
+        self._update_env_backup_path(path)
+
+    def _update_env_backup_path(self, path: str) -> None:
+        """Update BACKUP_PATH in .env file"""
+        env_path = Path(__file__).parent.parent / ".env"
+        if not env_path.exists():
+            return
+
+        try:
+            with open(env_path, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+
+            # Find and update BACKUP_PATH line
+            found = False
+            for i, line in enumerate(lines):
+                if line.startswith("BACKUP_PATH="):
+                    lines[i] = f"BACKUP_PATH={path}\n"
+                    found = True
+                    break
+
+            # Add if not found
+            if not found:
+                lines.append(f"\nBACKUP_PATH={path}\n")
+
+            with open(env_path, 'w', encoding='utf-8') as f:
+                f.writelines(lines)
+
+            # Also update os.environ so current process sees it
+            os.environ["BACKUP_PATH"] = path
+        except Exception as e:
+            print(f"Warning: Could not update .env file: {e}")
+
     def get_backup_paths(self) -> Dict[str, str]:
         """Get all backup folder paths (legacy compatibility)"""
         # Return unified folder for all paths
@@ -156,6 +196,42 @@ class LocalConfig:
         """Update last sync timestamp"""
         self.config["last_sync"] = datetime.now().isoformat()
 
+    # Ollama settings
+    def get_ollama_config(self) -> Dict[str, Any]:
+        """Get Ollama configuration"""
+        return self.config.get("ollama", self.DEFAULT_CONFIG["ollama"])
+
+    def set_ollama_config(self, **kwargs) -> None:
+        """Update Ollama configuration with provided values"""
+        if "ollama" not in self.config:
+            self.config["ollama"] = self.DEFAULT_CONFIG["ollama"].copy()
+        for key, value in kwargs.items():
+            if key in self.config["ollama"]:
+                self.config["ollama"][key] = value
+
+    def is_ollama_enabled(self) -> bool:
+        """Check if Ollama is enabled for offline LLM"""
+        return self.config.get("ollama", {}).get("enabled", False)
+
+    def get_ollama_url(self) -> str:
+        """Get Ollama API URL"""
+        return self.config.get("ollama", {}).get("url", "http://localhost:11434")
+
+    def get_ollama_model(self) -> str:
+        """Get Ollama model name"""
+        return self.config.get("ollama", {}).get("model", "mistral")
+
+    def get_ollama_portable_path(self) -> str:
+        """Get path to portable Ollama installation"""
+        custom_path = self.config.get("ollama", {}).get("portable_path", "")
+        if custom_path:
+            return custom_path
+        # Default to BACKUP_PATH/ollama
+        backup_folder = self.get_backup_folder()
+        if backup_folder:
+            return os.path.join(backup_folder, "ollama")
+        return ""
+
 
 def scan_backup_folder(folder_path: str, file_type: str = "zim") -> List[Dict[str, Any]]:
     """
@@ -175,9 +251,10 @@ def scan_backup_folder(folder_path: str, file_type: str = "zim") -> List[Dict[st
 
     try:
         for entry in os.scandir(folder_path):
-            if file_type == "zim" and entry.is_file():
-                # ZIM files are single files with .zim extension
-                if entry.name.lower().endswith('.zim'):
+            if file_type == "zim":
+                # ZIM files can be in root (legacy) or inside source folders (new)
+                if entry.is_file() and entry.name.lower().endswith('.zim'):
+                    # Legacy: ZIM in root folder
                     stat = entry.stat()
                     files.append({
                         "name": entry.name,
@@ -186,13 +263,42 @@ def scan_backup_folder(folder_path: str, file_type: str = "zim") -> List[Dict[st
                         "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
                         "type": "zim"
                     })
+                elif entry.is_dir():
+                    # New: check inside source folders for ZIM files
+                    dir_path = Path(entry.path)
+                    for zim_file in dir_path.glob("*.zim"):
+                        # Calculate FULL folder size (ZIM + metadata files)
+                        try:
+                            total_size = sum(f.stat().st_size for f in dir_path.rglob('*') if f.is_file())
+                            size_mb = round(total_size / (1024 * 1024), 2)
+                        except (PermissionError, OSError):
+                            size_mb = round(zim_file.stat().st_size / (1024 * 1024), 2)
+
+                        stat = zim_file.stat()
+                        files.append({
+                            "name": zim_file.name,
+                            "path": str(zim_file),
+                            "size_mb": size_mb,
+                            "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                            "type": "zim",
+                            "source_id": entry.name  # The folder name is the source_id
+                        })
 
             elif file_type == "html" and entry.is_dir():
                 # HTML backups are folders (like "appropedia", "builditsolar")
                 # Skip special folders like "pdfs"
                 if entry.name.lower() not in ['pdfs', 'pdf', 'zim', 'zims']:
-                    # Check if it contains HTML files or looks like a site backup
                     dir_path = Path(entry.path)
+
+                    # Skip if this is a PDF collection (has _collection.json)
+                    if (dir_path / "_collection.json").exists():
+                        continue
+
+                    # Skip if this is a ZIM source (has .zim file)
+                    if list(dir_path.glob("*.zim")):
+                        continue
+
+                    # Check if it contains HTML files or looks like a site backup
                     has_html = any(dir_path.rglob('*.html')) or any(dir_path.rglob('*.htm'))
                     has_index = (dir_path / 'index.html').exists() or (dir_path / 'index.htm').exists()
 
@@ -210,31 +316,31 @@ def scan_backup_folder(folder_path: str, file_type: str = "zim") -> List[Dict[st
                             "path": entry.path,
                             "size_mb": size_mb,
                             "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
-                            "type": "html"
+                            "type": "html",
+                            "source_id": entry.name
                         })
 
             elif file_type == "pdf":
-                if entry.is_file() and entry.name.lower().endswith('.pdf'):
-                    # PDF files in root
-                    stat = entry.stat()
-                    files.append({
-                        "name": entry.name,
-                        "path": entry.path,
-                        "size_mb": round(stat.st_size / (1024 * 1024), 2),
-                        "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
-                        "type": "pdf"
-                    })
-                elif entry.is_dir() and entry.name.lower() in ['pdfs', 'pdf']:
-                    # Also check for pdfs subfolder
-                    pdf_path = Path(entry.path)
-                    for pdf_file in pdf_path.glob('*.pdf'):
-                        stat = pdf_file.stat()
+                # PDF collections are folders with _collection.json
+                if entry.is_dir():
+                    dir_path = Path(entry.path)
+                    collection_file = dir_path / "_collection.json"
+                    if collection_file.exists():
+                        # This is a PDF collection source
+                        try:
+                            total_size = sum(f.stat().st_size for f in dir_path.rglob('*') if f.is_file())
+                            size_mb = round(total_size / (1024 * 1024), 2)
+                        except (PermissionError, OSError):
+                            size_mb = 0
+
+                        stat = entry.stat()
                         files.append({
-                            "name": pdf_file.name,
-                            "path": str(pdf_file),
-                            "size_mb": round(stat.st_size / (1024 * 1024), 2),
+                            "name": entry.name,
+                            "path": entry.path,
+                            "size_mb": size_mb,
                             "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
-                            "type": "pdf"
+                            "type": "pdf",
+                            "source_id": entry.name
                         })
 
     except PermissionError:

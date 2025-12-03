@@ -7,20 +7,41 @@ from chromadb.config import Settings
 from typing import List, Dict, Optional, Any
 from pathlib import Path
 import json
+import os
 
 from .embeddings import EmbeddingService
-from .metadata import MetadataIndex
+
+
+def get_default_chroma_path() -> str:
+    """Get default ChromaDB path from local_config or BACKUP_PATH env var"""
+    # Try local_config first (user's GUI setting)
+    try:
+        from useradmin.local_config import get_local_config
+        config = get_local_config()
+        backup_folder = config.get_backup_folder()
+        if backup_folder:
+            return os.path.join(backup_folder, "chroma")
+    except ImportError:
+        pass
+
+    # Fallback to env var
+    backup_path = os.getenv("BACKUP_PATH", "")
+    if backup_path:
+        return os.path.join(backup_path, "chroma")
+    return "data/chroma"
 
 
 class VectorStore:
     """ChromaDB-based vector store for article embeddings"""
 
-    def __init__(self, persist_dir: str = "data/chroma", collection_name: str = "articles"):
+    def __init__(self, persist_dir: str = None, collection_name: str = "articles"):
         """
         Args:
-            persist_dir: Directory to persist ChromaDB data
+            persist_dir: Directory to persist ChromaDB data (defaults to BACKUP_PATH/chroma)
             collection_name: Name of the collection
         """
+        if persist_dir is None:
+            persist_dir = get_default_chroma_path()
         self.persist_dir = Path(persist_dir)
         self.persist_dir.mkdir(parents=True, exist_ok=True)
 
@@ -36,12 +57,10 @@ class VectorStore:
         # Embedding service for queries
         self.embedding_service = EmbeddingService()
 
-        # Metadata index for fast lookups
-        self.metadata_index = MetadataIndex()
-
     def add_documents(self, documents: List[Dict[str, Any]],
                       embeddings: Optional[List[List[float]]] = None,
-                      progress_callback=None) -> int:
+                      progress_callback=None,
+                      return_index_data: bool = False) -> Any:
         """
         Add documents to the vector store.
 
@@ -49,12 +68,13 @@ class VectorStore:
             documents: List of dicts with keys: id, content, metadata
             embeddings: Pre-computed embeddings (optional, will compute if not provided)
             progress_callback: Optional function(current, total) for progress
+            return_index_data: If True, returns dict with count and index data for saving
 
         Returns:
-            Number of documents added
+            Number of documents added (int), or dict with index data if return_index_data=True
         """
         if not documents:
-            return 0
+            return {"count": 0, "index_data": None} if return_index_data else 0
 
         ids = []
         contents = []
@@ -85,8 +105,18 @@ class VectorStore:
             metadatas=metadatas
         )
 
-        # Update metadata index
-        self.metadata_index.add_documents(documents)
+        # Note: Metadata is now saved by the indexer directly to {source_id}_metadata.json
+        # The old MetadataIndex source files are no longer needed
+
+        if return_index_data:
+            # Build index data structure for saving to file
+            index_data = {
+                "ids": ids,
+                "embeddings": [list(e) for e in embeddings],  # Ensure lists not numpy arrays
+                "contents": contents,
+                "metadatas": metadatas
+            }
+            return {"count": len(ids), "index_data": index_data}
 
         return len(ids)
 
@@ -206,19 +236,21 @@ class VectorStore:
 
     def get_stats(self) -> Dict[str, Any]:
         """Get collection statistics including source breakdown"""
-        # Get metadata stats which includes source breakdown
-        metadata_stats = self.metadata_index.get_stats()
-
-        # Build sources dict with counts
+        # Get source breakdown directly from ChromaDB
         sources = {}
-        for source_name, source_info in metadata_stats.get("sources", {}).items():
-            sources[source_name] = source_info.get("count", 0)
+        try:
+            result = self.collection.get(include=["metadatas"])
+            for metadata in result.get("metadatas", []):
+                if metadata and "source" in metadata:
+                    source = metadata["source"]
+                    sources[source] = sources.get(source, 0) + 1
+        except:
+            pass
 
         return {
             "total_documents": self.collection.count(),
             "collection_name": self.collection.name,
-            "sources": sources,
-            "last_updated": metadata_stats.get("last_updated")
+            "sources": sources
         }
 
     def get_existing_ids(self) -> set:
@@ -247,44 +279,92 @@ class VectorStore:
         all_ids = self.collection.get()["ids"]
         if all_ids:
             self.collection.delete(ids=all_ids)
-        # Clear metadata index too
-        self.metadata_index.clear()
 
     def get_metadata_stats(self) -> Dict[str, Any]:
-        """Get fast stats from metadata index (no DB query needed)"""
-        return self.metadata_index.get_stats()
+        """Get stats - now just calls get_stats()"""
+        return self.get_stats()
 
-    def rebuild_metadata_index(self):
-        """Rebuild metadata index from vector DB (if out of sync)"""
-        print("Rebuilding metadata index from vector database...")
-        result = self.collection.get(include=["metadatas", "documents"])
+    def search_offline(self, query: str, n_results: int = 5,
+                       filter: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+        """
+        Keyword-based search for offline mode (no API calls).
 
-        docs = []
-        for i, doc_id in enumerate(result.get("ids", [])):
-            metadata = result["metadatas"][i] if result.get("metadatas") else {}
-            content = result["documents"][i] if result.get("documents") else ""
+        Uses simple text matching against document content and titles.
+        Not as good as semantic search, but works completely offline.
 
-            # Parse categories back from JSON
-            categories = []
-            if "categories" in metadata:
-                try:
-                    categories = json.loads(metadata["categories"])
-                except:
-                    pass
+        Args:
+            query: Search query string
+            n_results: Number of results to return
+            filter: Optional ChromaDB filter dict
 
-            docs.append({
-                "id": doc_id,
-                "title": metadata.get("title", "Unknown"),
-                "url": metadata.get("url", ""),
-                "source": metadata.get("source", "unknown"),
-                "categories": categories,
-                "content_hash": metadata.get("content_hash", ""),
-                "scraped_at": metadata.get("scraped_at", ""),
-                "content": content
+        Returns:
+            List of matching documents with scores
+        """
+        # Get all documents (with filter if specified)
+        try:
+            if filter:
+                result = self.collection.get(
+                    where=filter,
+                    include=["documents", "metadatas"]
+                )
+            else:
+                result = self.collection.get(include=["documents", "metadatas"])
+        except Exception as e:
+            print(f"Error getting documents for offline search: {e}")
+            return []
+
+        if not result.get("ids"):
+            return []
+
+        query_terms = query.lower().split()
+
+        # Score each document
+        scored = []
+        for i, doc_id in enumerate(result["ids"]):
+            content = result["documents"][i] if result["documents"] else ""
+            metadata = result["metadatas"][i] if result["metadatas"] else {}
+
+            title = metadata.get("title", "").lower()
+            content_lower = content.lower() if content else ""
+
+            # Simple scoring: title matches worth more than content
+            score = 0
+            for term in query_terms:
+                if term in title:
+                    score += 5  # Title match
+                if term in content_lower:
+                    score += content_lower.count(term)  # Content frequency
+
+            if score > 0:
+                # Parse categories if present
+                if "categories" in metadata:
+                    try:
+                        metadata["categories"] = json.loads(metadata["categories"])
+                    except:
+                        metadata["categories"] = []
+
+                scored.append({
+                    "id": doc_id,
+                    "content": content,
+                    "metadata": metadata,
+                    "raw_score": score
+                })
+
+        # Sort by score descending
+        scored.sort(key=lambda x: x["raw_score"], reverse=True)
+
+        # Normalize scores to 0-1 range and return top results
+        max_score = scored[0]["raw_score"] if scored else 1
+        results = []
+        for item in scored[:n_results]:
+            results.append({
+                "id": item["id"],
+                "content": item["content"],
+                "metadata": item["metadata"],
+                "score": min(item["raw_score"] / max_score, 1.0)
             })
 
-        self.metadata_index.sync_from_vectordb(docs)
-        print(f"Rebuilt index with {len(docs)} documents")
+        return results
 
 
 # Quick test

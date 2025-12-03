@@ -60,19 +60,44 @@ async def get_cloud_storage_status():
 async def get_sources_for_upload():
     """
     Get list of local sources that could be uploaded to cloud.
+    Discovers sources from backup folder (looks for _source.json files).
     Checks completeness: needs source config, metadata, and backup file.
     """
-    backup_paths = get_backup_paths()
+    from .local_config import get_local_config
+    config = get_local_config()
+    backup_folder = config.get_backup_folder()
 
-    # Load sources config
-    sources_path = Path(__file__).parent.parent / "config" / "sources.json"
-    if not sources_path.exists():
-        return {"sources": [], "error": "No sources.json found"}
+    if not backup_folder:
+        return {"sources": [], "total": 0, "complete_count": 0}
 
-    with open(sources_path, 'r', encoding='utf-8') as f:
-        sources_data = json.load(f)
+    backup_path = Path(backup_folder)
+    if not backup_path.exists():
+        return {"sources": [], "total": 0, "complete_count": 0}
 
-    sources_config = sources_data.get("sources", {})
+    # Discover sources from backup folder - look for _source.json files
+    sources_config = {}
+    for source_folder in backup_path.iterdir():
+        if source_folder.is_dir():
+            source_id = source_folder.name
+            source_file = source_folder / f"{source_id}_source.json"
+            if source_file.exists():
+                try:
+                    with open(source_file, 'r', encoding='utf-8') as f:
+                        source_data = json.load(f)
+                    sources_config[source_id] = {
+                        "name": source_data.get("name", source_id),
+                        "description": source_data.get("description", ""),
+                        "license": source_data.get("license", "Unknown"),
+                        "base_url": source_data.get("base_url", ""),
+                        "license_verified": source_data.get("license_verified", False),
+                    }
+                except Exception:
+                    sources_config[source_id] = {"name": source_id}
+            # Also include folders with manifest or content
+            elif (source_folder / f"{source_id}_manifest.json").exists():
+                sources_config[source_id] = {"name": source_id}
+            elif (source_folder / "pages").exists() or list(source_folder.glob("*.html")):
+                sources_config[source_id] = {"name": source_id}
 
     # Check each source for completeness
     uploadable_sources = []
@@ -93,50 +118,53 @@ async def get_sources_for_upload():
             "missing": []
         }
 
-        # Check for metadata
-        metadata_path = Path(__file__).parent.parent / "data" / "metadata" / f"{source_id}.json"
+        # Check for metadata - try BACKUP_PATH first
+        metadata_path = None
+        if backup_folder:
+            metadata_path = Path(backup_folder) / source_id / f"{source_id}_metadata.json"
+        if not metadata_path or not metadata_path.exists():
+            metadata_path = Path(__file__).parent.parent / "data" / "metadata" / f"{source_id}.json"
+
         if metadata_path.exists():
             source_status["has_metadata"] = True
             try:
                 with open(metadata_path, 'r', encoding='utf-8') as f:
                     meta = json.load(f)
-                    source_status["document_count"] = meta.get("total_documents", 0)
+                    # Try document_count first (v2), then total_documents (legacy)
+                    source_status["document_count"] = meta.get("document_count", meta.get("total_documents", 0))
             except:
                 pass
         else:
             source_status["missing"].append("metadata")
 
-        # Check for backup files (ZIM or HTML folder)
-        backup_found = False
-
-        # Check ZIM folder
-        if backup_paths.get("zim_folder"):
-            zim_path = Path(backup_paths["zim_folder"]) / f"{source_id}.zim"
-            if zim_path.exists():
-                backup_found = True
-                source_status["has_backup"] = True
-                source_status["backup_type"] = "zim"
-                source_status["backup_path"] = str(zim_path)
-                source_status["backup_size_mb"] = round(zim_path.stat().st_size / (1024*1024), 2)
-
-        # Check HTML folder
-        if not backup_found and backup_paths.get("html_folder"):
-            html_path = Path(backup_paths["html_folder"]) / source_id
-            if html_path.exists() and html_path.is_dir():
-                backup_found = True
-                source_status["has_backup"] = True
-                source_status["backup_type"] = "html"
-                source_status["backup_path"] = str(html_path)
-                # Calculate folder size
+        # Also check v2 documents file - this is the PRIMARY source for v2 schema
+        if backup_folder:
+            documents_file = Path(backup_folder) / source_id / f"{source_id}_documents.json"
+            if documents_file.exists():
+                # V2 documents file counts as metadata
+                source_status["has_metadata"] = True
+                if "metadata" in source_status["missing"]:
+                    source_status["missing"].remove("metadata")
                 try:
-                    total_size = sum(f.stat().st_size for f in html_path.rglob('*') if f.is_file())
-                    source_status["backup_size_mb"] = round(total_size / (1024*1024), 2)
+                    with open(documents_file, 'r', encoding='utf-8') as f:
+                        docs_data = json.load(f)
+                        doc_count = docs_data.get("document_count", 0)
+                        if doc_count > source_status.get("document_count", 0):
+                            source_status["document_count"] = doc_count
                 except:
                     pass
 
-        if not backup_found:
+        # Check for backup files using unified detection
+        from sourcepacks.pack_tools import detect_backup_status
+        backup_status = detect_backup_status(source_id, Path(backup_folder) if backup_folder else None)
+        source_status["has_backup"] = backup_status["has_backup"]
+        source_status["backup_type"] = backup_status["backup_type"]
+        source_status["backup_path"] = backup_status["backup_path"]
+        source_status["backup_size_mb"] = backup_status["backup_size_mb"]
+
+        if not backup_status["has_backup"]:
             source_status["missing"].append("backup file")
-        elif source_status["backup_size_mb"] < 0.1:
+        elif backup_status["backup_size_mb"] < 0.1:
             # Backup exists but is essentially empty (less than 100KB)
             source_status["has_backup"] = False
             source_status["missing"].append("backup file (empty or incomplete)")
@@ -170,15 +198,339 @@ class UploadBackupRequest(BaseModel):
     source_id: str
 
 
+def _run_upload_backup(source_id: str, source_info: dict, progress_callback=None):
+    """Background worker function for uploading backup to cloud."""
+    from dotenv import load_dotenv
+    load_dotenv()
+
+    if progress_callback:
+        progress_callback(5, "Connecting to cloud storage...")
+
+    # Get R2 storage
+    from storage.r2 import get_r2_storage
+    storage = get_r2_storage()
+
+    if not storage.is_configured():
+        raise Exception("R2 cloud storage not configured")
+
+    # Test connection
+    conn_status = storage.test_connection()
+    if not conn_status["connected"]:
+        raise Exception(f"R2 connection failed: {conn_status.get('error', 'Unknown error')}")
+
+    if progress_callback:
+        progress_callback(10, "Preparing upload...")
+
+    # Upload based on backup type
+    backup_path = source_info["backup_path"]
+    backup_type = source_info["backup_type"]
+
+    # Generate submission folder with timestamp
+    from datetime import datetime
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    submission_folder = f"submissions/{timestamp}_{source_id}"
+
+    if backup_type == "zim":
+        if progress_callback:
+            progress_callback(15, f"Uploading ZIM file ({source_info.get('backup_size_mb', 0)} MB)...")
+
+        # Upload single ZIM file
+        remote_key = f"{submission_folder}/{source_id}.zim"
+        success = storage.upload_file(backup_path, remote_key)
+
+        if not success:
+            raise Exception(f"Upload failed: {storage.get_last_error()}")
+
+        if progress_callback:
+            progress_callback(80, "Uploading metadata files...")
+
+        # Also upload all metadata and v2 schema files
+        uploaded_files = _upload_submission_metadata_sync(storage, submission_folder, source_id, source_info)
+        uploaded_files.insert(0, f"{source_id}.zim")
+
+        # Calculate total size
+        total_size = source_info["backup_size_mb"]
+        from .local_config import get_local_config
+        config = get_local_config()
+        backup_folder = config.get_backup_folder()
+        if backup_folder:
+            source_folder = Path(backup_folder) / source_id
+            for f in uploaded_files[1:]:  # Skip ZIM file already counted
+                fpath = source_folder / f
+                if fpath.exists():
+                    total_size += fpath.stat().st_size / (1024*1024)
+
+        if progress_callback:
+            progress_callback(100, "Upload complete")
+
+        return {
+            "status": "success",
+            "source_id": source_id,
+            "remote_key": remote_key,
+            "size_mb": round(total_size, 2),
+            "file_count": len(uploaded_files),
+            "files": uploaded_files,
+            "message": f"Submitted {len(uploaded_files)} files for review"
+        }
+
+    elif backup_type == "html":
+        # For HTML folders, create a zip and upload
+        import tempfile
+        import zipfile
+
+        html_path = Path(backup_path)
+
+        if progress_callback:
+            progress_callback(15, "Creating zip archive...")
+
+        # Create temporary zip file
+        with tempfile.NamedTemporaryFile(suffix='.zip', delete=False) as tmp:
+            tmp_path = tmp.name
+
+        try:
+            # Create zip of HTML folder
+            with zipfile.ZipFile(tmp_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+                all_files = list(html_path.rglob('*'))
+                file_count = len([f for f in all_files if f.is_file()])
+                for i, file_path in enumerate(all_files):
+                    if file_path.is_file():
+                        arcname = file_path.relative_to(html_path)
+                        zf.write(file_path, arcname)
+                        if progress_callback and file_count > 0:
+                            # Scale from 20-70%
+                            percent = 20 + int((i / file_count) * 50)
+                            progress_callback(percent, f"Zipping files... ({i+1}/{file_count})")
+
+            if progress_callback:
+                progress_callback(70, "Uploading zip file...")
+
+            # Upload zip
+            remote_key = f"{submission_folder}/{source_id}-html.zip"
+            success = storage.upload_file(tmp_path, remote_key)
+
+            if not success:
+                raise Exception(f"Upload failed: {storage.get_last_error()}")
+
+            # Get actual upload size
+            zip_size = os.path.getsize(tmp_path) / (1024*1024)
+
+            if progress_callback:
+                progress_callback(85, "Uploading metadata files...")
+
+            # Also upload all metadata and v2 schema files
+            uploaded_files = _upload_submission_metadata_sync(storage, submission_folder, source_id, source_info)
+            uploaded_files.insert(0, f"{source_id}-html.zip")
+
+            # Calculate total size including metadata files
+            total_size = zip_size
+            from .local_config import get_local_config
+            config = get_local_config()
+            backup_folder = config.get_backup_folder()
+            if backup_folder:
+                source_folder = Path(backup_folder) / source_id
+                for f in uploaded_files[1:]:  # Skip zip already counted
+                    fpath = source_folder / f
+                    if fpath.exists():
+                        total_size += fpath.stat().st_size / (1024*1024)
+
+            if progress_callback:
+                progress_callback(100, "Upload complete")
+
+            return {
+                "status": "success",
+                "source_id": source_id,
+                "remote_key": remote_key,
+                "size_mb": round(total_size, 2),
+                "file_count": len(uploaded_files),
+                "files": uploaded_files,
+                "message": f"Submitted {len(uploaded_files)} files for review"
+            }
+
+        finally:
+            # Clean up temp file
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+
+    elif backup_type == "pdf":
+        # For PDF collections, create a zip and upload (similar to HTML)
+        import tempfile
+        import zipfile
+
+        pdf_path = Path(backup_path)
+
+        if progress_callback:
+            progress_callback(15, "Creating zip archive...")
+
+        # Create temporary zip file
+        with tempfile.NamedTemporaryFile(suffix='.zip', delete=False) as tmp:
+            tmp_path = tmp.name
+
+        try:
+            # Create zip of PDF folder
+            with zipfile.ZipFile(tmp_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+                all_files = list(pdf_path.rglob('*'))
+                file_count = len([f for f in all_files if f.is_file()])
+                for i, file_path in enumerate(all_files):
+                    if file_path.is_file():
+                        arcname = file_path.relative_to(pdf_path)
+                        zf.write(file_path, arcname)
+                        if progress_callback and file_count > 0:
+                            # Scale from 20-70%
+                            percent = 20 + int((i / file_count) * 50)
+                            progress_callback(percent, f"Zipping files... ({i+1}/{file_count})")
+
+            if progress_callback:
+                progress_callback(70, "Uploading zip file...")
+
+            # Upload zip
+            remote_key = f"{submission_folder}/{source_id}-pdf.zip"
+            success = storage.upload_file(tmp_path, remote_key)
+
+            if not success:
+                raise Exception(f"Upload failed: {storage.get_last_error()}")
+
+            # Get actual upload size
+            zip_size = os.path.getsize(tmp_path) / (1024*1024)
+
+            if progress_callback:
+                progress_callback(85, "Uploading metadata files...")
+
+            # Also upload all metadata and v2 schema files
+            uploaded_files = _upload_submission_metadata_sync(storage, submission_folder, source_id, source_info)
+            uploaded_files.insert(0, f"{source_id}-pdf.zip")
+
+            # Calculate total size including metadata files
+            total_size = zip_size
+            from .local_config import get_local_config
+            config = get_local_config()
+            backup_folder = config.get_backup_folder()
+            if backup_folder:
+                source_folder = Path(backup_folder) / source_id
+                for f in uploaded_files[1:]:  # Skip zip already counted
+                    fpath = source_folder / f
+                    if fpath.exists():
+                        total_size += fpath.stat().st_size / (1024*1024)
+
+            if progress_callback:
+                progress_callback(100, "Upload complete")
+
+            return {
+                "status": "success",
+                "source_id": source_id,
+                "remote_key": remote_key,
+                "size_mb": round(total_size, 2),
+                "file_count": len(uploaded_files),
+                "files": uploaded_files,
+                "message": f"Submitted {len(uploaded_files)} files for review"
+            }
+
+        finally:
+            # Clean up temp file
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+
+    else:
+        raise Exception(f"Unknown backup type: {backup_type}")
+
+
+def _upload_submission_metadata_sync(storage, submission_folder: str, source_id: str, source_info: dict):
+    """Upload all source files (v2 schema files, metadata, manifest) alongside the backup submission - synchronous version"""
+    import tempfile
+
+    # Get backup folder
+    from .local_config import get_local_config
+    config = get_local_config()
+    backup_folder = config.get_backup_folder()
+
+    # Load source config from _source.json
+    source_config = {}
+    if backup_folder:
+        source_file = Path(backup_folder) / source_id / f"{source_id}_source.json"
+        if source_file.exists():
+            try:
+                with open(source_file, 'r', encoding='utf-8') as f:
+                    source_config = json.load(f)
+            except Exception:
+                pass
+
+    uploaded_files = []
+    metadata = {}
+
+    if backup_folder:
+        source_folder = Path(backup_folder) / source_id
+
+        # Upload v2 schema files if they exist
+        v2_files = [
+            f"{source_id}_source.json",
+            f"{source_id}_documents.json",
+            f"{source_id}_embeddings.json",
+            f"{source_id}_manifest.json",  # Distribution manifest
+            f"{source_id}_metadata.json",  # Legacy metadata
+        ]
+
+        for filename in v2_files:
+            file_path = source_folder / filename
+            if file_path.exists():
+                remote_key = f"{submission_folder}/{filename}"
+                if storage.upload_file(str(file_path), remote_key):
+                    uploaded_files.append(filename)
+
+                # Load metadata for summary
+                if filename == f"{source_id}_metadata.json":
+                    with open(file_path, 'r', encoding='utf-8') as f:
+                        metadata = json.load(f)
+
+    # Fallback: check legacy metadata location
+    if not metadata:
+        legacy_metadata_path = Path(__file__).parent.parent / "data" / "metadata" / f"{source_id}.json"
+        if legacy_metadata_path.exists():
+            with open(legacy_metadata_path, 'r', encoding='utf-8') as f:
+                metadata = json.load(f)
+            # Upload legacy metadata if v2 wasn't found
+            if f"{source_id}_metadata.json" not in uploaded_files:
+                storage.upload_file(str(legacy_metadata_path), f"{submission_folder}/{source_id}_metadata.json")
+                uploaded_files.append(f"{source_id}_metadata.json")
+
+    # Create submission manifest (for tracking status, not the pack manifest)
+    from datetime import datetime
+    submission_manifest = {
+        "source_id": source_id,
+        "submitted_at": datetime.now().isoformat(),
+        "status": "pending_review",
+        "source_config": source_config,
+        "metadata_summary": {
+            "document_count": metadata.get("document_count", metadata.get("total_documents", 0)),
+            "source_type": metadata.get("source_type", "unknown")
+        },
+        "backup_info": {
+            "type": source_info.get("backup_type"),
+            "size_mb": source_info.get("backup_size_mb", 0)
+        },
+        "uploaded_files": uploaded_files
+    }
+
+    # Write to temp file and upload
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False, encoding='utf-8') as tmp:
+        json.dump(submission_manifest, tmp, indent=2)
+        tmp_path = tmp.name
+
+    try:
+        storage.upload_file(tmp_path, f"{submission_folder}/submission_manifest.json")
+        uploaded_files.append("submission_manifest.json")
+    finally:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+
+    return uploaded_files
+
+
 @router.post("/api/upload-backup")
 async def upload_backup_to_cloud(request: UploadBackupRequest):
     """
     Upload a source's backup file to R2 cloud storage.
     Only allows upload if source is complete (config + metadata + backup + verified license).
+    Runs as a background job with progress tracking.
     """
-    from dotenv import load_dotenv
-    load_dotenv()
-
     # First verify the source is complete
     sources_response = await get_sources_for_upload()
     sources = sources_response.get("sources", [])
@@ -196,116 +548,100 @@ async def upload_backup_to_cloud(request: UploadBackupRequest):
         missing = ", ".join(source_info["missing"])
         raise HTTPException(400, f"Source is incomplete. Missing: {missing}")
 
-    # Get R2 storage
+    # Verify R2 is configured before starting job
     try:
+        from dotenv import load_dotenv
+        load_dotenv()
         from storage.r2 import get_r2_storage
         storage = get_r2_storage()
 
         if not storage.is_configured():
             raise HTTPException(500, "R2 cloud storage not configured")
 
-        # Test connection
-        conn_status = storage.test_connection()
-        if not conn_status["connected"]:
-            raise HTTPException(500, f"R2 connection failed: {conn_status.get('error', 'Unknown error')}")
-
     except ImportError:
         raise HTTPException(500, "Storage module not available. Install boto3.")
 
-    # Upload based on backup type
-    backup_path = source_info["backup_path"]
-    backup_type = source_info["backup_type"]
+    # Submit as background job
+    from .job_manager import get_job_manager
+    manager = get_job_manager()
 
-    # Generate submission folder with timestamp
-    from datetime import datetime
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    submission_folder = f"submissions/{timestamp}_{request.source_id}"
+    try:
+        job_id = manager.submit(
+            "upload",
+            request.source_id,
+            _run_upload_backup,
+            request.source_id,
+            source_info
+        )
+    except ValueError as e:
+        # Job already running for this source
+        raise HTTPException(409, str(e))
 
-    if backup_type == "zim":
-        # Upload single ZIM file
-        remote_key = f"{submission_folder}/{request.source_id}.zim"
-        success = storage.upload_file(backup_path, remote_key)
-
-        if success:
-            # Also upload metadata
-            await _upload_submission_metadata(storage, submission_folder, request.source_id, source_info)
-            return {
-                "status": "success",
-                "source_id": request.source_id,
-                "remote_key": remote_key,
-                "size_mb": source_info["backup_size_mb"],
-                "message": f"Submitted {request.source_id}.zim for review"
-            }
-        else:
-            raise HTTPException(500, f"Upload failed: {storage.get_last_error()}")
-
-    elif backup_type == "html":
-        # For HTML folders, create a zip and upload
-        import tempfile
-        import zipfile
-
-        html_path = Path(backup_path)
-
-        # Create temporary zip file
-        with tempfile.NamedTemporaryFile(suffix='.zip', delete=False) as tmp:
-            tmp_path = tmp.name
-
-        try:
-            # Create zip of HTML folder
-            with zipfile.ZipFile(tmp_path, 'w', zipfile.ZIP_DEFLATED) as zf:
-                for file_path in html_path.rglob('*'):
-                    if file_path.is_file():
-                        arcname = file_path.relative_to(html_path)
-                        zf.write(file_path, arcname)
-
-            # Upload zip
-            remote_key = f"{submission_folder}/{request.source_id}-html.zip"
-            success = storage.upload_file(tmp_path, remote_key)
-
-            if success:
-                # Get actual upload size
-                zip_size = round(os.path.getsize(tmp_path) / (1024*1024), 2)
-                # Also upload metadata
-                await _upload_submission_metadata(storage, submission_folder, request.source_id, source_info)
-                return {
-                    "status": "success",
-                    "source_id": request.source_id,
-                    "remote_key": remote_key,
-                    "size_mb": zip_size,
-                    "message": f"Submitted {request.source_id} HTML archive for review"
-                }
-            else:
-                raise HTTPException(500, f"Upload failed: {storage.get_last_error()}")
-
-        finally:
-            # Clean up temp file
-            if os.path.exists(tmp_path):
-                os.unlink(tmp_path)
-
-    else:
-        raise HTTPException(400, f"Unknown backup type: {backup_type}")
+    return {
+        "status": "submitted",
+        "job_id": job_id,
+        "source_id": request.source_id,
+        "message": f"Upload job started for {request.source_id}"
+    }
 
 
 async def _upload_submission_metadata(storage, submission_folder: str, source_id: str, source_info: dict):
-    """Upload metadata JSON and manifest alongside the backup submission"""
+    """Upload all source files (v2 schema files, metadata, manifest) alongside the backup submission"""
     import tempfile
 
-    # Load source config
-    sources_path = Path(__file__).parent.parent / "config" / "sources.json"
-    source_config = {}
-    if sources_path.exists():
-        with open(sources_path, 'r', encoding='utf-8') as f:
-            sources_data = json.load(f)
-            source_config = sources_data.get("sources", {}).get(source_id, {})
+    # Get backup folder
+    from .local_config import get_local_config
+    config = get_local_config()
+    backup_folder = config.get_backup_folder()
 
-    # Load full metadata
-    metadata_path = Path(__file__).parent.parent / "data" / "metadata" / f"{source_id}.json"
+    # Load source config from _source.json
+    source_config = {}
+    if backup_folder:
+        source_file = Path(backup_folder) / source_id / f"{source_id}_source.json"
+        if source_file.exists():
+            try:
+                with open(source_file, 'r', encoding='utf-8') as f:
+                    source_config = json.load(f)
+            except Exception:
+                pass
+
+    uploaded_files = []
     metadata = {}
-    if metadata_path.exists():
-        with open(metadata_path, 'r', encoding='utf-8') as f:
-            metadata = json.load(f)
-        # Upload the FULL metadata.json file
-        storage.upload_file(str(metadata_path), f"{submission_folder}/metadata.json")
+
+    if backup_folder:
+        source_folder = Path(backup_folder) / source_id
+
+        # Upload v2 schema files if they exist
+        v2_files = [
+            f"{source_id}_source.json",
+            f"{source_id}_documents.json",
+            f"{source_id}_embeddings.json",
+            f"{source_id}_manifest.json",  # Distribution manifest
+            f"{source_id}_metadata.json",  # Legacy metadata
+        ]
+
+        for filename in v2_files:
+            file_path = source_folder / filename
+            if file_path.exists():
+                remote_key = f"{submission_folder}/{filename}"
+                if storage.upload_file(str(file_path), remote_key):
+                    uploaded_files.append(filename)
+
+                # Load metadata for summary
+                if filename == f"{source_id}_metadata.json":
+                    with open(file_path, 'r', encoding='utf-8') as f:
+                        metadata = json.load(f)
+
+    # Fallback: check legacy metadata location
+    if not metadata:
+        legacy_metadata_path = Path(__file__).parent.parent / "data" / "metadata" / f"{source_id}.json"
+        if legacy_metadata_path.exists():
+            with open(legacy_metadata_path, 'r', encoding='utf-8') as f:
+                metadata = json.load(f)
+            # Upload legacy metadata if v2 wasn't found
+            if f"{source_id}_metadata.json" not in uploaded_files:
+                storage.upload_file(str(legacy_metadata_path), f"{submission_folder}/{source_id}_metadata.json")
+                uploaded_files.append(f"{source_id}_metadata.json")
 
     # Create submission manifest (for tracking status, not the pack manifest)
     from datetime import datetime
@@ -315,13 +651,14 @@ async def _upload_submission_metadata(storage, submission_folder: str, source_id
         "status": "pending_review",
         "source_config": source_config,
         "metadata_summary": {
-            "total_documents": metadata.get("total_documents", 0),
+            "document_count": metadata.get("document_count", metadata.get("total_documents", 0)),
             "source_type": metadata.get("source_type", "unknown")
         },
         "backup_info": {
             "type": source_info.get("backup_type"),
             "size_mb": source_info.get("backup_size_mb", 0)
-        }
+        },
+        "uploaded_files": uploaded_files
     }
 
     # Write to temp file and upload
@@ -330,10 +667,13 @@ async def _upload_submission_metadata(storage, submission_folder: str, source_id
         tmp_path = tmp.name
 
     try:
-        storage.upload_file(tmp_path, f"{submission_folder}/manifest.json")
+        storage.upload_file(tmp_path, f"{submission_folder}/submission_manifest.json")
+        uploaded_files.append("submission_manifest.json")
     finally:
         if os.path.exists(tmp_path):
             os.unlink(tmp_path)
+
+    return uploaded_files
 
 
 def _load_manifest_from_r2(storage, manifest_key: str) -> dict:

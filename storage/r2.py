@@ -364,6 +364,47 @@ class R2Storage:
             self._last_error = str(e)
             return False
 
+    def copy_file(self, source_key: str, dest_key: str) -> bool:
+        """
+        Copy a file within R2 (server-side copy, no download/upload needed).
+
+        Args:
+            source_key: Source key (path) in R2 bucket
+            dest_key: Destination key (path) in R2 bucket
+
+        Returns:
+            True if successful
+        """
+        try:
+            client = self._get_client()
+            copy_source = {'Bucket': self.config.bucket_name, 'Key': source_key}
+            client.copy_object(
+                CopySource=copy_source,
+                Bucket=self.config.bucket_name,
+                Key=dest_key
+            )
+            logger.info(f"Copied r2://{self.config.bucket_name}/{source_key} to {dest_key}")
+            return True
+        except ClientError as e:
+            logger.error(f"Copy failed: {e}")
+            self._last_error = str(e)
+            return False
+
+    def move_file(self, source_key: str, dest_key: str) -> bool:
+        """
+        Move a file within R2 (copy then delete original).
+
+        Args:
+            source_key: Source key (path) in R2 bucket
+            dest_key: Destination key (path) in R2 bucket
+
+        Returns:
+            True if successful
+        """
+        if self.copy_file(source_key, dest_key):
+            return self.delete_file(source_key)
+        return False
+
     def get_last_error(self) -> Optional[str]:
         """Get the last error message"""
         return self._last_error
