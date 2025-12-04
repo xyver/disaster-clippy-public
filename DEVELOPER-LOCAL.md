@@ -12,11 +12,11 @@ For global database maintainers (private tools), see [DEVELOPER-PARENT.md](DEVEL
 
 When you clone the public repository, you get:
 - Chat interface and API
-- Local Admin Panel (/useradmin/)
-- ChromaDB for local vector storage
-- Backup indexers (for ZIM, HTML, PDF files you already have)
-- Cloud submission tools (submit sources for review)
-- Shared pack tools (read-only, for generating metadata)
+- Local Admin Panel (/useradmin/) - code is in `admin/` folder
+- ChromaDB for local vector storage (`offline_tools/vectordb/`)
+- Backup indexers for ZIM, HTML, PDF files (`offline_tools/indexer.py`)
+- Cloud submission tools (`admin/cloud_upload.py`)
+- Pack tools for generating metadata (`offline_tools/packager.py`)
 
 What's NOT included (maintainer-only):
 - Web scrapers (to prevent abuse)
@@ -62,6 +62,7 @@ When you run Disaster Clippy locally, you have:
 +------------------+     +-------------------+
 | Local Admin      |     | Backup Files      |
 | /useradmin/      |     | ZIM, HTML, PDF    |
+| (admin/ folder)  |     |                   |
 +------------------+     +-------------------+
 ```
 

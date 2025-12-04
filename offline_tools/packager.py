@@ -58,7 +58,7 @@ def get_backup_path() -> Path:
     """Get backup path from local_config (GUI setting) or BACKUP_PATH env var"""
     # Try local_config first (user's GUI setting)
     try:
-        from useradmin.local_config import get_local_config
+        from admin.local_config import get_local_config
         config = get_local_config()
         backup_folder = config.get_backup_folder()
         if backup_folder:
@@ -699,7 +699,7 @@ def export_chromadb_index(source_id: str) -> Dict[str, Any]:
     Returns:
         Dict with embeddings and metadata for all documents
     """
-    from vectordb.store import LocalVectorStore
+    from offline_tools.vectordb.store import LocalVectorStore
 
     store = LocalVectorStore()
 
@@ -814,7 +814,7 @@ def get_source_completeness(source_id: str, backup_folder: str = None) -> Dict[s
 
     # Check ChromaDB index
     try:
-        from vectordb.store import LocalVectorStore
+        from offline_tools.vectordb.store import LocalVectorStore
         store = LocalVectorStore()
         results = store.collection.get(
             where={"source": source_id},

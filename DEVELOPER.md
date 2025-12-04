@@ -14,18 +14,35 @@ This project uses a two-layer architecture. The **public GitHub repository** con
 disaster-clippy/
 |-- app.py                    # FastAPI chat interface
 |-- local_cli.py              # CLI for local admins
-|-- useradmin/                # Local admin panel (/useradmin/)
-|-- sourcepacks/              # Pack tools (shared utilities)
-|   |-- pack_tools.py         # Metadata/indexing functions
-|   |-- source_manager.py     # Unified source creation interface
-|-- vectordb/                 # ChromaDB local storage
-|-- offline_tools/            # Tools to index local backups
+|-- admin/                    # Admin panel (/useradmin/)
+|   |-- app.py                # FastAPI routes
+|   |-- local_config.py       # User settings
+|   |-- job_manager.py        # Background jobs
+|   |-- ollama_manager.py     # Local LLM support
+|   |-- cloud_upload.py       # R2 upload/download
+|   |-- routes/
+|   |   |-- sources.py        # Source packs API
+|   |-- services/             # (Future: business logic)
+|   |-- templates/            # Admin UI templates
+|   |-- static/               # Admin CSS/JS
+|-- offline_tools/            # Core tools for backup/indexing
 |   |-- indexer.py            # HTMLBackupIndexer, ZIMIndexer, PDFIndexer
-|   |-- html_backup.py        # HTML website backup/scraping
-|   |-- substack_backup.py    # Substack newsletter backup
-|-- storage/                  # R2 client (limited access)
-|-- config/
-|   |-- sources.json          # Empty template (users populate via packs)
+|   |-- source_manager.py     # Unified source creation interface
+|   |-- packager.py           # Metadata/indexing functions
+|   |-- registry.py           # Source pack registry
+|   |-- schemas.py            # Data structures
+|   |-- embeddings.py         # Embedding service
+|   |-- backup/
+|   |   |-- html.py           # HTML website backup/scraping
+|   |   |-- substack.py       # Substack newsletter backup
+|   |-- vectordb/
+|   |   |-- store.py          # ChromaDB local storage
+|   |   |-- factory.py        # Vector store factory
+|   |   |-- metadata.py       # Metadata index
+|   |   |-- pinecone_store.py # Pinecone cloud storage
+|   |   |-- sync.py           # Sync utilities
+|   |-- cloud/
+|   |   |-- r2.py             # Cloudflare R2 client
 |-- templates/                # Web UI templates
 |-- static/                   # CSS/JS assets
 |-- DEVELOPER-LOCAL.md        # User documentation
@@ -47,15 +64,15 @@ disaster-clippy/
 
 | Role | Vector DB | R2 Storage | What They Use |
 |------|-----------|------------|---------------|
-| End User | ChromaDB (local) | Read backups/ only | useradmin panel |
-| Local Admin | ChromaDB (local) | Write submissions/, Read backups/ | useradmin + pack tools |
+| End User | ChromaDB (local) | Read backups/ only | admin panel |
+| Local Admin | ChromaDB (local) | Write submissions/, Read backups/ | admin + pack tools |
 | Global Admin | Pinecone (write) | Full access | Streamlit admin + scrapers |
 
 ### Admin Dashboard Comparison
 
 The two admin interfaces serve different purposes and have different features:
 
-| Feature | Global Admin (admin/app.py) | Local User Admin (useradmin/app.py) |
+| Feature | Global Admin (Streamlit) | Local User Admin (admin/app.py) |
 |---------|-------------------------------|---------------------------------------|
 | Framework | Streamlit | FastAPI |
 | Purpose | Maintainer managing sources | End users managing local setup |
@@ -65,15 +82,15 @@ The two admin interfaces serve different purposes and have different features:
 | Local LLM (Ollama) | N/A | Yes (for offline responses) |
 | R2 Cloud Storage | Upload to cloud | Download from cloud |
 
-The offline tools (Ollama, connection modes) are only in useradmin/ because they are end-user features. The global admin runs online with cloud resources and doesn't need offline capabilities.
+The offline tools (Ollama, connection modes) are only in admin/ because they are end-user features. The global admin runs online with cloud resources and doesn't need offline capabilities.
 
 Shared dependencies used by both:
-- `sourcepacks/source_manager.py` - Unified source creation interface
-- `sourcepacks/pack_tools.py` - Metadata and index generation
+- `offline_tools/source_manager.py` - Unified source creation interface
+- `offline_tools/packager.py` - Metadata and index generation
 - `offline_tools/indexer.py` - Indexers for HTML, ZIM, PDF
-- `offline_tools/html_backup.py` - HTML website backup
-- `vectordb/` - Vector store implementations
-- `storage/r2.py` - R2 access (upload in admin, download in useradmin)
+- `offline_tools/backup/html.py` - HTML website backup
+- `offline_tools/vectordb/` - Vector store implementations
+- `offline_tools/cloud/r2.py` - R2 access
 
 ### Data Flow Architecture
 
@@ -142,12 +159,12 @@ All work is done in the BACKUP_PATH folder to keep sources self-contained:
 
 Both dashboards share the same tools for creating and managing sources. These are kept in sync between repos.
 
-#### SourceManager (`sourcepacks/source_manager.py`)
+#### SourceManager (`offline_tools/source_manager.py`)
 
 High-level interface for source creation workflow:
 
 ```python
-from sourcepacks.source_manager import SourceManager
+from offline_tools.source_manager import SourceManager
 
 manager = SourceManager()  # Uses BACKUP_PATH automatically
 
@@ -184,10 +201,10 @@ Convenience functions:
 - `index_zim_file(path, source_id)` - Index ZIM file
 - `index_pdf_folder(path, source_id)` - Index PDF folder
 
-#### Backup Tools (`offline_tools/html_backup.py`)
+#### Backup Tools (`offline_tools/backup/html.py`)
 
 ```python
-from offline_tools.html_backup import run_backup
+from offline_tools.backup.html import run_backup
 
 result = run_backup(
     backup_path="D:/backups/my_wiki",
@@ -245,7 +262,7 @@ If you want to:
 - Add personal sources and PDFs
 - Set up offline backups (ZIM, HTML, PDF)
 - Configure connection modes (online/hybrid/offline)
-- Use the Local Admin Panel at `/useradmin/`
+- Use the Local Admin Panel at `/useradmin/` (folder is now `admin/`)
 
 ---
 
@@ -270,8 +287,8 @@ If you want to:
 | Run chat locally | Local | Public | `python app.py` -> localhost:8000 |
 | Configure backups | Local | Public | localhost:8000/useradmin/ |
 | Index local backups | Local | Public | `python local_cli.py index-html ...` |
-| Submit source pack | Local | Public | useradmin -> Cloud Upload |
-| Manage global sources | Parent | Private | `streamlit run admin/app.py` |
+| Submit source pack | Local | Public | Admin panel -> Cloud Upload |
+| Manage global sources | Parent | Private | `streamlit run admin/app.py` (Streamlit) |
 | Add scraped content | Parent | Private | `python ingest.py scrape ...` |
 | Sync to Pinecone | Parent | Private | `python sync.py --remote pinecone push` |
 

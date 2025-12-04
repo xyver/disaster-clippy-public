@@ -167,7 +167,7 @@ class SourceManager:
             # Prioritize local_config (user's GUI setting) over env var
             self.backup_path = None
             try:
-                from useradmin.local_config import get_local_config
+                from admin.local_config import get_local_config
                 config = get_local_config()
                 folder = config.get_backup_folder()
                 if folder:
@@ -719,7 +719,7 @@ class SourceManager:
             )
 
         try:
-            from offline_tools.html_backup import run_backup
+            from offline_tools.backup.html import run_backup
 
             backup_path = str(self.get_source_path(source_id))
 
@@ -768,7 +768,7 @@ class SourceManager:
             )
 
         try:
-            from offline_tools.substack_backup import SubstackBackup
+            from offline_tools.backup.substack import SubstackBackup
 
             backup = SubstackBackup(
                 substack_url=base_url,

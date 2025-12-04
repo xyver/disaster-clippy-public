@@ -2,7 +2,7 @@
 Factory for creating vector stores based on environment configuration.
 
 Usage:
-    from vectordb import get_vector_store
+    from offline_tools.vectordb import get_vector_store
 
     # Uses VECTOR_DB_MODE from .env (defaults to 'local')
     store = get_vector_store()

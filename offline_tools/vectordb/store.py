@@ -9,14 +9,14 @@ from pathlib import Path
 import json
 import os
 
-from .embeddings import EmbeddingService
+from offline_tools.embeddings import EmbeddingService
 
 
 def get_default_chroma_path() -> str:
     """Get default ChromaDB path from local_config or BACKUP_PATH env var"""
     # Try local_config first (user's GUI setting)
     try:
-        from useradmin.local_config import get_local_config
+        from admin.local_config import get_local_config
         config = get_local_config()
         backup_folder = config.get_backup_folder()
         if backup_folder:

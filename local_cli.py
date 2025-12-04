@@ -22,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 def cmd_generate_metadata(args):
     """Generate metadata from a local backup folder."""
-    from sourcepacks.pack_tools import generate_metadata_from_html, save_metadata
+    from offline_tools.packager import generate_metadata_from_html, save_metadata
 
     print(f"Generating metadata from: {args.path}")
 
@@ -44,7 +44,7 @@ def cmd_generate_metadata(args):
 
 def cmd_index_html(args):
     """Index HTML backup to local ChromaDB."""
-    from sourcepacks.pack_tools import index_html_to_chromadb
+    from offline_tools.packager import index_html_to_chromadb
 
     print(f"Indexing HTML backup: {args.path}")
     print(f"Source ID: {args.source_id}")
@@ -60,7 +60,7 @@ def cmd_index_html(args):
 
 def cmd_index_zim(args):
     """Index ZIM file to local ChromaDB."""
-    from sourcepacks.pack_tools import index_zim_to_chromadb
+    from offline_tools.packager import index_zim_to_chromadb
 
     print(f"Indexing ZIM file: {args.path}")
     print(f"Source ID: {args.source_id}")
@@ -76,7 +76,7 @@ def cmd_index_zim(args):
 
 def cmd_export_index(args):
     """Export local ChromaDB index to file."""
-    from sourcepacks.pack_tools import export_chromadb_index
+    from offline_tools.packager import export_chromadb_index
 
     print(f"Exporting index for source: {args.source_id}")
 
@@ -87,7 +87,7 @@ def cmd_export_index(args):
 
 def cmd_check_completeness(args):
     """Check if a source pack is complete and ready for submission."""
-    from sourcepacks.pack_tools import get_source_completeness
+    from offline_tools.packager import get_source_completeness
 
     result = get_source_completeness(args.source_id)
 
@@ -107,7 +107,7 @@ def cmd_check_completeness(args):
 
 def cmd_create_manifest(args):
     """Create a pack manifest for submission."""
-    from sourcepacks.pack_tools import create_pack_manifest
+    from offline_tools.packager import create_pack_manifest
 
     print(f"Creating manifest for: {args.source_id}")
 

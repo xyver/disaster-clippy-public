@@ -88,7 +88,7 @@ class SourcePackRegistry:
         import os
         # Try local_config first (user's GUI setting)
         try:
-            from useradmin.local_config import get_local_config
+            from admin.local_config import get_local_config
             config = get_local_config()
             backup_folder = config.get_backup_folder()
             if backup_folder:

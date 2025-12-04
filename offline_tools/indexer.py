@@ -20,7 +20,7 @@ from typing import List, Dict, Optional, Callable
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from vectordb import VectorStore, MetadataIndex
+from offline_tools.vectordb import VectorStore, MetadataIndex
 from .schemas import (
     get_source_file, get_documents_file, get_embeddings_file,
     get_distribution_manifest_file, CURRENT_SCHEMA_VERSION
@@ -312,7 +312,7 @@ class ZIMIndexer:
 
             # Update master metadata file
             try:
-                from sourcepacks.pack_tools import update_master_metadata
+                from offline_tools.packager import update_master_metadata
                 update_master_metadata(self.source_id, source_meta)
                 print(f"Updated master metadata with {self.source_id}")
             except Exception as e:
@@ -869,7 +869,7 @@ class HTMLBackupIndexer:
 
             # Update master metadata file
             try:
-                from sourcepacks.pack_tools import update_master_metadata
+                from offline_tools.packager import update_master_metadata
                 update_master_metadata(self.source_id, source_meta)
                 print(f"Updated master metadata with {self.source_id}")
             except Exception as e:
@@ -1115,7 +1115,7 @@ class PDFIndexer:
         existing_ids = set()
         if skip_existing:
             try:
-                from vectordb.store import VectorStore
+                from offline_tools.vectordb.store import VectorStore
                 store = VectorStore()
                 existing_ids = store.get_existing_ids()
             except:
@@ -1182,7 +1182,7 @@ class PDFIndexer:
         index_data = None
         if documents:
             try:
-                from vectordb.store import VectorStore
+                from offline_tools.vectordb.store import VectorStore
                 store = VectorStore()
                 result = store.add_documents(documents, return_index_data=True)
                 indexed_count = result["count"]

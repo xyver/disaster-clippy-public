@@ -14,7 +14,7 @@ try:
 except ImportError:
     HAS_PINECONE = False
 
-from .embeddings import EmbeddingService
+from offline_tools.embeddings import EmbeddingService
 from .metadata import MetadataIndex
 
 
@@ -288,6 +288,11 @@ class PineconeStore:
         for source_name, source_info in metadata_stats.get("sources", {}).items():
             sources[source_name] = source_info.get("count", 0)
 
+        # If no sources from local metadata (e.g., Railway without local metadata),
+        # try to get sources from R2 cloud storage
+        if not sources and stats.total_vector_count > 0:
+            sources = self._get_sources_from_r2()
+
         return {
             "total_documents": stats.total_vector_count,
             "index_name": self.index_name,
@@ -296,6 +301,54 @@ class PineconeStore:
             "sources": sources,
             "last_updated": metadata_stats.get("last_updated")
         }
+
+    def _get_sources_from_r2(self) -> Dict[str, int]:
+        """
+        Get source breakdown from R2 cloud storage metadata.
+        Downloads metadata/_master.json from R2 and parses source counts.
+        """
+        full_info = self._get_full_sources_from_r2()
+        # Return just counts for backward compatibility
+        return {source_id: info.get("count", 0) for source_id, info in full_info.items()}
+
+    def _get_full_sources_from_r2(self) -> Dict[str, Dict[str, Any]]:
+        """
+        Get full source info from R2 cloud storage metadata.
+        Returns dict with source_id -> {name, count, topics, etc.}
+        """
+        try:
+            from offline_tools.cloud.r2 import get_r2_storage
+            import tempfile
+
+            r2 = get_r2_storage()
+            if not r2.is_configured():
+                print("R2 storage not configured, cannot fetch metadata")
+                return {}
+
+            # Download _master.json to temp file
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as tmp:
+                tmp_path = tmp.name
+
+            # Try backups/_master.json first (current structure), then metadata/_master.json (legacy)
+            if not r2.download_file("backups/_master.json", tmp_path):
+                if not r2.download_file("metadata/_master.json", tmp_path):
+                    # Silently return empty - this is expected if no master.json exists yet
+                    return {}
+
+            # Parse the metadata
+            with open(tmp_path, 'r', encoding='utf-8') as f:
+                master_data = json.load(f)
+
+            # Clean up temp file
+            import os as os_module
+            os_module.unlink(tmp_path)
+
+            # Return full sources data
+            return master_data.get("sources", {})
+
+        except Exception as e:
+            print(f"Warning: Could not get sources from R2: {e}")
+            return {}
 
     def get_existing_ids(self, limit: int = 10000) -> set:
         """Get document IDs from metadata index"""

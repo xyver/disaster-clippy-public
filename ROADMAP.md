@@ -406,7 +406,7 @@ Provide AI capabilities without internet.
 ### Known Bugs
 
 **EMBEDDING_MODE=local not respected**
-- Location: `vectordb/embeddings.py`
+- Location: `offline_tools/embeddings.py` (was vectordb/embeddings.py)
 - Issue: EmbeddingService always tries to initialize OpenAI client even when EMBEDDING_MODE=local
 - Impact: Public repo crashes without OPENAI_API_KEY even if user wants local embeddings
 - Fix: Check EMBEDDING_MODE before initializing OpenAI client, only init sentence-transformers for local mode

@@ -27,13 +27,13 @@ try:
 except ImportError:
     ANTHROPIC_AVAILABLE = False
 
-from vectordb import get_vector_store as create_vector_store, MetadataIndex, DOC_TYPE_GUIDE, DOC_TYPE_ARTICLE, DOC_TYPE_PRODUCT, DOC_TYPE_ACADEMIC
+from offline_tools.vectordb import get_vector_store as create_vector_store, MetadataIndex, DOC_TYPE_GUIDE, DOC_TYPE_ARTICLE, DOC_TYPE_PRODUCT, DOC_TYPE_ACADEMIC
 
-# Import user admin panel
-from useradmin import router as useradmin_router
+# Import admin panel
+from admin import router as admin_router
 
 # Import source packs API
-from sourcepacks import sourcepacks_router
+from admin.routes import sourcepacks_router
 
 # Load environment
 load_dotenv()
@@ -79,13 +79,13 @@ app.add_middleware(
 # Serve static files
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 
-# Serve useradmin static files
-useradmin_static = BASE_DIR / "useradmin" / "static"
-if useradmin_static.exists():
-    app.mount("/useradmin/static", StaticFiles(directory=str(useradmin_static)), name="useradmin_static")
+# Serve admin static files
+admin_static = BASE_DIR / "admin" / "static"
+if admin_static.exists():
+    app.mount("/admin/static", StaticFiles(directory=str(admin_static)), name="admin_static")
 
-# Include user admin panel routes
-app.include_router(useradmin_router)
+# Include admin panel routes
+app.include_router(admin_router)
 
 # Include source packs API
 app.include_router(sourcepacks_router)
@@ -316,7 +316,7 @@ async def get_sources():
     sources_counts = stats.get("sources", {})
 
     # Load source names from _source.json files in backup folder
-    from useradmin.local_config import get_local_config
+    from admin.local_config import get_local_config
     local_config = get_local_config()
     backup_folder = local_config.get_backup_folder()
 
@@ -353,7 +353,7 @@ async def get_sources():
 def get_connection_mode() -> str:
     """Get current connection mode from local config"""
     try:
-        from useradmin.local_config import get_local_config
+        from admin.local_config import get_local_config
         config = get_local_config()
         return config.get_offline_mode()
     except Exception:
@@ -447,11 +447,11 @@ def generate_offline_response(query: str, context: str, history: list) -> str:
     """
     # Check if Ollama is enabled
     try:
-        from useradmin.local_config import get_local_config
+        from admin.local_config import get_local_config
         config = get_local_config()
 
         if config.is_ollama_enabled():
-            from useradmin.ollama_manager import get_ollama_manager
+            from admin.ollama_manager import get_ollama_manager
             ollama = get_ollama_manager()
 
             # Build system prompt
