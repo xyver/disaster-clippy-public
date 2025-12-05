@@ -22,6 +22,8 @@
 - Hybrid mode: local sources + cloud fallback
 
 ### Local Admin Panel
+- 5-step Source Tools wizard for creating/editing sources
+- Status boxes show validation state (Config, Backup, Metadata, Embeddings, License)
 - Configure which sources to search
 - Add personal documents (PDFs, saved websites)
 - Submit new sources for community review
@@ -41,10 +43,27 @@
 
 | Layer | Purpose |
 |-------|---------|
-| Frontend | Web chat interface (FastAPI) |
+| Frontend | Web chat interface (FastAPI + Jinja2) |
+| Admin | Source management panel at /useradmin/ |
 | Search | Vector similarity search (ChromaDB local / Pinecone cloud) |
 | AI | Language model for answers (Claude or GPT) |
 | Storage | Source backups and metadata (Cloudflare R2) |
+| CLI | Command-line tools for indexing, scraping, sync |
+
+### Folder Structure
+
+```
+disaster-clippy/
+|-- app.py                    # Main chat app
+|-- cli/                      # Command-line tools
+|-- admin/                    # Admin panel (/useradmin/)
+|-- offline_tools/            # Core business logic
+|   |-- indexer.py            # HTML/ZIM/PDF indexing
+|   |-- source_manager.py     # Source CRUD
+|   |-- scraper/              # Web scrapers
+|   |-- vectordb/             # ChromaDB/Pinecone
+|   |-- cloud/                # R2 storage
+```
 
 ---
 
@@ -58,35 +77,53 @@
 
 ---
 
-## Current State
+## Current State (v1.0)
 
-**Working:**
+**Completed:**
 - Chat with source citations
 - 10+ indexed sources (wikis, guides, newsletters)
-- Local admin panel for configuration
+- FastAPI admin panel with Source Tools wizard
 - Cloud deployment on Railway
-- Offline ZIM/HTML backup support
+- Offline ZIM/HTML/PDF backup support
+- Web scrapers (MediaWiki, Fandom, static sites, PDF)
+- CLI tools for local admin, scraping, sync
+- Cloudflare R2 cloud storage
+- Unified codebase (merged private/public repos)
+- Source validation with status boxes
+- Install/download cloud source packs
+- Pinecone sync functionality
 
 **In Progress:**
-- Source pack submission workflow
-- Expanded medical/emergency content
-- Multi-language support
+- ADMIN_MODE gating for global-only features
+- Schema file naming updates
 
 ---
 
 ## Roadmap Highlights
 
-- **Community contributions:** Let users submit and vote on sources
-- **Mobile app:** Offline-first mobile version
-- **Mesh networking:** Share sources between nearby devices
-- **Print guides:** Generate printable PDFs from search results
+### Near Term (v1.5)
+- ADMIN_MODE gating for global admin features
+- Schema file naming updates (_manifest.json, _vectors.json)
+- PDF collection system
+- Knowledge map visualization
+
+### Medium Term (v2.0)
+- Community contributions (submit and vote on sources)
+- ZIM as primary distribution format
+- Offline AI assistant (local LLMs)
+
+### Long Term (v3.0)
+- Mobile app with offline-first design
+- Source pack marketplace
+- Multi-user platform with accounts
+- Mesh networking for source sharing
 
 ---
 
 ## Links
 
 - Public Repository: https://github.com/xyver/disaster-clippy-public
-- Live Demo: [(Railway deployment URL)](https://disaster-clippy.up.railway.app/)
+- Live Demo: https://disaster-clippy.up.railway.app/
 
 ---
 

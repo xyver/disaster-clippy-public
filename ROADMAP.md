@@ -4,46 +4,123 @@ Future plans and feature development priorities.
 
 ---
 
-## Current Status: v0.9
+## Current Status: v1.0
 
 ### Completed Features
 
+**Core Functionality:**
 - Conversational search with 1000+ documents
 - Vector embeddings (OpenAI or local sentence-transformers)
 - Source attribution with clickable links
 - Document classification (Guide, Article, Research, Product)
-- Admin dashboard (Streamlit)
-- PDF ingestion with intelligent chunking
-- Cloud sync (Pinecone)
 - External API for embedding on other sites
 - Metadata index for fast sync
-- Substack scraper with paid content support
-- HTML backup system for offline browsing
-- Auto-discovery of indexed sources in dashboard
+
+**Admin Panel:**
+- FastAPI admin dashboard at /useradmin/
+- 5-step Source Tools wizard
+- Source validation with status boxes (Config, Backup, Metadata, Embeddings, License)
+- Install/download cloud source packs
+- Auto-discovery of indexed sources
 - License compliance tracking
+
+**Content Tools:**
+- HTML backup system for offline browsing
+- PDF ingestion with intelligent chunking
+- Substack scraper with paid content support
+- Web scrapers (MediaWiki, Fandom, static sites)
+- ZIM file indexing
+
+**Infrastructure:**
+- Unified codebase (merged private/public repos)
+- CLI tools for local admin, ingestion, and sync
+- Cloudflare R2 cloud storage integration
+- Pinecone sync functionality
+- Cloud sync (Pinecone)
+
+**Refactoring Completed (Dec 2025):**
+- Folder reorganization (`admin/`, `offline_tools/`, `cli/`)
+- Scrapers ported from private repo to `offline_tools/scraper/`
+- CLI tools consolidated into `cli/` folder
+- Route refactoring (extracted API into modular route files)
+- Removed all legacy/backwards compatibility code
+- Deleted empty folders and duplicate configs
 
 ---
 
-## Recently Completed
+## In Progress (v1.5)
 
-### Substack Scraper (December 2024)
+### ADMIN_MODE Gating
 
-Added support for Substack newsletters using CSV export.
+Gate global-only features so local admins don't see them.
 
-**Status:** COMPLETED
+**Status:** COMPLETED (Dec 2025)
 
-**Implementation:**
-- Parse Substack CSV export (post_id, title, subtitle, date)
-- Construct URLs from post slugs
-- Scrape article content from pages
-- Handle paywalled content via session cookie (SUBSTACK_SESSION_COOKIE)
-- HTML backup system for offline browsing
+**Implemented:**
+- `ADMIN_MODE` environment variable (defaults to "local")
+- `require_global_admin()` dependency blocks cloud write endpoints
+- `/api/admin-mode` endpoint for frontend feature detection
+- Protected endpoints: `/api/upload-backup`, `/api/pinecone-push`, `/api/pinecone-namespace`
+- Frontend banners and disabled buttons when not in global mode
+- API key security remains primary layer (R2/Pinecone credentials required)
 
-**Files:**
-- `scraper/substack.py` - SubstackScraper class
-- `offline_tools/substack_backup.py` - HTML backup with index generation
+---
 
-**Result:** thebarracks.substack.com (191 posts indexed)
+### Schema Standardization
+
+Unified file naming and schema version across all tools.
+
+**Status:** COMPLETED (Dec 2025)
+
+**Implemented:**
+- All file creation uses `schemas.py` getter functions
+- Removed "v3 schema" references - current schema is the only schema
+- Legacy file patterns documented in DEVELOPER.md for cleanup
+- TESTING_CHECKLIST.md created for pipeline validation
+
+---
+
+### ZIM Metadata Extraction
+
+Auto-populate source metadata from ZIM header_fields.
+
+**Status:** COMPLETED (Dec 2025)
+
+**Implemented:**
+- ZIMIndexer extracts metadata from header_fields (title, description, license, creator, language, tags)
+- Auto-populates _manifest.json with ZIM metadata during indexing
+- User edits preserved (existing values not overwritten on re-index)
+- Stores ZIM-specific fields: language, publisher, zim_date
+
+---
+
+### Tag Taxonomy Expansion
+
+Expanded topic keywords for better automatic tag suggestions.
+
+**Status:** COMPLETED (Dec 2025)
+
+**Implemented:**
+- Expanded from 8 to 28 tag categories in TOPIC_KEYWORDS
+- Categories: water, sanitation, solar, energy, wind, biogas, fuel, food, agriculture, livestock, aquaculture, foraging, shelter, construction, tools, medical, herbal, mental-health, nutrition, emergency, fire, earthquake, flood, hurricane, nuclear, pandemic, navigation, communication, security, knots, appropriate-tech, electronics, vehicles, reference, how-to
+- Increased suggestion limit from 5 to 10 tags
+- Helps categorize content for cross-source search
+
+---
+
+### Pipeline Testing
+
+Validate the 5-step wizard and file creation tools work correctly.
+
+**Status:** In Progress
+
+**Test Areas:**
+- Fresh source creation (HTML backup)
+- ZIM file indexing
+- PDF collection workflow
+- Source rename
+- Cleanup redundant files
+- Cloud download
 
 ---
 
@@ -53,7 +130,7 @@ Added support for Substack newsletters using CSV export.
 
 Structured ingestion and management for PDF documents.
 
-**Status:** In Progress
+**Status:** Planning
 
 **Features:**
 - Collection-based organization (group PDFs by topic/author)
@@ -81,9 +158,40 @@ pdf_inbox/
 
 **CLI Commands:**
 ```bash
-python ingest.py pdf add <file_or_folder> --collection <name>
-python ingest.py pdf list
-python ingest.py pdf create-collection <name> --license <type>
+python cli/ingest.py pdf add <file_or_folder> --collection <name>
+python cli/ingest.py pdf list
+python cli/ingest.py pdf create-collection <name> --license <type>
+```
+
+---
+
+### Search Result Diversity
+
+Balance results across sources so large collections don't dominate.
+
+**Status:** Planning
+
+**Problem:** Large sources (e.g., 135 PDF chunks) dominate search results, drowning out smaller but potentially more relevant sources.
+
+**Solution:**
+1. Source-aware re-ranking with max results per source
+2. Title/exact match boosting
+3. Fetch more results, then diversify
+
+**Implementation:**
+```python
+def diversify_results(articles: List[dict], max_per_source: int = 2) -> List[dict]:
+    """Re-rank results to ensure diversity across sources."""
+    by_source = {}
+    diversified = []
+    for article in articles:
+        source = article.get("metadata", {}).get("source", "unknown")
+        if source not in by_source:
+            by_source[source] = 0
+        if by_source[source] < max_per_source:
+            diversified.append(article)
+            by_source[source] += 1
+    return diversified
 ```
 
 ---
@@ -108,13 +216,6 @@ Support multiple export formats for different use cases.
 - Best for stable, rarely-updated content
 - Enables Kiwix offline browsing
 
-**Implementation:**
-```bash
-python pack_tools.py export <source> --format zip     # Current
-python pack_tools.py export <source> --format dcpack  # Our format
-python pack_tools.py export <source> --format zim     # Future
-```
-
 ---
 
 ### Knowledge Map Visualization
@@ -135,8 +236,6 @@ Interactive graph showing document relationships based on embedding similarity.
 - Find topic gaps
 - Identify misclassified content
 - Detect redundancy
-
-**Location:** `admin/pages/knowledge_map.py`
 
 ---
 
@@ -159,9 +258,9 @@ Add FEMA, Cal Fire, EPA sources.
 
 ---
 
-## Medium Term
+## Medium Term (v2.0)
 
-### Location-Aware Search (v1.0)
+### Location-Aware Search
 
 Prioritize locally-relevant content based on user location.
 
@@ -179,7 +278,78 @@ Prioritize locally-relevant content based on user location.
 
 ---
 
-## Long Term (v2.0+)
+### ZIM as Foundation Layer
+
+Use Kiwix ZIM format as the primary backup/distribution format.
+
+**Why ZIM:**
+- Single file distribution (not thousands of HTML files)
+- Built-in full-text search
+- Works in Kiwix readers on all platforms
+- Wikipedia uses it (proven at scale)
+- Easy to torrent/IPFS distribute
+
+**Layer Architecture:**
+```
+Layer 3: AI/RAG (Optional, requires API keys)
+Layer 2: Vector Index (Optional, semantic search)
+Layer 1: Kiwix/ZIM (Foundation, always works offline)
+```
+
+**User Entry Points:**
+- Emergency user: Just the ZIM, browse offline
+- Power user: ZIM + local vectors
+- Full experience: ZIM + vectors + AI
+
+**Distribution:**
+```
+disaster-clippy-core.zim     # 500MB - Essential survival
+disaster-clippy-medical.zim  # 200MB - Medical deep dive
+disaster-clippy-solar.zim    # 150MB - Solar/energy
+```
+
+---
+
+### Offline AI Assistant
+
+Provide AI capabilities without internet.
+
+**Option A: Pre-trained Small Model (2-4 GB)**
+- Phi-3, Llama-3.2, or Mistral 7B quantized
+- Runs on CPU (8GB RAM minimum)
+- Fine-tuned system prompt for disaster prep domain
+- Via Ollama or llama.cpp
+
+**Option B: Cached Response Database (50-200 MB)**
+- Pre-computed answers to 10,000+ common questions
+- Fuzzy matching to find similar questions
+- No inference needed, instant responses
+- Works on any device including phones
+
+**Option C: Hybrid (Recommended)**
+- Check cached answers first (instant)
+- If no match + local model: run inference
+- If no match + no model: show relevant ZIM pages
+- Always offer "browse in Kiwix" fallback
+
+**Hardware Tiers:**
+
+| Tier | RAM | Capability |
+|------|-----|------------|
+| Phone/RPi | 512MB-2GB | Cached answers + ZIM browse |
+| Old Laptop | 4-8GB | + Phi-3 Mini (slow) |
+| Modern Laptop | 8-16GB | + Llama-3.2/Mistral-7B |
+| Desktop GPU | 16GB+ | + Larger models, fast |
+
+**Offline Download Packages:**
+- Minimal (500 MB): ZIM only, browse and search
+- Standard (700 MB): + cached AI answers
+- Full (3 GB): + local LLM model
+- Power User (5 GB): + larger model, dev tools
+
+---
+
+## Long Term (v3.0+)
 
 ### Source Packs & Marketplace
 
@@ -262,109 +432,6 @@ My Source Preferences:
 
 ---
 
-### Two-Layer Architecture
-
-Separate concerns between indexes (fast, small) and backups (archival, large).
-
-**Index Layer (Pinecone):**
-```
-Master Pinecone (Project maintains):
-  /official/solar-cooking    # Public read
-  /official/medical          # Public read
-
-User's Pinecone (They maintain):
-  /my-sources/private        # Their content
-  /cache/solar-cooking       # Optional clone
-```
-
-**Backup Layer (Storage):**
-```
-Official Cloud (S3/R2):
-  /packs/solar-cooking.zim   # ZIM files
-  /packs/medical.zim
-
-User's Storage:
-  Local drive or their own cloud
-```
-
-**Query Options:**
-- Federated: Query official + personal, merge results
-- Fully Local: Query local ChromaDB only
-- Hybrid: Local first, official as supplement
-
----
-
-### ZIM as Foundation Layer
-
-Use Kiwix ZIM format as the primary backup/distribution format.
-
-**Why ZIM:**
-- Single file distribution (not thousands of HTML files)
-- Built-in full-text search
-- Works in Kiwix readers on all platforms
-- Wikipedia uses it (proven at scale)
-- Easy to torrent/IPFS distribute
-
-**Layer Architecture:**
-```
-Layer 3: AI/RAG (Optional, requires API keys)
-Layer 2: Vector Index (Optional, semantic search)
-Layer 1: Kiwix/ZIM (Foundation, always works offline)
-```
-
-**User Entry Points:**
-- Emergency user: Just the ZIM, browse offline
-- Power user: ZIM + local vectors
-- Full experience: ZIM + vectors + AI
-
-**Distribution:**
-```
-disaster-clippy-core.zim     # 500MB - Essential survival
-disaster-clippy-medical.zim  # 200MB - Medical deep dive
-disaster-clippy-solar.zim    # 150MB - Solar/energy
-```
-
----
-
-### Offline AI Assistant
-
-Provide AI capabilities without internet.
-
-**Option A: Pre-trained Small Model (2-4 GB)**
-- Phi-3, Llama-3.2, or Mistral 7B quantized
-- Runs on CPU (8GB RAM minimum)
-- Fine-tuned system prompt for disaster prep domain
-- Via Ollama or llama.cpp
-
-**Option B: Cached Response Database (50-200 MB)**
-- Pre-computed answers to 10,000+ common questions
-- Fuzzy matching to find similar questions
-- No inference needed, instant responses
-- Works on any device including phones
-
-**Option C: Hybrid (Recommended)**
-- Check cached answers first (instant)
-- If no match + local model: run inference
-- If no match + no model: show relevant ZIM pages
-- Always offer "browse in Kiwix" fallback
-
-**Hardware Tiers:**
-
-| Tier | RAM | Capability |
-|------|-----|------------|
-| Phone/RPi | 512MB-2GB | Cached answers + ZIM browse |
-| Old Laptop | 4-8GB | + Phi-3 Mini (slow) |
-| Modern Laptop | 8-16GB | + Llama-3.2/Mistral-7B |
-| Desktop GPU | 16GB+ | + Larger models, fast |
-
-**Offline Download Packages:**
-- Minimal (500 MB): ZIM only, browse and search
-- Standard (700 MB): + cached AI answers
-- Full (3 GB): + local LLM model
-- Power User (5 GB): + larger model, dev tools
-
----
-
 ### Account Tiers
 
 **Free Tier:**
@@ -393,11 +460,10 @@ Provide AI capabilities without internet.
 
 | Version | Focus | Key Features |
 |---------|-------|--------------|
-| v0.9 | Content expansion | Substack scraper, more sources (CURRENT) |
-| v1.0 | Multi-source | Location awareness, source selection UI |
-| v1.5 | Production | Job queue, deployment architecture |
-| v2.0 | Offline | ZIM distribution, local AI, source packs |
-| v3.0 | Platform | User accounts, marketplace, federated queries |
+| v0.5 | Unified codebase | Merged repos, admin dashboard, scrapers (COMPLETE) |
+| v0.75 | Production polish | ADMIN_MODE gating, schema updates, testing (IN PROGRESS) |
+| v1.0 | Offline | ZIM distribution, local AI, source packs |
+| v2.0 | Platform | User accounts, marketplace, federated queries |
 
 ---
 
@@ -406,10 +472,10 @@ Provide AI capabilities without internet.
 ### Known Bugs
 
 **EMBEDDING_MODE=local not respected**
-- Location: `offline_tools/embeddings.py` (was vectordb/embeddings.py)
+- Location: `offline_tools/embeddings.py`
 - Issue: EmbeddingService always tries to initialize OpenAI client even when EMBEDDING_MODE=local
-- Impact: Public repo crashes without OPENAI_API_KEY even if user wants local embeddings
-- Fix: Check EMBEDDING_MODE before initializing OpenAI client, only init sentence-transformers for local mode
+- Impact: Crashes without OPENAI_API_KEY even if user wants local embeddings
+- Fix: Check EMBEDDING_MODE before initializing OpenAI client
 
 ### Testing
 - Unit tests for scrapers (mock HTTP)
@@ -445,4 +511,4 @@ Provide AI capabilities without internet.
 
 ---
 
-*Last Updated: December 2024*
+*Last Updated: December 2025*

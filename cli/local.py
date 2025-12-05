@@ -8,7 +8,9 @@ This is the PUBLIC CLI wrapper for local admins. It provides access to:
 - Exporting local indexes
 - Submitting packs for review
 
-For the private ingest.py/sync.py (Pinecone access), see DEVELOPER-PARENT.md.
+Usage:
+    python -m cli.local metadata --path ./backups/mysite
+    python -m cli.local index-html --path ./backups/mysite --source-id mysite
 """
 
 import argparse
@@ -17,7 +19,7 @@ import os
 from pathlib import Path
 
 # Add project root to path
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 
 def cmd_generate_metadata(args):
@@ -136,21 +138,19 @@ def main():
         epilog="""
 Examples:
   # Generate metadata from HTML backup
-  python local_cli.py metadata --path ./backups/mysite --output metadata.json
+  python -m cli.local metadata --path ./backups/mysite --output metadata.json
 
   # Index HTML backup to ChromaDB
-  python local_cli.py index-html --path ./backups/mysite --source-id mysite
+  python -m cli.local index-html --path ./backups/mysite --source-id mysite
 
   # Index ZIM file to ChromaDB
-  python local_cli.py index-zim --path ./backups/wikipedia.zim --source-id wikipedia
+  python -m cli.local index-zim --path ./backups/wikipedia.zim --source-id wikipedia
 
   # Check if pack is ready for submission
-  python local_cli.py check --source-id mysite
+  python -m cli.local check --source-id mysite
 
   # Create manifest for submission
-  python local_cli.py manifest --source-id mysite --backup-path ./backups/mysite
-
-For more info, see DEVELOPER-LOCAL.md
+  python -m cli.local manifest --source-id mysite --backup-path ./backups/mysite
 """
     )
 

@@ -2,19 +2,17 @@
 Layered Metadata Schema Definitions
 
 This module defines the file structure and schemas for source packages.
-All files use the {source_id}_ prefix for consistency.
+Files use underscore prefix for standard names within each source folder.
 
 File Structure:
     {source_id}/
-        {source_id}_source.json           # Source-level metadata
-        {source_id}_documents.json        # Document metadata (quick scan)
-        {source_id}_embeddings.json       # Vectors only (for ChromaDB import)
-        {source_id}_backup_manifest.json  # Backup manifest (URL -> filename)
-        {source_id}_manifest.json         # Distribution manifest
-        {source_id}_categories/           # Category rollups (optional)
-            {category}.json
-        pages/                            # HTML backup files
-        assets/                           # Images, CSS, etc.
+        _manifest.json            # Source identity + distribution info
+        _metadata.json            # Document metadata (quick scan)
+        _index.json               # Full document content (for display)
+        _vectors.json             # Embeddings only (for ChromaDB import)
+        backup_manifest.json      # Backup manifest (URL -> filename)
+        pages/                    # HTML backup files
+        assets/                   # Images, CSS, etc.
 """
 
 from typing import Dict, List, Optional, TypedDict, Any
@@ -26,40 +24,31 @@ from datetime import datetime
 # FILE NAMING
 # =============================================================================
 
-def get_source_file(source_id: str) -> str:
-    """Source-level metadata file"""
-    return f"{source_id}_source.json"
+def get_manifest_file() -> str:
+    """Source manifest file (identity + distribution info)"""
+    return "_manifest.json"
 
-def get_documents_file(source_id: str) -> str:
+def get_metadata_file() -> str:
     """Document metadata file (quick scan)"""
-    return f"{source_id}_documents.json"
+    return "_metadata.json"
 
-def get_embeddings_file(source_id: str) -> str:
-    """Embeddings file (vectors only)"""
-    return f"{source_id}_embeddings.json"
+def get_index_file() -> str:
+    """Full content index file (for display/scanning)"""
+    return "_index.json"
 
-def get_backup_manifest_file(source_id: str) -> str:
-    """Backup manifest file"""
-    return f"{source_id}_backup_manifest.json"
+def get_vectors_file() -> str:
+    """Vectors file (embeddings only)"""
+    return "_vectors.json"
 
-def get_distribution_manifest_file(source_id: str) -> str:
-    """Distribution manifest file"""
-    return f"{source_id}_manifest.json"
+def get_backup_manifest_file() -> str:
+    """Backup manifest file (URL to filename mapping)"""
+    return "backup_manifest.json"
 
-def get_categories_dir(source_id: str) -> str:
-    """Categories directory"""
-    return f"{source_id}_categories"
 
-# Legacy file names (for migration)
-LEGACY_FILES = {
-    "metadata": "{source_id}_metadata.json",
-    "index": "{source_id}_index.json",
-    "backup_manifest": "manifest.json",
-}
 
 
 # =============================================================================
-# SCHEMA: SOURCE-LEVEL METADATA
+# SCHEMA: MANIFEST (Source Identity + Distribution)
 # =============================================================================
 
 @dataclass
@@ -70,32 +59,52 @@ class CategoryStats:
 
 
 @dataclass
-class SourceMetadata:
+class SourceManifest:
     """
-    Source-level metadata ({source_id}_source.json)
+    Source manifest file (_manifest.json)
 
-    Contains high-level info about the source for quick browsing.
+    Contains source identity and distribution info.
     """
-    source_id: str
-    name: str
+    # Identity
+    source_id: str = ""
+    name: str = ""
     description: str = ""
+
+    # License and attribution
     license: str = "Unknown"
+    license_verified: bool = False
+    attribution: str = ""
     base_url: str = ""
 
-    # Counts
+    # Tags for discovery
+    tags: List[str] = field(default_factory=list)
+
+    # Stats
     total_docs: int = 0
     total_chars: int = 0
-
-    # Category breakdown
     categories: Dict[str, CategoryStats] = field(default_factory=dict)
+
+    # Distribution info
+    version: str = "1.0.0"
+    has_backup: bool = False
+    has_metadata: bool = False
+    has_index: bool = False
+    has_vectors: bool = False
+
+    # File sizes (for download estimates)
+    backup_size_bytes: int = 0
+    metadata_size_bytes: int = 0
+    index_size_bytes: int = 0
+    vectors_size_bytes: int = 0
+    total_size_bytes: int = 0
 
     # Timestamps
     created_at: str = ""
     last_backup: str = ""
     last_indexed: str = ""
 
-    # Schema version for future migrations
-    schema_version: int = 2
+    # Schema version
+    schema_version: int = 3
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -104,20 +113,33 @@ class SourceMetadata:
             "name": self.name,
             "description": self.description,
             "license": self.license,
+            "license_verified": self.license_verified,
+            "attribution": self.attribution,
             "base_url": self.base_url,
+            "tags": self.tags,
             "total_docs": self.total_docs,
             "total_chars": self.total_chars,
             "categories": {
                 k: {"count": v.count, "total_chars": v.total_chars}
                 for k, v in self.categories.items()
             },
+            "version": self.version,
+            "has_backup": self.has_backup,
+            "has_metadata": self.has_metadata,
+            "has_index": self.has_index,
+            "has_vectors": self.has_vectors,
+            "backup_size_bytes": self.backup_size_bytes,
+            "metadata_size_bytes": self.metadata_size_bytes,
+            "index_size_bytes": self.index_size_bytes,
+            "vectors_size_bytes": self.vectors_size_bytes,
+            "total_size_bytes": self.total_size_bytes,
             "created_at": self.created_at,
             "last_backup": self.last_backup,
             "last_indexed": self.last_indexed,
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "SourceMetadata":
+    def from_dict(cls, data: Dict[str, Any]) -> "SourceManifest":
         categories = {}
         for k, v in data.get("categories", {}).items():
             if isinstance(v, dict):
@@ -133,19 +155,32 @@ class SourceMetadata:
             name=data.get("name", ""),
             description=data.get("description", ""),
             license=data.get("license", "Unknown"),
+            license_verified=data.get("license_verified", False),
+            attribution=data.get("attribution", ""),
             base_url=data.get("base_url", ""),
+            tags=data.get("tags", []),
             total_docs=data.get("total_docs", 0),
             total_chars=data.get("total_chars", 0),
             categories=categories,
+            version=data.get("version", "1.0.0"),
+            has_backup=data.get("has_backup", False),
+            has_metadata=data.get("has_metadata", False),
+            has_index=data.get("has_index", False),
+            has_vectors=data.get("has_vectors", False),
+            backup_size_bytes=data.get("backup_size_bytes", 0),
+            metadata_size_bytes=data.get("metadata_size_bytes", 0),
+            index_size_bytes=data.get("index_size_bytes", 0),
+            vectors_size_bytes=data.get("vectors_size_bytes", 0),
+            total_size_bytes=data.get("total_size_bytes", 0),
             created_at=data.get("created_at", ""),
             last_backup=data.get("last_backup", ""),
             last_indexed=data.get("last_indexed", ""),
-            schema_version=data.get("schema_version", 2),
+            schema_version=data.get("schema_version", 3),
         )
 
 
 # =============================================================================
-# SCHEMA: DOCUMENT METADATA
+# SCHEMA: METADATA (Document Lookup)
 # =============================================================================
 
 @dataclass
@@ -153,8 +188,7 @@ class DocumentMetadata:
     """
     Single document metadata entry.
 
-    This is stored in {source_id}_documents.json for quick scanning
-    without loading full content or embeddings.
+    Stored in _metadata.json for quick scanning without loading content.
     """
     doc_id: str
     title: str
@@ -162,6 +196,7 @@ class DocumentMetadata:
     content_hash: str
     char_count: int
     categories: List[str] = field(default_factory=list)
+    doc_type: str = "article"  # article, guide, research, product
     scraped_at: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
@@ -171,19 +206,20 @@ class DocumentMetadata:
             "content_hash": self.content_hash,
             "char_count": self.char_count,
             "categories": self.categories,
+            "doc_type": self.doc_type,
             "scraped_at": self.scraped_at,
         }
 
 
 @dataclass
-class DocumentsFile:
+class MetadataFile:
     """
-    Documents metadata file ({source_id}_documents.json)
+    Document metadata file (_metadata.json)
 
     Contains metadata for all documents, keyed by doc_id.
-    Used for quick scanning without loading embeddings.
+    Used for quick scanning, diffing, and sync operations.
     """
-    schema_version: int = 2
+    schema_version: int = 3
     source_id: str = ""
     document_count: int = 0
     total_chars: int = 0
@@ -202,18 +238,49 @@ class DocumentsFile:
 
 
 # =============================================================================
-# SCHEMA: EMBEDDINGS
+# SCHEMA: INDEX (Full Content)
 # =============================================================================
 
 @dataclass
-class EmbeddingsFile:
+class IndexFile:
     """
-    Embeddings file ({source_id}_embeddings.json)
+    Full content index file (_index.json)
 
-    Contains ONLY vectors, no content duplication.
-    Content is in pages/, metadata is in _documents.json.
+    Contains full document content for display and scanning.
+    Separate from vectors to allow content browsing without embeddings.
     """
-    schema_version: int = 2
+    schema_version: int = 3
+    source_id: str = ""
+    document_count: int = 0
+    created_at: str = ""
+
+    # Full document content keyed by doc_id
+    # Each entry: {title, url, content, categories, doc_type, ...}
+    documents: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "source_id": self.source_id,
+            "document_count": self.document_count,
+            "created_at": self.created_at,
+            "documents": self.documents,
+        }
+
+
+# =============================================================================
+# SCHEMA: VECTORS (Embeddings Only)
+# =============================================================================
+
+@dataclass
+class VectorsFile:
+    """
+    Vectors file (_vectors.json)
+
+    Contains ONLY embedding vectors, no content duplication.
+    Content is in _index.json, metadata is in _metadata.json.
+    """
+    schema_version: int = 3
     source_id: str = ""
     embedding_model: str = "text-embedding-3-small"
     dimensions: int = 1536
@@ -242,11 +309,11 @@ class EmbeddingsFile:
 @dataclass
 class BackupManifest:
     """
-    Backup manifest ({source_id}_backup_manifest.json)
+    Backup manifest (backup_manifest.json)
 
     Maps URLs to local filenames for the backup.
     """
-    schema_version: int = 2
+    schema_version: int = 3
     source_id: str = ""
     base_url: str = ""
     scraper_type: str = ""
@@ -277,141 +344,89 @@ class BackupManifest:
 
 
 # =============================================================================
-# SCHEMA: DISTRIBUTION MANIFEST
-# =============================================================================
-
-@dataclass
-class DistributionManifest:
-    """
-    Distribution manifest ({source_id}_manifest.json)
-
-    Package info for distribution via R2.
-    """
-    schema_version: int = 2
-    source_id: str = ""
-    name: str = ""
-    description: str = ""
-    version: str = "1.0.0"
-    created_at: str = ""
-
-    # Content info
-    document_count: int = 0
-    has_embeddings: bool = False
-    has_categories: bool = False
-
-    # License and attribution
-    license: str = "Unknown"
-    attribution: str = ""
-    base_url: str = ""
-
-    # Files included in package
-    files: List[str] = field(default_factory=list)
-
-    # Size info
-    total_size_bytes: int = 0
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "schema_version": self.schema_version,
-            "source_id": self.source_id,
-            "name": self.name,
-            "description": self.description,
-            "version": self.version,
-            "created_at": self.created_at,
-            "document_count": self.document_count,
-            "has_embeddings": self.has_embeddings,
-            "has_categories": self.has_categories,
-            "license": self.license,
-            "attribution": self.attribution,
-            "base_url": self.base_url,
-            "files": self.files,
-            "total_size_bytes": self.total_size_bytes,
-        }
-
-
-# =============================================================================
 # VALIDATION HELPERS
 # =============================================================================
 
 def validate_source_files(source_path: str, source_id: str) -> Dict[str, Any]:
     """
-    Validate that a source has the required files in the new format.
+    Validate that a source has the required files.
 
     Returns:
         Dict with validation results:
         - is_valid: bool
-        - has_source: bool (source-level metadata)
-        - has_documents: bool (document metadata)
-        - has_embeddings: bool (vectors)
+        - has_manifest: bool
+        - has_metadata: bool
+        - has_index: bool
+        - has_vectors: bool
         - has_backup_manifest: bool
-        - has_distribution_manifest: bool
-        - has_categories: bool
+        - has_backup: bool (pages/ folder or ZIM file)
         - issues: List[str]
-        - legacy_files: List[str] (old format files found)
     """
     from pathlib import Path
 
     path = Path(source_path)
     result = {
         "is_valid": False,
-        "has_source": False,
-        "has_documents": False,
-        "has_embeddings": False,
+        "has_manifest": False,
+        "has_metadata": False,
+        "has_index": False,
+        "has_vectors": False,
         "has_backup_manifest": False,
-        "has_distribution_manifest": False,
-        "has_categories": False,
+        "has_backup": False,
         "issues": [],
-        "legacy_files": [],
     }
 
-    # Check new format files
-    result["has_source"] = (path / get_source_file(source_id)).exists()
-    result["has_documents"] = (path / get_documents_file(source_id)).exists()
-    result["has_embeddings"] = (path / get_embeddings_file(source_id)).exists()
-    result["has_backup_manifest"] = (path / get_backup_manifest_file(source_id)).exists()
-    result["has_distribution_manifest"] = (path / get_distribution_manifest_file(source_id)).exists()
-    result["has_categories"] = (path / get_categories_dir(source_id)).exists()
+    # Check schema files
+    result["has_manifest"] = (path / get_manifest_file()).exists()
+    result["has_metadata"] = (path / get_metadata_file()).exists()
+    result["has_index"] = (path / get_index_file()).exists()
+    result["has_vectors"] = (path / get_vectors_file()).exists()
+    result["has_backup_manifest"] = (path / get_backup_manifest_file()).exists()
 
-    # Check for legacy files
-    legacy_metadata = path / f"{source_id}_metadata.json"
-    legacy_index = path / f"{source_id}_index.json"
-    legacy_manifest = path / "manifest.json"
+    # Check for backup content
+    pages_folder = path / "pages"
+    if pages_folder.exists() and any(pages_folder.iterdir()):
+        result["has_backup"] = True
 
-    if legacy_metadata.exists() and not result["has_documents"]:
-        result["legacy_files"].append(str(legacy_metadata.name))
-    if legacy_index.exists() and not result["has_embeddings"]:
-        result["legacy_files"].append(str(legacy_index.name))
-    if legacy_manifest.exists() and not result["has_backup_manifest"]:
-        result["legacy_files"].append(str(legacy_manifest.name))
+    # Check for ZIM file at parent level
+    parent = path.parent
+    zim_file = parent / f"{source_id}.zim"
+    if zim_file.exists():
+        result["has_backup"] = True
 
-    # Determine validity
-    # Minimum required: source metadata + documents + embeddings
-    if result["has_source"] and result["has_documents"] and result["has_embeddings"]:
+    # Determine validity - minimum: manifest + (metadata or index) + vectors
+    if result["has_manifest"] and (result["has_metadata"] or result["has_index"]) and result["has_vectors"]:
         result["is_valid"] = True
     else:
-        if not result["has_source"]:
-            result["issues"].append(f"Missing {get_source_file(source_id)}")
-        if not result["has_documents"]:
-            result["issues"].append(f"Missing {get_documents_file(source_id)}")
-        if not result["has_embeddings"]:
-            result["issues"].append(f"Missing {get_embeddings_file(source_id)}")
-
-    if result["legacy_files"]:
-        result["issues"].append(f"Legacy files need migration: {', '.join(result['legacy_files'])}")
+        if not result["has_manifest"]:
+            result["issues"].append(f"Missing {get_manifest_file()}")
+        if not result["has_metadata"] and not result["has_index"]:
+            result["issues"].append(f"Missing {get_metadata_file()} or {get_index_file()}")
+        if not result["has_vectors"]:
+            result["issues"].append(f"Missing {get_vectors_file()}")
 
     return result
+
+
+def is_valid_source(source_path: str, source_id: str) -> bool:
+    """Check if a source has valid schema files."""
+    from pathlib import Path
+    path = Path(source_path)
+    return (path / get_manifest_file()).exists()
 
 
 # =============================================================================
 # SCHEMA VERSION
 # =============================================================================
 
-CURRENT_SCHEMA_VERSION = 2
+CURRENT_SCHEMA_VERSION = 3
 
 def get_schema_version(file_data: Dict[str, Any]) -> int:
-    """Get schema version from file data, defaulting to 1 for old files"""
-    return file_data.get("schema_version", 1)
+    """Get schema version from file data"""
+    return file_data.get("schema_version", CURRENT_SCHEMA_VERSION)
 
 def needs_migration(file_data: Dict[str, Any]) -> bool:
     """Check if file needs migration to current schema"""
     return get_schema_version(file_data) < CURRENT_SCHEMA_VERSION
+
+

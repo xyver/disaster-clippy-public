@@ -1,0 +1,1668 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Source Tools - Disaster Clippy</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: #1a1a2e;
+            color: #eee;
+            min-height: 100vh;
+        }
+
+        header {
+            background: #16213e;
+            padding: 1rem 2rem;
+            border-bottom: 1px solid #0f3460;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        header h1 {
+            font-size: 1.5rem;
+            color: #e94560;
+        }
+
+        header p {
+            font-size: 0.9rem;
+            color: #888;
+            margin-top: 0.25rem;
+        }
+
+        .nav-links {
+            display: flex;
+            gap: 0.5rem;
+            flex-wrap: wrap;
+        }
+
+        .nav-links a {
+            color: #4ecca3;
+            text-decoration: none;
+            font-size: 0.85rem;
+            padding: 0.5rem 0.75rem;
+            border-radius: 4px;
+            transition: background 0.2s;
+        }
+
+        .nav-links a:hover {
+            background: #0f3460;
+        }
+
+        .nav-links a.active {
+            background: #0f3460;
+            color: #e94560;
+        }
+
+        .nav-divider { width: 1px; background: #0f3460; margin: 0 0.25rem; }
+        .admin-toggle {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.4rem 0.75rem;
+            background: #0f3460;
+            border-radius: 4px;
+            font-size: 0.8rem;
+            color: #888;
+        }
+        .admin-toggle.active { background: #4a1942; color: #e94560; }
+        .admin-toggle input { display: none; }
+        .toggle-slider {
+            width: 36px;
+            height: 18px;
+            background: #1a1a2e;
+            border-radius: 9px;
+            position: relative;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        .toggle-slider::after {
+            content: '';
+            position: absolute;
+            width: 14px;
+            height: 14px;
+            background: #888;
+            border-radius: 50%;
+            top: 2px;
+            left: 2px;
+            transition: all 0.2s;
+        }
+        .admin-toggle.active .toggle-slider { background: #e94560; }
+        .admin-toggle.active .toggle-slider::after { left: 20px; background: #fff; }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+
+        .sub-nav {
+            display: flex;
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .sub-nav a {
+            color: #4ecca3;
+            text-decoration: none;
+            padding: 0.5rem 1rem;
+            border: 1px solid #0f3460;
+            border-radius: 4px;
+            font-size: 0.85rem;
+        }
+
+        .sub-nav a:hover { background: #0f3460; }
+        .sub-nav a.active { background: #0f3460; color: #e94560; }
+
+        /* Wizard Steps */
+        .wizard-steps {
+            display: flex;
+            gap: 0.5rem;
+            margin-bottom: 2rem;
+            flex-wrap: wrap;
+        }
+
+        .wizard-step {
+            flex: 1;
+            min-width: 120px;
+            text-align: center;
+            padding: 1rem 0.5rem;
+            background: #1a1a2e;
+            border: 1px solid #0f3460;
+            border-radius: 4px;
+            color: #666;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .wizard-step:hover {
+            border-color: #4ecca3;
+        }
+
+        .wizard-step.active {
+            border-color: #e94560;
+            color: #e94560;
+            background: #16213e;
+        }
+
+        .wizard-step.completed {
+            border-color: #4ecca3;
+            color: #4ecca3;
+        }
+
+        .wizard-step .step-number {
+            display: block;
+            font-size: 0.75rem;
+            margin-bottom: 0.25rem;
+            opacity: 0.7;
+        }
+
+        .wizard-step .step-title {
+            font-weight: 500;
+            font-size: 0.9rem;
+        }
+
+        /* Step Content */
+        .step-content {
+            display: none;
+        }
+
+        .step-content.active {
+            display: block;
+        }
+
+        .section {
+            background: #16213e;
+            border: 1px solid #0f3460;
+            border-radius: 8px;
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .section h2 {
+            font-size: 1.1rem;
+            color: #e94560;
+            margin-bottom: 1rem;
+            padding-bottom: 0.5rem;
+            border-bottom: 1px solid #0f3460;
+        }
+
+        .section p.description {
+            color: #888;
+            font-size: 0.85rem;
+            margin-bottom: 1rem;
+        }
+
+        .source-selector {
+            display: flex;
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+            align-items: center;
+        }
+
+        .source-selector select {
+            flex: 1;
+            max-width: 400px;
+            padding: 0.75rem;
+            border: 1px solid #0f3460;
+            border-radius: 6px;
+            background: #1a1a2e;
+            color: #eee;
+            font-size: 0.95rem;
+        }
+
+        .source-selector select:focus {
+            outline: none;
+            border-color: #4ecca3;
+        }
+
+        .source-info {
+            background: #1a1a2e;
+            border: 1px solid #0f3460;
+            border-radius: 8px;
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .source-info.ready { border-color: #4ecca3; }
+        .source-info.needs-work { border-color: #f9a825; }
+
+        .info-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 1rem;
+            margin-bottom: 1rem;
+        }
+
+        .info-item {
+            background: #0f3460;
+            padding: 0.75rem;
+            border-radius: 6px;
+        }
+
+        .info-item label {
+            display: block;
+            font-size: 0.75rem;
+            color: #888;
+            margin-bottom: 0.25rem;
+            text-transform: uppercase;
+        }
+
+        .info-item span {
+            color: #4ecca3;
+            font-weight: 500;
+        }
+
+        .checklist {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+        }
+
+        .checklist-item {
+            display: flex;
+            align-items: center;
+            gap: 0.25rem;
+            font-size: 0.85rem;
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+            background: #0f3460;
+        }
+
+        .checklist-item.ok { color: #4ecca3; }
+        .checklist-item.missing { color: #e94560; }
+        .checklist-item.warning { color: #f9a825; }
+
+        /* Source Type Cards */
+        .source-type-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+            gap: 1rem;
+        }
+
+        .source-type-card {
+            background: #1a1a2e;
+            border: 2px solid #0f3460;
+            border-radius: 8px;
+            padding: 1.5rem;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .source-type-card:hover {
+            border-color: #4ecca3;
+        }
+
+        .source-type-card.selected {
+            border-color: #e94560;
+            background: #16213e;
+        }
+
+        .source-type-card .icon {
+            font-size: 2rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .source-type-card .title {
+            font-weight: 600;
+            color: #4ecca3;
+            margin-bottom: 0.25rem;
+        }
+
+        .source-type-card .desc {
+            font-size: 0.8rem;
+            color: #888;
+        }
+
+        /* Tool Sections */
+        .tool-section {
+            background: #1a1a2e;
+            border: 1px solid #0f3460;
+            border-radius: 6px;
+            padding: 1rem;
+            margin-bottom: 1rem;
+        }
+
+        .tool-section h3 {
+            color: #4ecca3;
+            font-size: 0.95rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .tool-section p {
+            color: #888;
+            font-size: 0.85rem;
+            margin-bottom: 0.75rem;
+        }
+
+        .tool-actions {
+            display: flex;
+            gap: 0.5rem;
+            flex-wrap: wrap;
+        }
+
+        /* Forms */
+        .form-row {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+            margin-bottom: 1rem;
+        }
+
+        .form-group {
+            margin-bottom: 1rem;
+        }
+
+        .form-group label {
+            display: block;
+            font-size: 0.85rem;
+            color: #888;
+            margin-bottom: 0.5rem;
+        }
+
+        .form-group input[type="text"],
+        .form-group input[type="url"],
+        .form-group input[type="number"],
+        .form-group select,
+        .form-group textarea {
+            width: 100%;
+            padding: 0.75rem;
+            border: 1px solid #0f3460;
+            border-radius: 6px;
+            background: #1a1a2e;
+            color: #eee;
+            font-size: 0.9rem;
+        }
+
+        .form-group input:focus,
+        .form-group select:focus,
+        .form-group textarea:focus {
+            outline: none;
+            border-color: #4ecca3;
+        }
+
+        .form-group textarea {
+            resize: vertical;
+            min-height: 80px;
+        }
+
+        /* Buttons */
+        .btn {
+            padding: 0.6rem 1.2rem;
+            border: none;
+            border-radius: 6px;
+            font-size: 0.9rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .btn-primary {
+            background: #4ecca3;
+            color: #1a1a2e;
+        }
+
+        .btn-primary:hover {
+            background: #3db892;
+        }
+
+        .btn-secondary {
+            background: #0f3460;
+            color: #4ecca3;
+        }
+
+        .btn-secondary:hover {
+            background: #1a4a7a;
+        }
+
+        .btn-danger {
+            background: #e94560;
+            color: white;
+        }
+
+        .btn-danger:hover {
+            background: #d53a54;
+        }
+
+        .btn-warning {
+            background: #f9a825;
+            color: #1a1a2e;
+        }
+
+        .btn-warning:hover {
+            background: #e09620;
+        }
+
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        /* Navigation Buttons */
+        .step-navigation {
+            display: flex;
+            justify-content: space-between;
+            margin-top: 1.5rem;
+            padding-top: 1.5rem;
+            border-top: 1px solid #0f3460;
+        }
+
+        /* Output Log */
+        .output-log {
+            background: #0a0a14;
+            border: 1px solid #0f3460;
+            border-radius: 6px;
+            padding: 1rem;
+            font-family: monospace;
+            font-size: 0.85rem;
+            max-height: 300px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+        }
+
+        .output-log .success { color: #4ecca3; }
+        .output-log .error { color: #e94560; }
+        .output-log .warning { color: #f9a825; }
+        .output-log .info { color: #4ecca3; opacity: 0.7; }
+
+        /* Toast */
+        .toast {
+            position: fixed;
+            bottom: 2rem;
+            right: 2rem;
+            background: #4ecca3;
+            color: #1a1a2e;
+            padding: 1rem 1.5rem;
+            border-radius: 8px;
+            font-weight: 500;
+            transform: translateY(100px);
+            opacity: 0;
+            transition: all 0.3s;
+            z-index: 1000;
+        }
+
+        .toast.show {
+            transform: translateY(0);
+            opacity: 1;
+        }
+
+        .toast.error {
+            background: #e94560;
+            color: white;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 2rem;
+            color: #888;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 2rem;
+            color: #666;
+        }
+
+        .status-badge {
+            display: inline-block;
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .badge-v1 { background: #f9a825; color: #1a1a2e; }
+        .badge-v2 { background: #4ecca3; color: #1a1a2e; }
+        .badge-ready { background: #4ecca3; color: #1a1a2e; }
+        .badge-incomplete { background: #e94560; color: white; }
+
+        @media (max-width: 768px) {
+            .container { padding: 1rem; }
+            .form-row { grid-template-columns: 1fr; }
+            .info-grid { grid-template-columns: 1fr; }
+            .wizard-steps { flex-direction: column; }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div>
+            <h1>Source Tools</h1>
+            <p>Create, configure, and manage content sources</p>
+        </div>
+        <nav class="nav-links">
+            <a href="/useradmin/dashboard">Dashboard</a>
+            <a href="/useradmin/sources" class="active">Sources</a>
+            <a href="/useradmin/jobs">Jobs</a>
+            <a href="/useradmin/cloud">Cloud</a>
+            <a href="/useradmin/settings">Settings</a>
+            <a href="/useradmin/submissions">Submissions</a>
+            <a href="/useradmin/pinecone">Pinecone</a>
+            <a href="/">Chat</a>
+            <span class="nav-divider"></span>
+            <label class="admin-toggle" id="adminToggle" title="Toggle Admin Mode">
+                <input type="checkbox" id="adminModeCheckbox" onchange="toggleAdminMode()">
+                <span>Admin</span>
+                <span class="toggle-slider"></span>
+            </label>
+        </nav>
+    </header>
+
+    <div class="container">
+        <!-- Sub-navigation -->
+        <div class="sub-nav">
+            <a href="/useradmin/sources">All Sources</a>
+            <a href="/useradmin/sources/tools" class="active">Source Tools</a>
+        </div>
+
+        <!-- Wizard Steps -->
+        <div class="wizard-steps">
+            <div class="wizard-step active" data-step="1" onclick="goToStep(1)">
+                <span class="step-number">Step 1</span>
+                <span class="step-title">Add Source</span>
+            </div>
+            <div class="wizard-step" data-step="2" onclick="goToStep(2)">
+                <span class="step-number">Step 2</span>
+                <span class="step-title">Configure</span>
+            </div>
+            <div class="wizard-step" data-step="3" onclick="goToStep(3)">
+                <span class="step-number">Step 3</span>
+                <span class="step-title">Index</span>
+            </div>
+            <div class="wizard-step" data-step="4" onclick="goToStep(4)">
+                <span class="step-number">Step 4</span>
+                <span class="step-title">Review</span>
+            </div>
+            <div class="wizard-step" data-step="5" onclick="goToStep(5)">
+                <span class="step-number">Step 5</span>
+                <span class="step-title">Validate</span>
+            </div>
+        </div>
+
+        <!-- Step 1: Add Source -->
+        <div class="step-content active" data-step="1">
+            <div class="section">
+                <h2>Select or Create Source</h2>
+                <p class="description">Choose an existing source to edit, or create a new one</p>
+
+                <div class="source-selector">
+                    <select id="sourceSelect" onchange="loadSourceDetails()">
+                        <option value="">-- Select existing source --</option>
+                    </select>
+                    <button class="btn btn-secondary" onclick="refreshSources()">Refresh</button>
+                </div>
+
+                <div style="text-align: center; margin: 1.5rem 0; color: #666;">- OR -</div>
+
+                <h3 style="color: #4ecca3; margin-bottom: 1rem;">Create New Source</h3>
+
+                <div class="source-type-grid">
+                    <div class="source-type-card" onclick="selectSourceType('html')" data-type="html">
+                        <div class="icon">[ ]</div>
+                        <div class="title">HTML Backup</div>
+                        <div class="desc">Import from existing HTML folder</div>
+                    </div>
+                    <div class="source-type-card" onclick="selectSourceType('zim')" data-type="zim">
+                        <div class="icon">[Z]</div>
+                        <div class="title">ZIM File</div>
+                        <div class="desc">Wikipedia/Kiwix archives</div>
+                    </div>
+                    <div class="source-type-card" onclick="selectSourceType('pdf')" data-type="pdf">
+                        <div class="icon">[P]</div>
+                        <div class="title">PDF Collection</div>
+                        <div class="desc">Folder of PDF files</div>
+                    </div>
+                    <div class="source-type-card" onclick="selectSourceType('scrape')" data-type="scrape">
+                        <div class="icon">[W]</div>
+                        <div class="title">Web Scrape</div>
+                        <div class="desc">Scrape a website</div>
+                    </div>
+                </div>
+
+                <!-- New Source Form (shown when type is selected) -->
+                <div id="newSourceForm" style="display: none; margin-top: 1.5rem;">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Source ID (slug)</label>
+                            <input type="text" id="newSourceId" placeholder="my-source-name">
+                            <p style="font-size: 0.8rem; color: #888; margin-top: 0.25rem;">
+                                Lowercase letters, numbers, underscores, hyphens. This becomes the folder name.
+                            </p>
+                        </div>
+                        <div class="form-group">
+                            <label>Source Type</label>
+                            <input type="text" id="newSourceType" readonly style="background: #0a0a14; color: #4ecca3;">
+                        </div>
+                    </div>
+                    <div class="form-group" id="scrapeUrlGroup" style="display: none;">
+                        <label>Website URL to Scrape</label>
+                        <input type="url" id="scrapeUrl" placeholder="https://example.com">
+                    </div>
+                    <div class="form-group" id="importPathGroup" style="display: none;">
+                        <label>Path to Import (relative to backup folder)</label>
+                        <input type="text" id="importPath" placeholder="my-folder or path/to/folder">
+                    </div>
+                    <div class="tool-actions">
+                        <button class="btn btn-primary" onclick="createNewSource()">Create Source</button>
+                        <button class="btn btn-secondary" onclick="cancelNewSource()">Cancel</button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="step-navigation">
+                <div></div>
+                <button class="btn btn-primary" onclick="nextStep()" id="step1Next" disabled>Next: Configure</button>
+            </div>
+        </div>
+
+        <!-- Step 2: Configure -->
+        <div class="step-content" data-step="2">
+            <div class="section">
+                <h2>Source Configuration</h2>
+                <p class="description">Set the display name, license, and description for your source</p>
+
+                <div id="noSourceSelected2" class="empty-state">
+                    Please select or create a source in Step 1 first.
+                </div>
+
+                <div id="configForm" style="display: none;">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Display Name</label>
+                            <input type="text" id="editName" placeholder="Human-readable name">
+                        </div>
+                        <div class="form-group">
+                            <label>License</label>
+                            <select id="editLicense">
+                                <option value="Unknown">Unknown</option>
+                                <option value="CC BY 4.0">CC BY 4.0</option>
+                                <option value="CC BY 3.0">CC BY 3.0</option>
+                                <option value="CC BY-SA 4.0">CC BY-SA 4.0</option>
+                                <option value="CC BY-SA 3.0">CC BY-SA 3.0</option>
+                                <option value="CC BY-NC 4.0">CC BY-NC 4.0</option>
+                                <option value="CC BY-NC-SA 4.0">CC BY-NC-SA 4.0</option>
+                                <option value="CC0">CC0 (Public Domain)</option>
+                                <option value="GFDL">GFDL (GNU Free Documentation)</option>
+                                <option value="MIT">MIT</option>
+                                <option value="GPL">GPL</option>
+                                <option value="Apache 2.0">Apache 2.0</option>
+                                <option value="Fair Use">Fair Use</option>
+                                <option value="Custom">Custom</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>Description</label>
+                        <textarea id="editDescription" rows="3" placeholder="Brief description of the source content"></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label>Base URL</label>
+                        <input type="text" id="editBaseUrl" placeholder="https://example.com">
+                        <p style="font-size: 0.8rem; color: #888; margin-top: 0.25rem;">
+                            The original website URL for this source
+                        </p>
+                    </div>
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" id="editLicenseVerified"> License Verified
+                        </label>
+                        <p style="font-size: 0.8rem; color: #888; margin-top: 0.25rem;">
+                            Check this if you have confirmed the license is accurate
+                        </p>
+                    </div>
+                    <div class="tool-actions">
+                        <button class="btn btn-primary" onclick="saveSourceConfig()">Save Configuration</button>
+                        <button class="btn btn-secondary" onclick="autoDetect()">Auto-Detect</button>
+                    </div>
+
+                    <!-- Rename Section (Admin Only) -->
+                    <div class="admin-only" id="renameSection" style="display: none; margin-top: 1.5rem; padding-top: 1.5rem; border-top: 1px solid #0f3460;">
+                        <h3 style="color: #f9a825; margin-bottom: 0.75rem;">Rename Source (Admin Only)</h3>
+                        <p style="font-size: 0.85rem; color: #888; margin-bottom: 1rem;">
+                            Change the source ID. This will rename the folder and all associated files.
+                        </p>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>Current Source ID</label>
+                                <input type="text" id="renameCurrentId" readonly style="background: #0a0a14; color: #888;">
+                            </div>
+                            <div class="form-group">
+                                <label>New Source ID</label>
+                                <input type="text" id="renameNewId" placeholder="new-source-id">
+                            </div>
+                        </div>
+                        <div class="tool-actions">
+                            <button class="btn btn-warning" onclick="renameSource()">Rename Source</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="step-navigation">
+                <button class="btn btn-secondary" onclick="prevStep()">Back</button>
+                <button class="btn btn-primary" onclick="nextStep()">Next: Index</button>
+            </div>
+        </div>
+
+        <!-- Step 3: Index -->
+        <div class="step-content" data-step="3">
+            <div class="section">
+                <h2>Indexing Tools</h2>
+                <p class="description">Generate metadata and embeddings for offline search</p>
+
+                <div id="noSourceSelected3" class="empty-state">
+                    Please select or create a source in Step 1 first.
+                </div>
+
+                <div id="indexTools" style="display: none;">
+                    <div class="tool-section">
+                        <h3>1. Scan Backup</h3>
+                        <p>Scan the backup folder and create a manifest of all files. Required for HTML sources.</p>
+                        <div class="tool-actions">
+                            <button class="btn btn-secondary" id="btnScanBackup" onclick="scanBackup()">Scan Backup</button>
+                        </div>
+                    </div>
+
+                    <div class="tool-section">
+                        <h3>2. Generate Metadata</h3>
+                        <p>Extract document titles, content, and create the metadata file.</p>
+                        <div class="tool-actions">
+                            <button class="btn btn-primary" id="btnGenerateMetadata" onclick="generateMetadata()">Generate Metadata</button>
+                        </div>
+                    </div>
+
+                    <div class="tool-section">
+                        <h3>3. Create Embeddings</h3>
+                        <p>Generate vector embeddings for semantic search. This runs as a background job.</p>
+                        <div style="display: flex; gap: 1rem; align-items: flex-end; margin-bottom: 1rem;">
+                            <div class="form-group" style="margin-bottom: 0; flex: 0 0 150px;">
+                                <label>Document Limit</label>
+                                <input type="number" id="indexLimit" value="1000" min="1" max="50000" placeholder="1000">
+                            </div>
+                            <p style="font-size: 0.8rem; color: #888; margin: 0;">
+                                Limits how many documents to index. Higher values take longer but cover more content.
+                            </p>
+                        </div>
+                        <div class="tool-actions">
+                            <button class="btn btn-primary" id="btnCreateIndex" onclick="createIndex()">Create Embeddings</button>
+                            <button class="btn btn-secondary" onclick="createIndex(true)">Force Re-index</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="step-navigation">
+                <button class="btn btn-secondary" onclick="prevStep()">Back</button>
+                <button class="btn btn-primary" onclick="nextStep()">Next: Review</button>
+            </div>
+        </div>
+
+        <!-- Step 4: Review -->
+        <div class="step-content" data-step="4">
+            <div class="section">
+                <h2>Review Source</h2>
+                <p class="description">Check source completeness and verify all components are ready</p>
+
+                <div id="noSourceSelected4" class="empty-state">
+                    Please select or create a source in Step 1 first.
+                </div>
+
+                <div id="reviewContent" style="display: none;">
+                    <div id="sourceInfo" class="source-info">
+                        <div class="loading">Loading...</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="step-navigation">
+                <button class="btn btn-secondary" onclick="prevStep()">Back</button>
+                <button class="btn btn-primary" onclick="nextStep()">Next: Validate</button>
+            </div>
+        </div>
+
+        <!-- Step 5: Validate & Share -->
+        <div class="step-content" data-step="5">
+            <div class="section">
+                <h2>Validate & Share</h2>
+                <p class="description">Run validation and optionally upload to the cloud</p>
+
+                <div id="noSourceSelected5" class="empty-state">
+                    Please select or create a source in Step 1 first.
+                </div>
+
+                <div id="validateTools" style="display: none;">
+                    <div class="tool-section">
+                        <h3>Validate Source</h3>
+                        <p>Check if the source meets all requirements for distribution.</p>
+                        <div class="tool-actions">
+                            <button class="btn btn-primary" onclick="validateSource()">Run Validation</button>
+                        </div>
+                    </div>
+
+                    <div class="tool-section">
+                        <h3>Cleanup Redundant Files</h3>
+                        <p>Remove legacy v1 files if v2 files exist. Frees up disk space.</p>
+                        <div class="tool-actions">
+                            <button class="btn btn-secondary" onclick="cleanupFiles()">Cleanup Files</button>
+                        </div>
+                    </div>
+
+                    <div class="tool-section admin-only" style="border-color: #4ecca3; display: none;">
+                        <h3 style="color: #4ecca3;">Upload to Cloud (Admin)</h3>
+                        <p>Upload this source to the global repository for others to use.</p>
+                        <div class="tool-actions">
+                            <button class="btn btn-primary" onclick="window.location.href='/useradmin/cloud'">Go to Cloud Upload</button>
+                        </div>
+                    </div>
+
+                    <div class="tool-section" style="border-color: #e94560;">
+                        <h3 style="color: #e94560;">Danger Zone</h3>
+                        <p>Delete this source completely (cannot be undone).</p>
+                        <div class="tool-actions">
+                            <button class="btn btn-danger" onclick="deleteSource()">Delete Source</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="step-navigation">
+                <button class="btn btn-secondary" onclick="prevStep()">Back</button>
+                <button class="btn btn-primary" onclick="window.location.href='/useradmin/sources'">Done - Back to Sources</button>
+            </div>
+        </div>
+
+        <!-- Output Log (visible on all steps) -->
+        <div class="section">
+            <h2>Output Log</h2>
+            <div id="outputLog" class="output-log">Ready. Select a source and run a tool to see output here.</div>
+        </div>
+    </div>
+
+    <div id="toast" class="toast"></div>
+
+    <script>
+        let sources = [];
+        let currentSource = null;
+        let currentStep = 1;
+        let selectedSourceType = null;
+
+        // Wizard Navigation
+        function goToStep(step) {
+            // Only allow going to step if source is selected (except step 1)
+            if (step > 1 && !currentSource) {
+                showToast('Please select or create a source first', true);
+                return;
+            }
+
+            currentStep = step;
+            updateWizardUI();
+        }
+
+        function nextStep() {
+            if (currentStep < 5) {
+                if (currentStep === 1 && !currentSource) {
+                    showToast('Please select or create a source first', true);
+                    return;
+                }
+                currentStep++;
+                updateWizardUI();
+            }
+        }
+
+        function prevStep() {
+            if (currentStep > 1) {
+                currentStep--;
+                updateWizardUI();
+            }
+        }
+
+        function updateWizardUI() {
+            // Update step indicators
+            document.querySelectorAll('.wizard-step').forEach(el => {
+                const step = parseInt(el.dataset.step);
+                el.classList.remove('active', 'completed');
+                if (step === currentStep) {
+                    el.classList.add('active');
+                } else if (step < currentStep) {
+                    el.classList.add('completed');
+                }
+            });
+
+            // Show/hide step content
+            document.querySelectorAll('.step-content').forEach(el => {
+                el.classList.remove('active');
+                if (parseInt(el.dataset.step) === currentStep) {
+                    el.classList.add('active');
+                }
+            });
+
+            // Update visibility of source-dependent content
+            const hasSource = currentSource !== null;
+            document.getElementById('noSourceSelected2').style.display = hasSource ? 'none' : 'block';
+            document.getElementById('configForm').style.display = hasSource ? 'block' : 'none';
+            document.getElementById('noSourceSelected3').style.display = hasSource ? 'none' : 'block';
+            document.getElementById('indexTools').style.display = hasSource ? 'block' : 'none';
+            document.getElementById('noSourceSelected4').style.display = hasSource ? 'none' : 'block';
+            document.getElementById('reviewContent').style.display = hasSource ? 'block' : 'none';
+            document.getElementById('noSourceSelected5').style.display = hasSource ? 'none' : 'block';
+            document.getElementById('validateTools').style.display = hasSource ? 'block' : 'none';
+
+            // Enable/disable step 1 next button
+            document.getElementById('step1Next').disabled = !hasSource;
+
+            // Update admin visibility
+            updateAdminVisibility();
+        }
+
+        // Source Type Selection
+        function selectSourceType(type) {
+            selectedSourceType = type;
+
+            document.querySelectorAll('.source-type-card').forEach(card => {
+                card.classList.remove('selected');
+                if (card.dataset.type === type) {
+                    card.classList.add('selected');
+                }
+            });
+
+            document.getElementById('newSourceForm').style.display = 'block';
+            document.getElementById('newSourceType').value = type.toUpperCase();
+
+            // Show/hide type-specific fields
+            document.getElementById('scrapeUrlGroup').style.display = type === 'scrape' ? 'block' : 'none';
+            document.getElementById('importPathGroup').style.display = (type === 'html' || type === 'pdf' || type === 'zim') ? 'block' : 'none';
+        }
+
+        function cancelNewSource() {
+            selectedSourceType = null;
+            document.querySelectorAll('.source-type-card').forEach(card => {
+                card.classList.remove('selected');
+            });
+            document.getElementById('newSourceForm').style.display = 'none';
+            document.getElementById('newSourceId').value = '';
+            document.getElementById('scrapeUrl').value = '';
+            document.getElementById('importPath').value = '';
+        }
+
+        async function createNewSource() {
+            const sourceId = document.getElementById('newSourceId').value.trim();
+
+            if (!sourceId) {
+                showToast('Please enter a source ID', true);
+                return;
+            }
+
+            if (!/^[a-z0-9][a-z0-9_-]*$/.test(sourceId)) {
+                showToast('Invalid source ID format. Use lowercase letters, numbers, underscores, hyphens.', true);
+                return;
+            }
+
+            logOutput(`Creating new source: ${sourceId} (${selectedSourceType})...`);
+
+            try {
+                const response = await fetch('/useradmin/api/create-source', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        source_id: sourceId,
+                        source_type: selectedSourceType,
+                        url: document.getElementById('scrapeUrl').value || null,
+                        import_path: document.getElementById('importPath').value || null
+                    })
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    logOutput(`Source created: ${sourceId}`, 'success');
+                    showToast('Source created successfully');
+                    cancelNewSource();
+                    await refreshSources();
+                    document.getElementById('sourceSelect').value = sourceId;
+                    await loadSourceDetails();
+                    nextStep();
+                } else {
+                    logOutput(`Error: ${data.detail || 'Failed to create source'}`, 'error');
+                    showToast(data.detail || 'Failed to create source', true);
+                }
+            } catch (e) {
+                logOutput(`Error: ${e.message}`, 'error');
+                showToast('Error: ' + e.message, true);
+            }
+        }
+
+        // Load sources
+        async function loadSources() {
+            try {
+                const response = await fetch('/useradmin/api/local-sources');
+                const data = await response.json();
+                sources = data.sources || [];
+
+                const select = document.getElementById('sourceSelect');
+                const currentValue = select.value;
+
+                select.innerHTML = '<option value="">-- Select existing source --</option>';
+
+                for (const source of sources) {
+                    const option = document.createElement('option');
+                    option.value = source.source_id;
+                    option.textContent = `${source.name || source.source_id} (${source.document_count || 0} docs)`;
+                    select.appendChild(option);
+                }
+
+                if (currentValue && sources.find(s => s.source_id === currentValue)) {
+                    select.value = currentValue;
+                }
+            } catch (e) {
+                logOutput(`Error loading sources: ${e.message}`, 'error');
+            }
+        }
+
+        async function refreshSources() {
+            logOutput('Refreshing sources...');
+            await loadSources();
+            logOutput('Sources refreshed', 'success');
+        }
+
+        async function loadSourceDetails() {
+            const sourceId = document.getElementById('sourceSelect').value;
+
+            if (!sourceId) {
+                currentSource = null;
+                updateWizardUI();
+                return;
+            }
+
+            currentSource = sources.find(s => s.source_id === sourceId);
+
+            if (currentSource) {
+                populateEditForm();
+                updateSourceInfo();
+                updateWizardUI();
+                logOutput(`Loaded source: ${currentSource.name || currentSource.source_id}`);
+            }
+        }
+
+        function updateSourceInfo() {
+            const s = currentSource;
+            const infoDiv = document.getElementById('sourceInfo');
+
+            const statusClass = s.is_complete ? 'ready' : 'needs-work';
+            infoDiv.className = `source-info ${statusClass}`;
+
+            infoDiv.innerHTML = `
+                <div class="info-grid">
+                    <div class="info-item">
+                        <label>Source ID</label>
+                        <span>${s.source_id}</span>
+                    </div>
+                    <div class="info-item">
+                        <label>Type</label>
+                        <span>${s.backup_type || 'Unknown'}</span>
+                    </div>
+                    <div class="info-item">
+                        <label>Documents</label>
+                        <span>${(s.document_count || 0).toLocaleString()}</span>
+                    </div>
+                    <div class="info-item">
+                        <label>Backup Size</label>
+                        <span>${(s.backup_size_mb || 0).toFixed(2)} MB</span>
+                    </div>
+                    <div class="info-item">
+                        <label>License</label>
+                        <span>${s.license || 'Unknown'}${s.license_verified ? ' (Verified)' : ''}</span>
+                    </div>
+                    <div class="info-item">
+                        <label>Schema</label>
+                        <span class="status-badge ${s.schema_version === 2 ? 'badge-v2' : 'badge-v1'}">
+                            v${s.schema_version || 1}
+                        </span>
+                    </div>
+                </div>
+                <div class="checklist">
+                    <span class="checklist-item ${s.has_config ? 'ok' : 'missing'}">${s.has_config ? '[OK]' : '[X]'} Config</span>
+                    <span class="checklist-item ${s.has_backup ? 'ok' : 'missing'}">${s.has_backup ? '[OK]' : '[X]'} Backup</span>
+                    <span class="checklist-item ${s.has_metadata ? 'ok' : 'missing'}">${s.has_metadata ? '[OK]' : '[X]'} Metadata</span>
+                    <span class="checklist-item ${s.has_embeddings ? 'ok' : 'warning'}">${s.has_embeddings ? '[OK]' : '[!]'} Embeddings</span>
+                    <span class="checklist-item ${s.license && s.license !== 'Unknown' ? 'ok' : 'warning'}">${s.license && s.license !== 'Unknown' ? '[OK]' : '[!]'} License</span>
+                    <span class="checklist-item ${s.license_verified ? 'ok' : 'warning'}">${s.license_verified ? '[OK]' : '[!]'} Verified</span>
+                </div>
+                ${s.missing && s.missing.length > 0 ? `
+                    <div style="margin-top: 1rem; padding: 0.75rem; background: #e9456020; border-radius: 4px; color: #e94560; font-size: 0.85rem;">
+                        <strong>Missing:</strong> ${s.missing.join(', ')}
+                    </div>
+                ` : ''}
+            `;
+        }
+
+        function populateEditForm() {
+            const s = currentSource;
+            document.getElementById('editName').value = s.name || '';
+            document.getElementById('editDescription').value = s.description || '';
+            document.getElementById('editLicense').value = s.license || 'Unknown';
+            document.getElementById('editBaseUrl').value = s.base_url || '';
+            document.getElementById('editLicenseVerified').checked = s.license_verified || false;
+
+            // Populate rename form (admin only)
+            document.getElementById('renameCurrentId').value = s.source_id || '';
+            document.getElementById('renameNewId').value = '';
+        }
+
+        // Save source configuration
+        async function saveSourceConfig() {
+            if (!currentSource) return;
+
+            const config = {
+                source_id: currentSource.source_id,
+                name: document.getElementById('editName').value,
+                description: document.getElementById('editDescription').value,
+                license: document.getElementById('editLicense').value,
+                base_url: document.getElementById('editBaseUrl').value,
+                license_verified: document.getElementById('editLicenseVerified').checked
+            };
+
+            logOutput(`Saving configuration for ${currentSource.source_id}...`);
+
+            try {
+                const response = await fetch('/useradmin/api/update-source-config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(config)
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    logOutput('Configuration saved successfully', 'success');
+                    showToast('Configuration saved');
+                    await refreshSources();
+                    await loadSourceDetails();
+                } else {
+                    logOutput(`Error: ${data.detail || 'Save failed'}`, 'error');
+                    showToast(data.detail || 'Save failed', true);
+                }
+            } catch (e) {
+                logOutput(`Error: ${e.message}`, 'error');
+                showToast('Error: ' + e.message, true);
+            }
+        }
+
+        async function autoDetect() {
+            if (!currentSource) return;
+
+            logOutput(`Auto-detecting license and description for ${currentSource.source_id}...`);
+
+            try {
+                const response = await fetch(`/useradmin/api/auto-detect/${currentSource.source_id}`);
+                const data = await response.json();
+
+                if (response.ok) {
+                    if (data.detected_license && data.detected_license !== 'Unknown') {
+                        document.getElementById('editLicense').value = data.detected_license;
+                        logOutput(`Detected license: ${data.detected_license}`, 'success');
+                    } else {
+                        logOutput('Could not auto-detect license', 'warning');
+                    }
+
+                    if (data.suggested_tags && data.suggested_tags.length > 0) {
+                        logOutput(`Suggested tags: ${data.suggested_tags.join(', ')}`, 'info');
+                    }
+
+                    showToast('Auto-detection complete');
+                } else {
+                    logOutput(`Error: ${data.detail || 'Auto-detect failed'}`, 'error');
+                }
+            } catch (e) {
+                logOutput(`Error: ${e.message}`, 'error');
+            }
+        }
+
+        // Indexing functions
+        async function scanBackup() {
+            if (!currentSource) return;
+
+            const btn = document.getElementById('btnScanBackup');
+            btn.disabled = true;
+            btn.textContent = 'Scanning...';
+
+            logOutput(`Scanning backup for ${currentSource.source_id}...`);
+
+            try {
+                const response = await fetch('/useradmin/api/scan-backup', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ source_id: currentSource.source_id })
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    logOutput(`Scan complete: ${data.file_count || 0} files found`, 'success');
+                    showToast('Backup scanned successfully');
+                    await refreshSources();
+                    await loadSourceDetails();
+                } else {
+                    logOutput(`Error: ${data.detail || 'Scan failed'}`, 'error');
+                    showToast(data.detail || 'Scan failed', true);
+                }
+            } catch (e) {
+                logOutput(`Error: ${e.message}`, 'error');
+                showToast('Error: ' + e.message, true);
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Scan Backup';
+            }
+        }
+
+        async function generateMetadata() {
+            if (!currentSource) return;
+
+            const btn = document.getElementById('btnGenerateMetadata');
+            btn.disabled = true;
+            btn.textContent = 'Generating...';
+
+            logOutput(`Generating metadata for ${currentSource.source_id}...`);
+
+            try {
+                const response = await fetch('/useradmin/api/generate-metadata', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ source_id: currentSource.source_id })
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    logOutput(`Metadata generated: ${data.document_count || 0} documents`, 'success');
+                    showToast('Metadata generated successfully');
+                    await refreshSources();
+                    await loadSourceDetails();
+                } else {
+                    logOutput(`Error: ${data.detail || 'Generation failed'}`, 'error');
+                    showToast(data.detail || 'Generation failed', true);
+                }
+            } catch (e) {
+                logOutput(`Error: ${e.message}`, 'error');
+                showToast('Error: ' + e.message, true);
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Generate Metadata';
+            }
+        }
+
+        async function createIndex(forceReindex = false) {
+            if (!currentSource) return;
+
+            const limit = parseInt(document.getElementById('indexLimit').value) || 1000;
+
+            const btn = document.getElementById('btnCreateIndex');
+            btn.disabled = true;
+            btn.textContent = 'Starting...';
+
+            logOutput(`Creating embeddings for ${currentSource.source_id} (limit: ${limit}, force: ${forceReindex})...`);
+
+            try {
+                const response = await fetch('/useradmin/api/create-index', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        source_id: currentSource.source_id,
+                        limit: limit,
+                        force_reindex: forceReindex
+                    })
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    if (data.status === 'submitted' || data.job_id) {
+                        logOutput(`Job submitted: ${data.job_id}`, 'success');
+                        logOutput('Index creation running in background. Check Jobs page for progress.', 'info');
+                        showToast('Index job started');
+                    } else {
+                        logOutput(`Index complete: ${data.indexed_count || 0} documents indexed`, 'success');
+                        showToast('Index created successfully');
+                    }
+                    await refreshSources();
+                    await loadSourceDetails();
+                } else if (response.status === 409) {
+                    logOutput('A job is already running for this source', 'warning');
+                    showToast('Job already running', true);
+                } else {
+                    logOutput(`Error: ${data.detail || 'Index creation failed'}`, 'error');
+                    showToast(data.detail || 'Index creation failed', true);
+                }
+            } catch (e) {
+                logOutput(`Error: ${e.message}`, 'error');
+                showToast('Error: ' + e.message, true);
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Create Embeddings';
+            }
+        }
+
+        async function validateSource() {
+            if (!currentSource) return;
+
+            logOutput(`Validating ${currentSource.source_id}...`);
+
+            try {
+                const response = await fetch('/useradmin/api/validate-source', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ source_id: currentSource.source_id })
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    if (data.is_valid) {
+                        logOutput('Validation passed! Source is ready for distribution.', 'success');
+                    } else {
+                        logOutput('Validation failed. Issues found:', 'warning');
+                        if (data.issues) {
+                            data.issues.forEach(issue => logOutput(`  - ${issue}`, 'error'));
+                        }
+                    }
+
+                    if (data.warnings && data.warnings.length > 0) {
+                        logOutput('Warnings:', 'warning');
+                        data.warnings.forEach(w => logOutput(`  - ${w}`, 'warning'));
+                    }
+
+                    if (data.suggested_tags && data.suggested_tags.length > 0) {
+                        logOutput(`Suggested tags: ${data.suggested_tags.join(', ')}`, 'info');
+                    }
+
+                    showToast(data.is_valid ? 'Validation passed' : 'Validation failed', !data.is_valid);
+                } else {
+                    logOutput(`Error: ${data.detail || 'Validation failed'}`, 'error');
+                    showToast(data.detail || 'Validation failed', true);
+                }
+            } catch (e) {
+                logOutput(`Error: ${e.message}`, 'error');
+                showToast('Error: ' + e.message, true);
+            }
+        }
+
+        async function cleanupFiles() {
+            if (!currentSource) return;
+
+            if (!confirm('This will delete redundant legacy files if v2 files exist. Continue?')) {
+                return;
+            }
+
+            logOutput(`Cleaning up redundant files for ${currentSource.source_id}...`);
+
+            try {
+                const response = await fetch('/useradmin/api/cleanup-redundant-files', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ source_id: currentSource.source_id })
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    if (data.deleted && data.deleted.length > 0) {
+                        logOutput(`Deleted ${data.deleted.length} file(s), freed ${data.freed_mb} MB`, 'success');
+                        data.deleted.forEach(f => logOutput(`  Deleted: ${f}`, 'info'));
+                    } else {
+                        logOutput('No redundant files to clean up', 'info');
+                    }
+                    showToast(data.message || 'Cleanup complete');
+                } else {
+                    logOutput(`Error: ${data.detail || 'Cleanup failed'}`, 'error');
+                    showToast(data.detail || 'Cleanup failed', true);
+                }
+            } catch (e) {
+                logOutput(`Error: ${e.message}`, 'error');
+                showToast('Error: ' + e.message, true);
+            }
+        }
+
+        async function deleteSource() {
+            if (!currentSource) return;
+
+            const confirmMsg = `Are you sure you want to delete "${currentSource.source_id}"?\n\nThis will delete:\n- All local backup files\n- Entry from _master.json\n- All ChromaDB embeddings\n\nThis cannot be undone!`;
+
+            if (!confirm(confirmMsg)) {
+                logOutput('Delete cancelled by user', 'info');
+                return;
+            }
+
+            // Double confirm
+            if (!confirm('Are you REALLY sure? This is permanent!')) {
+                logOutput('Delete cancelled by user', 'info');
+                return;
+            }
+
+            logOutput(`Deleting ${currentSource.source_id}...`);
+
+            try {
+                const response = await fetch('/useradmin/api/delete-source', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        source_id: currentSource.source_id,
+                        delete_files: true
+                    })
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    logOutput('Source deleted successfully', 'success');
+                    if (data.deleted && data.deleted.length > 0) {
+                        data.deleted.forEach(d => logOutput(`  Removed: ${d}`, 'success'));
+                    }
+                    if (data.freed_mb > 0) {
+                        logOutput(`  Freed: ${data.freed_mb} MB`, 'success');
+                    }
+                    showToast(data.message || 'Source deleted');
+
+                    // Clear selection and go back to step 1
+                    document.getElementById('sourceSelect').value = '';
+                    currentSource = null;
+                    goToStep(1);
+                    await loadSources();
+                } else {
+                    logOutput(`Error: ${data.detail || 'Delete failed'}`, 'error');
+                    showToast(data.detail || 'Delete failed', true);
+                }
+            } catch (e) {
+                logOutput(`Error: ${e.message}`, 'error');
+                showToast('Error: ' + e.message, true);
+            }
+        }
+
+        // Rename source (Admin only)
+        async function renameSource() {
+            if (!currentSource) return;
+
+            const newSourceId = document.getElementById('renameNewId').value.trim();
+
+            if (!newSourceId) {
+                showToast('Please enter a new source ID', true);
+                return;
+            }
+
+            if (!/^[a-z0-9][a-z0-9_-]*$/.test(newSourceId)) {
+                showToast('Invalid format. Use lowercase letters, numbers, underscores, hyphens.', true);
+                return;
+            }
+
+            if (newSourceId === currentSource.source_id) {
+                showToast('New ID is the same as current ID', true);
+                return;
+            }
+
+            const confirmMsg = `Rename "${currentSource.source_id}" to "${newSourceId}"?\n\nThis will rename:\n- Source folder\n- All config/metadata files\n- ZIM files (if present)\n- _master.json entry\n- ChromaDB documents\n\nThis cannot be easily undone!`;
+
+            if (!confirm(confirmMsg)) {
+                logOutput('Rename cancelled by user', 'info');
+                return;
+            }
+
+            logOutput(`Renaming ${currentSource.source_id} to ${newSourceId}...`);
+
+            try {
+                const response = await fetch('/useradmin/api/rename-source', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        old_source_id: currentSource.source_id,
+                        new_source_id: newSourceId
+                    })
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    logOutput('Rename successful!', 'success');
+
+                    if (data.renamed_files && data.renamed_files.length > 0) {
+                        logOutput('  Renamed files:', 'info');
+                        data.renamed_files.forEach(f => logOutput(`    ${f.old} -> ${f.new}`, 'info'));
+                    }
+
+                    if (data.updated_json && data.updated_json.length > 0) {
+                        logOutput(`  Updated JSON files: ${data.updated_json.join(', ')}`, 'info');
+                    }
+
+                    if (data.master_updated) {
+                        logOutput('  Updated _master.json', 'info');
+                    }
+
+                    if (data.chromadb_updated) {
+                        logOutput(`  Updated ${data.chromadb_documents} ChromaDB documents`, 'info');
+                    }
+
+                    showToast(data.message || 'Source renamed successfully');
+
+                    // Refresh and select the renamed source
+                    document.getElementById('renameNewId').value = '';
+                    await loadSources();
+                    document.getElementById('sourceSelect').value = newSourceId;
+                    await loadSourceDetails();
+
+                } else {
+                    logOutput(`Error: ${data.detail || 'Rename failed'}`, 'error');
+                    showToast(data.detail || 'Rename failed', true);
+                }
+            } catch (e) {
+                logOutput(`Error: ${e.message}`, 'error');
+                showToast('Error: ' + e.message, true);
+            }
+        }
+
+        // Output log
+        function logOutput(message, type = '') {
+            const log = document.getElementById('outputLog');
+            const timestamp = new Date().toLocaleTimeString();
+            const className = type ? ` class="${type}"` : '';
+            log.innerHTML += `<span${className}>[${timestamp}] ${escapeHtml(message)}</span>\n`;
+            log.scrollTop = log.scrollHeight;
+        }
+
+        function clearLog() {
+            document.getElementById('outputLog').innerHTML = '';
+        }
+
+        function showToast(message, isError = false) {
+            const toast = document.getElementById('toast');
+            toast.textContent = message;
+            toast.className = 'toast' + (isError ? ' error' : '');
+            toast.classList.add('show');
+
+            setTimeout(() => {
+                toast.classList.remove('show');
+            }, 3000);
+        }
+
+        function escapeHtml(text) {
+            if (!text) return '';
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // Initialize
+        async function init() {
+            await loadSources();
+
+            // Check for ?source= parameter
+            const urlParams = new URLSearchParams(window.location.search);
+            const sourceParam = urlParams.get('source');
+
+            if (sourceParam) {
+                if (sources.find(s => s.source_id === sourceParam)) {
+                    document.getElementById('sourceSelect').value = sourceParam;
+                    await loadSourceDetails();
+                }
+            }
+
+            updateWizardUI();
+        }
+
+        init();
+
+        // Listen for job completions to refresh the UI
+        window.addEventListener('jobComplete', (event) => {
+            const job = event.detail;
+            if (currentSource && job.source_id === currentSource.source_id) {
+                logOutput(`Job completed: ${job.job_type} - ${job.message}`, job.status === 'completed' ? 'success' : 'error');
+                loadSourceDetails();
+            }
+        });
+
+        // Update visibility of admin-only elements
+        function updateAdminVisibility() {
+            const isAdmin = localStorage.getItem('adminMode') === 'true';
+
+            // Hide/show Pinecone link
+            const pineconeLink = document.querySelector('a[href="/useradmin/pinecone"]');
+            if (pineconeLink) {
+                pineconeLink.style.display = isAdmin ? '' : 'none';
+            }
+
+            // Hide/show admin-only sections
+            const adminOnlySections = document.querySelectorAll('.admin-only');
+            adminOnlySections.forEach(section => {
+                section.style.display = isAdmin ? 'block' : 'none';
+            });
+        }
+        updateAdminVisibility();
+
+        // Admin Mode Toggle
+        function toggleAdminMode() {
+            const checkbox = document.getElementById('adminModeCheckbox');
+            const toggle = document.getElementById('adminToggle');
+            const isAdmin = checkbox.checked;
+            localStorage.setItem('adminMode', isAdmin ? 'true' : 'false');
+            toggle.classList.toggle('active', isAdmin);
+            updateAdminVisibility();
+        }
+        function initAdminMode() {
+            const isAdmin = localStorage.getItem('adminMode') === 'true';
+            document.getElementById('adminModeCheckbox').checked = isAdmin;
+            document.getElementById('adminToggle').classList.toggle('active', isAdmin);
+            updateAdminVisibility();
+        }
+        initAdminMode();
+    </script>
+
+    <!-- Job Monitor - shows active background jobs -->
+    <script src="/admin/static/job-monitor.js"></script>
+</body>
+</html>

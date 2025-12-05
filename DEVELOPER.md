@@ -1,165 +1,191 @@
 # Disaster Clippy - Developer Documentation
 
-Welcome to the Disaster Clippy developer docs. Choose the guide that matches your role:
+This guide covers both development setup and local user configuration.
 
 ---
 
-## Repository Structure (Public vs Private)
+## Repository Structure
 
-This project uses a two-layer architecture. The **public GitHub repository** contains everything needed for local users, while **private components** stay on the maintainer's machine.
+The repository has been consolidated into a single codebase with mode switching for local vs global admin features.
 
-### PUBLIC GITHUB (What Users Get)
+### Folder Structure
 
 ```
 disaster-clippy/
 |-- app.py                    # FastAPI chat interface
-|-- local_cli.py              # CLI for local admins
+|-- local_settings.json       # User configuration (single source of truth)
+|
+|-- cli/                      # Command-line tools
+|   |-- __init__.py
+|   |-- local.py              # Local admin CLI (metadata, indexing, export)
+|   |-- ingest.py             # Scraping and ingestion CLI
+|   |-- sync.py               # Vector DB sync CLI
+|
 |-- admin/                    # Admin panel (/useradmin/)
-|   |-- app.py                # FastAPI routes
-|   |-- local_config.py       # User settings
-|   |-- job_manager.py        # Background jobs
-|   |-- ollama_manager.py     # Local LLM support
-|   |-- cloud_upload.py       # R2 upload/download
-|   |-- routes/
-|   |   |-- sources.py        # Source packs API
-|   |-- services/             # (Future: business logic)
+|   |-- app.py                # FastAPI routes + page routes
+|   |-- local_config.py       # User settings management
+|   |-- job_manager.py        # Background job queue
+|   |-- ollama_manager.py     # Portable Ollama management
+|   |-- cloud_upload.py       # R2 upload endpoints
+|   |-- routes/               # API route modules
+|   |   |-- sources.py        # Source listing API
+|   |   |-- source_tools.py   # Source management API
+|   |   |-- packs.py          # Pack management API
+|   |   |-- jobs.py           # Job status API
 |   |-- templates/            # Admin UI templates
 |   |-- static/               # Admin CSS/JS
-|-- offline_tools/            # Core tools for backup/indexing
-|   |-- indexer.py            # HTMLBackupIndexer, ZIMIndexer, PDFIndexer
-|   |-- source_manager.py     # Unified source creation interface
-|   |-- packager.py           # Metadata/indexing functions
-|   |-- registry.py           # Source pack registry
+|
+|-- offline_tools/            # Core business logic
+|   |-- __init__.py
 |   |-- schemas.py            # Data structures
 |   |-- embeddings.py         # Embedding service
-|   |-- backup/
-|   |   |-- html.py           # HTML website backup/scraping
+|   |-- indexer.py            # HTML/ZIM/PDF indexing
+|   |-- source_manager.py     # Source CRUD operations
+|   |-- packager.py           # Pack tools and metadata
+|   |-- registry.py           # Source pack registry
+|   |-- backup/               # Backup utilities
+|   |   |-- html.py           # HTML website backup
 |   |   |-- substack.py       # Substack newsletter backup
-|   |-- vectordb/
-|   |   |-- store.py          # ChromaDB local storage
-|   |   |-- factory.py        # Vector store factory
-|   |   |-- metadata.py       # Metadata index
-|   |   |-- pinecone_store.py # Pinecone cloud storage
-|   |   |-- sync.py           # Sync utilities
-|   |-- cloud/
+|   |-- cloud/                # Cloud storage
 |   |   |-- r2.py             # Cloudflare R2 client
-|-- templates/                # Web UI templates
-|-- static/                   # CSS/JS assets
-|-- DEVELOPER-LOCAL.md        # User documentation
+|   |-- scraper/              # Web scrapers
+|   |   |-- base.py           # Base scraper class
+|   |   |-- mediawiki.py      # MediaWiki API scraper
+|   |   |-- appropedia.py     # Appropedia-specific
+|   |   |-- fandom.py         # Fandom wiki scraper
+|   |   |-- static_site.py    # Static HTML sites
+|   |   |-- pdf.py            # PDF extraction
+|   |   |-- pdf_collections.py # PDF collection management
+|   |   |-- substack.py       # Substack scraper
+|   |-- vectordb/             # Vector database
+|   |   |-- store.py          # ChromaDB local store
+|   |   |-- pinecone_store.py # Pinecone cloud store
+|   |   |-- metadata.py       # Fast JSON metadata index
+|   |   |-- factory.py        # Store factory
+|   |   |-- sync.py           # Sync operations
+|
+|-- templates/                # Main app templates
+|-- static/                   # Main app static files
 ```
 
-### PRIVATE (Maintainer Only - Not in Public Repo)
+---
 
+## Mode Switching (Local vs Global Admin)
+
+The same codebase supports both local and global admin modes:
+
+```bash
+# Local admin (default)
+python app.py
+
+# Global admin
+ADMIN_MODE=global python app.py
 ```
-disaster-clippy/
-|-- admin/                    # Streamlit admin dashboard
-|-- scraper/                  # Web scrapers (rate-limited, API access)
-|-- ingest.py                 # CLI for scraping content
-|-- sync.py                   # Pinecone sync tools
-|-- .env                      # API keys (Pinecone write, full R2)
-|-- DEVELOPER-PARENT.md       # Maintainer documentation
-```
+
+| Feature | Local Admin | Global Admin |
+|---------|-------------|--------------|
+| Vector DB | ChromaDB (local) | Pinecone (cloud) |
+| R2 backups/ | Read only | Read/Write |
+| R2 submissions/ | Write only | Read only |
+| Pinecone page | Hidden | Visible |
+| Submissions page | Hidden | Visible |
 
 ### Access Levels
 
 | Role | Vector DB | R2 Storage | What They Use |
 |------|-----------|------------|---------------|
-| End User | ChromaDB (local) | Read backups/ only | admin panel |
-| Local Admin | ChromaDB (local) | Write submissions/, Read backups/ | admin + pack tools |
-| Global Admin | Pinecone (write) | Full access | Streamlit admin + scrapers |
+| End User | ChromaDB (local) | Read backups/ only | Chat interface |
+| Local Admin | ChromaDB (local) | Write submissions/, Read backups/ | Admin panel + CLI tools |
+| Global Admin | Pinecone (write) | Full access | Admin panel (global mode) |
 
-### Admin Dashboard Comparison
+---
 
-The two admin interfaces serve different purposes and have different features:
+## Quick Start
 
-| Feature | Global Admin (Streamlit) | Local User Admin (admin/app.py) |
-|---------|-------------------------------|---------------------------------------|
-| Framework | Streamlit | FastAPI |
-| Purpose | Maintainer managing sources | End users managing local setup |
-| Vector DB | Pinecone (cloud) | ChromaDB (local) |
-| Source management | Full source editing, scraping | Download/install packs |
-| Connection modes | N/A (always online) | online_only / hybrid / offline_only |
-| Local LLM (Ollama) | N/A | Yes (for offline responses) |
-| R2 Cloud Storage | Upload to cloud | Download from cloud |
+### 1. Clone and Install
 
-The offline tools (Ollama, connection modes) are only in admin/ because they are end-user features. The global admin runs online with cloud resources and doesn't need offline capabilities.
+```bash
+git clone https://github.com/xyver/disaster-clippy-public.git
+cd disaster-clippy-public
+pip install -r requirements.txt
+```
 
-Shared dependencies used by both:
-- `offline_tools/source_manager.py` - Unified source creation interface
-- `offline_tools/packager.py` - Metadata and index generation
-- `offline_tools/indexer.py` - Indexers for HTML, ZIM, PDF
-- `offline_tools/backup/html.py` - HTML website backup
-- `offline_tools/vectordb/` - Vector store implementations
-- `offline_tools/cloud/r2.py` - R2 access
+### 2. Configure Environment
 
-### Data Flow Architecture
+Create a `.env` file:
 
-All work is done in the BACKUP_PATH folder to keep sources self-contained:
+```bash
+# Minimum required - for embeddings
+OPENAI_API_KEY=your-api-key-here
+
+# Optional - use Claude for chat instead of GPT
+# ANTHROPIC_API_KEY=your-anthropic-key
+# LLM_PROVIDER=anthropic
+
+# Use local database (default for personal use)
+VECTOR_DB_MODE=local
+
+# Optional - use free local embeddings (no API cost)
+# EMBEDDING_MODE=local
+```
+
+### 3. Start the Application
+
+```bash
+python app.py
+```
+
+Open your browser:
+- **Chat Interface**: http://localhost:8000
+- **Local Admin**: http://localhost:8000/useradmin/
+
+---
+
+## Key Modules
+
+| Module | Purpose |
+|--------|---------|
+| `offline_tools/source_manager.py` | Unified source creation interface |
+| `offline_tools/packager.py` | Metadata and index generation |
+| `offline_tools/indexer.py` | Indexers for HTML, ZIM, PDF |
+| `offline_tools/backup/` | HTML and Substack backup tools |
+| `offline_tools/scraper/` | Web scrapers (MediaWiki, Fandom, static sites) |
+| `offline_tools/vectordb/` | Vector store implementations |
+| `offline_tools/cloud/r2.py` | Cloudflare R2 client |
+
+---
+
+## Data Flow Architecture
 
 ```
-                    GLOBAL ADMIN                          LOCAL USER
-                    (Maintainer)                          (End User)
-                         |                                     |
-    +--------------------v--------------------+                |
-    |           BACKUP_PATH                   |                |
-    |  - Edit/create sources                  |                |
-    |  - Scrape content                       |                |
-    |  - Generate metadata & indexes          |                |
-    +--------------------+--------------------+                |
-                         |                                     |
-                         | Upload                              |
-                         v                                     |
-    +-----------------------------------------------------+    |
-    |                 R2 CLOUD STORAGE                    |    |
-    |  backups/        - Official packs (read by users)   |<---+ Download
-    |  submissions/    - User contributions (review queue)|    |
-    |  sources.json    - Source registry                  |    |
-    +-----------------------------------------------------+    |
-                         |                                     |
-                         | Sync                                |
-                         v                                     |
-    +-----------------------------------------------------+    |
-    |               PINECONE (Cloud Vector DB)            |    |
-    |  - Global semantic search                           |    |
-    |  - Used by Railway app                              |    |
-    +-----------------------------------------------------+    |
-                         |                                     |
-                         v                                     v
-    +-----------------------------------------------------+----+
-    |              RAILWAY APP (Production)               |    |
-    |  - Reads from Pinecone for semantic search          |    |
-    |  - Reads from R2 for backup content                 |    |
-    +-----------------------------------------------------+    |
-                                                               |
-                    +------------------------------------------+
-                    |
-                    v
-    +--------------------+--------------------+
-    |           LOCAL USER SETUP              |
-    |  BACKUP_PATH:                           |
-    |  - Downloaded packs from R2             |
-    |  - ChromaDB for local semantic search   |
-    |  - Can work fully offline               |
-    |                                         |
-    |  Submissions:                           |
-    |  - Upload custom sources to R2          |
-    |  - Global admin reviews & approves      |
-    +--------------------+--------------------+
+LOCAL ADMIN                              GLOBAL ADMIN
+-----------                              ------------
+
+[Local Backup Folder]                    [R2 Cloud Storage]
+      |                                         ^
+      v                                         |
+[Validation] -----> [R2 submissions/] --------->+
+      |              (review queue)             |
+      v                                         v
+[ChromaDB]                               [Validation]
+(local search)                                  |
+                                                v
+                                         [R2 backups/]
+                                         [Pinecone]
+                                         (production)
 ```
 
 **Key Points:**
-- Both sides use shared `pack_tools.py` functions for source management
 - BACKUP_PATH is the working directory for all source data
 - Global admin uploads finished sources to Pinecone + R2 (source of truth)
-- Railway app reads from Pinecone + R2 (production)
 - Local users download from R2 to their BACKUP_PATH
-- Local admins can submit sources to `submissions/` for review
+- Local admins can submit sources to R2 `submissions/` for review
 
-### Unified Source Tools
+---
 
-Both dashboards share the same tools for creating and managing sources. These are kept in sync between repos.
+## Source Tools
 
-#### SourceManager (`offline_tools/source_manager.py`)
+### SourceManager (`offline_tools/source_manager.py`)
 
 High-level interface for source creation workflow:
 
@@ -168,27 +194,15 @@ from offline_tools.source_manager import SourceManager
 
 manager = SourceManager()  # Uses BACKUP_PATH automatically
 
-# Create a backup (HTML, ZIM, PDF, Substack)
-result = manager.create_backup(
-    source_id="my_wiki",
-    source_type="html",
-    base_url="https://example.wiki.org"
-)
-
 # Create an index (auto-detects source type)
 result = manager.create_index("my_wiki")
 
 # Validate source before distribution
 validation = manager.validate_source("my_wiki", source_config)
 # Returns: has_backup, has_index, has_license, detected_license, suggested_tags
-
-# Create distribution pack
-pack = manager.create_pack("my_wiki", source_config)
 ```
 
-#### Indexers (`offline_tools/indexer.py`)
-
-Three indexer classes for different source types:
+### Indexers (`offline_tools/indexer.py`)
 
 | Class | Source Type | Input |
 |-------|-------------|-------|
@@ -196,121 +210,280 @@ Three indexer classes for different source types:
 | `ZIMIndexer` | ZIM archives | .zim file |
 | `PDFIndexer` | PDF documents | PDF file or folder |
 
-Convenience functions:
-- `index_html_backup(path, source_id)` - Index HTML backup
-- `index_zim_file(path, source_id)` - Index ZIM file
-- `index_pdf_folder(path, source_id)` - Index PDF folder
+### ZIM Metadata Extraction
 
-#### Backup Tools (`offline_tools/backup/html.py`)
+When indexing ZIM files, metadata is automatically extracted from the ZIM header_fields:
 
-```python
-from offline_tools.backup.html import run_backup
+| ZIM Field | Manifest Field | Description |
+|-----------|----------------|-------------|
+| Title | name | Human-readable source name |
+| Description | description | Content description |
+| Creator | attribution | Organization that created content |
+| Publisher | publisher | Organization that created ZIM |
+| License | license | License information |
+| Language | language | ISO language code (e.g., 'eng') |
+| Tags | tags | Semicolon-separated topic tags |
+| Source | base_url | Original URL of content |
+| Date | zim_date | Creation date |
 
-result = run_backup(
-    backup_path="D:/backups/my_wiki",
-    source_id="my_wiki",
-    base_url="https://example.wiki.org",
-    scraper_type="mediawiki",  # or: static, fandom
-    limit=1000
-)
-```
+User-edited values in `_manifest.json` are preserved on re-index.
 
-#### Source Validation
+### Tag System
 
-A source is considered "clean" and ready for distribution when it has:
+Sources can be tagged for categorization and search filtering. Tags are either:
+- **Auto-suggested** during indexing based on content keywords
+- **Manual** - set by user in `_manifest.json`
 
-1. **Backup** - HTML pages, ZIM file, or PDF files exist
-2. **Index** - Metadata file exists (`{source_id}_metadata.json`)
-3. **License** - Specified and preferably verified
-4. **Tags** - Categorized for search (optional but recommended)
+Available tag categories (defined in `SourceManager.TOPIC_KEYWORDS`):
 
-The `SourceManager.validate_source()` method checks all of these and provides:
-- Auto-detected license from content scanning
-- Suggested tags based on content keywords
-- List of issues blocking distribution
+| Category | Example Keywords |
+|----------|------------------|
+| water, sanitation | filtration, purification, well, hygiene |
+| solar, energy, wind, biogas, fuel | photovoltaic, generator, battery, off-grid |
+| food, agriculture, livestock, aquaculture, foraging | cooking, farming, permaculture, fishing |
+| shelter, construction, tools | building, masonry, earthbag, workshop |
+| medical, herbal, mental-health, nutrition | first aid, medicinal plant, vitamin |
+| emergency, fire, earthquake, flood, hurricane, nuclear, pandemic | survival, preparedness, evacuation |
+| navigation, communication, security, knots | compass, radio, ham radio, rope |
+| appropriate-tech, electronics, vehicles | low tech, arduino, bicycle |
+| reference, how-to | manual, handbook, tutorial, diy |
 
-#### File Structure in BACKUP_PATH
+### Source Validation
 
-Each source creates a self-contained folder:
+A source is ready for distribution when it has 5 status boxes green:
+
+1. **Config** - `_manifest.json` exists with name, license, base_url
+2. **Backup** - HTML pages, ZIM file, or PDF files exist
+3. **Metadata** - `_metadata.json` exists
+4. **Embeddings** - `_vectors.json` created for search
+5. **License** - Specified and verified
+
+### File Structure in BACKUP_PATH
 
 ```
 BACKUP_PATH/
-|-- sources.json                    # Source registry
-|-- _master.json                    # Master metadata
-|-- my_wiki/                        # Source folder
-|   |-- pages/                      # HTML backup content
-|   |-- my_wiki_backup_manifest.json
-|   |-- my_wiki_metadata.json       # Index metadata
-|   |-- my_wiki_index.json          # Embeddings (optional)
-|   +-- my_wiki_manifest.json       # Distribution manifest
-|-- bitcoin.zim                     # ZIM files at root
-|-- pdf_collection/                 # PDF folder
-|   |-- doc1.pdf
-|   |-- doc2.pdf
-|   +-- pdf_collection_metadata.json
-+-- chroma/                         # ChromaDB data
+|-- _master.json                         # Master source index (optional)
+|-- my_wiki/                             # Source folder
+|   |-- _manifest.json                   # Source config (identity + distribution)
+|   |-- _metadata.json                   # Document metadata
+|   |-- _index.json                      # Full content for display
+|   |-- _vectors.json                    # Vector embeddings
+|   |-- backup_manifest.json             # URL to file mapping
+|   |-- pages/                           # HTML backup content
+|-- bitcoin.zim                          # ZIM files at backup root
++-- chroma/                              # ChromaDB data
 ```
 
 ---
 
-## For End Users (Local System)
+## Local Admin Panel
 
-**[DEVELOPER-LOCAL.md](DEVELOPER-LOCAL.md)** - Setting up your own offline system
+Access at: `http://localhost:8000/useradmin/`
 
-If you want to:
-- Run Disaster Clippy on your own computer
-- Add personal sources and PDFs
-- Set up offline backups (ZIM, HTML, PDF)
-- Configure connection modes (online/hybrid/offline)
-- Use the Local Admin Panel at `/useradmin/` (folder is now `admin/`)
+### Features
+
+- **Dashboard** - System status and statistics
+- **Sources** - Browse all sources with status boxes, install cloud sources
+- **Source Tools** - 5-step wizard for creating/editing sources
+- **Settings** - Configure backup paths, connection modes
+
+### Connection Modes
+
+| Mode | Description | When to Use |
+|------|-------------|-------------|
+| **Online Only** | Always uses internet for queries | When you have reliable internet |
+| **Hybrid** (Recommended) | Uses internet when available, falls back to offline | Best of both worlds |
+| **Offline Only** | Never connects to internet | Air-gapped systems, no internet |
+
+### Settings File
+
+Your settings are saved to: `local_settings.json` (in the project root)
+
+```json
+{
+  "backup_path": "D:\\disaster-backups",
+  "offline_mode": "hybrid",
+  "auto_fallback": true,
+  "cache_responses": true
+}
+```
 
 ---
 
-## For Maintainers (Parent System)
+## CLI Tools
 
-**[DEVELOPER-PARENT.md](DEVELOPER-PARENT.md)** - Managing the global infrastructure
+Command-line tools are in the `cli/` folder:
 
-If you want to:
-- Manage the central Pinecone database
-- Deploy to Railway
-- Add and curate official sources
-- Run the Streamlit admin dashboard
-- Sync local changes to production
-- Create new scrapers
+```bash
+# Generate metadata from HTML backup
+python cli/local.py metadata --path ./backups/mysite --output metadata.json
+
+# Index HTML backup to local ChromaDB
+python cli/local.py index-html --path ./backups/mysite --source-id mysite
+
+# Index ZIM file to local ChromaDB
+python cli/local.py index-zim --path ./backups/wikipedia.zim --source-id wikipedia
+
+# Scrape a MediaWiki site
+python cli/ingest.py scrape mediawiki --url https://wiki.example.org --limit 100
+
+# Sync to Pinecone (global admin only)
+python cli/sync.py push --source-id mysite
+```
+
+Run `python cli/local.py --help` for full usage.
+
+---
+
+### Getting ZIM Files
+
+ZIM files are compressed offline archives. Download from:
+
+1. **Kiwix Library**: https://library.kiwix.org/
+   - Wikipedia (by topic: medicine, technology, etc.)
+   - Wikihow
+   - StackExchange sites
+
+2. **Direct Downloads**:
+   - Search for `[topic] kiwix zim download`
+   - Files range from 50MB to several GB
+
+Recommended starter ZIMs:
+- `wikipedia_en_medicine` (~500MB) - Medical reference
+- `wikihow_en_all` (~2GB) - How-to guides
+- `wikibooks_en_all` (~1GB) - Technical books
+
+### Creating HTML Backups
+
+**Option 1: Browser Save**
+- Visit any page and use "Save As" -> "Webpage, Complete"
+- Organize saved pages into folders by source
+
+**Option 2: Use the built-in scrapers**
+```bash
+python cli/ingest.py scrape mediawiki --url https://wiki.example.org --output ./backups/mywiki
+```
+
+**Option 3: HTTrack / wget**
+- Use [HTTrack](https://www.httrack.com/) to mirror websites
+- Or use wget: `wget -r -l 2 -p https://example.com`
+
+---
+
+## Environment Variables
+
+| Variable | Purpose | Required |
+|----------|---------|----------|
+| `OPENAI_API_KEY` | Embeddings and chat | Yes (unless EMBEDDING_MODE=local) |
+| `ANTHROPIC_API_KEY` | Claude chat (optional) | No |
+| `PINECONE_API_KEY` | Cloud vector DB | Global admin only |
+| `R2_ACCESS_KEY_ID` | Cloud storage | For R2 upload/download |
+| `R2_SECRET_ACCESS_KEY` | Cloud storage | For R2 upload/download |
+| `ADMIN_MODE` | "local" or "global" | No (defaults to local) |
+| `EMBEDDING_MODE` | "openai" or "local" | No (defaults to openai) |
+| `VECTOR_DB_MODE` | "local" or "pinecone" | No (defaults to local) |
 
 ---
 
 ## Quick Reference
 
-| Task | Guide | Repo | Key Command/URL |
-|------|-------|------|-----------------|
-| Run chat locally | Local | Public | `python app.py` -> localhost:8000 |
-| Configure backups | Local | Public | localhost:8000/useradmin/ |
-| Index local backups | Local | Public | `python local_cli.py index-html ...` |
-| Submit source pack | Local | Public | Admin panel -> Cloud Upload |
-| Manage global sources | Parent | Private | `streamlit run admin/app.py` (Streamlit) |
-| Add scraped content | Parent | Private | `python ingest.py scrape ...` |
-| Sync to Pinecone | Parent | Private | `python sync.py --remote pinecone push` |
+| Task | Command/URL |
+|------|-------------|
+| Run chat locally | `python app.py` -> localhost:8000 |
+| Admin panel | localhost:8000/useradmin/ |
+| Index local backups | `python cli/local.py index-html ...` |
+| Scrape content | `python cli/ingest.py scrape ...` |
+| Sync to Pinecone | `python cli/sync.py push` |
 
-### Source Creation Quick Reference
+---
 
-| Task | Code |
-|------|------|
-| Backup HTML site | `SourceManager().create_backup("id", "html", base_url="...")` |
-| Index any source | `SourceManager().create_index("id")` |
-| Validate source | `SourceManager().validate_source("id", config)` |
-| Create pack | `SourceManager().create_pack("id", config)` |
-| Index HTML directly | `index_html_backup(path, source_id)` |
-| Index ZIM directly | `index_zim_file(path, source_id)` |
-| Index PDFs directly | `index_pdf_folder(path, source_id)` |
+## Troubleshooting
+
+### "No sources indexed yet"
+
+Your database is empty. Index some content using the Local Admin panel:
+1. Go to `/useradmin/` -> Sources tab
+2. Use Source Tools to create a new source
+3. Or install a cloud source pack
+
+### "Unable to connect to OpenAI"
+
+Check your API key in `.env`:
+```bash
+OPENAI_API_KEY=your-key-here
+```
+
+Or switch to local embeddings (free):
+```bash
+EMBEDDING_MODE=local
+```
+
+### "Port 8000 already in use"
+
+The system automatically tries port 8001. Or kill the process using port 8000:
+
+```bash
+# Windows
+netstat -ano | findstr :8000
+taskkill /PID <pid> /F
+
+# Mac/Linux
+lsof -i :8000
+kill -9 <pid>
+```
+
+### Slow performance
+
+- Use local embeddings: `EMBEDDING_MODE=local`
+- Reduce `n_results` in searches
+- Index only the sources you need
+
+---
+
+## Legacy Migration Code (DELETE AFTER MIGRATIONS COMPLETE)
+
+The following locations contain legacy file format handling that can be deleted once all sources have been migrated to the current schema. Search for "LEGACY" or "legacy" to find these.
+
+**Files with legacy fallback code to remove:**
+
+| File | Lines | Description |
+|------|-------|-------------|
+| `offline_tools/backup/html.py` | 61-87 | Legacy manifest paths and migration logic |
+| `offline_tools/indexer.py` | 555-556 | Legacy backup manifest path fallbacks |
+| `offline_tools/packager.py` | 123-134 | Legacy ZIM location check |
+| `offline_tools/packager.py` | 402-424 | Legacy metadata/manifest fallback reads |
+| `offline_tools/packager.py` | 582-598 | `load_metadata()` legacy format fallback |
+| `offline_tools/source_manager.py` | 78-97 | `SourceHealth` legacy fields |
+| `offline_tools/source_manager.py` | 547-650 | `cleanup_redundant_files()` - keep function but simplify |
+| `offline_tools/source_manager.py` | 1185-1189 | Legacy manifest path check |
+| `offline_tools/source_manager.py` | 1391-1413 | Legacy embeddings format checks |
+| `offline_tools/source_manager.py` | 1472-1504 | Legacy file detection in health check |
+| `offline_tools/source_manager.py` | 1597-1642 | Legacy metadata/manifest fallbacks |
+| `offline_tools/source_manager.py` | 1713-1716 | Legacy metadata fallback |
+| `offline_tools/vectordb/pinecone_store.py` | 332 | Legacy _master.json path |
+
+**Legacy file patterns being checked:**
+- `{source_id}_metadata.json` -> now `_metadata.json`
+- `{source_id}_backup_manifest.json` -> now `backup_manifest.json`
+- `{source_id}_source.json` -> now `_manifest.json`
+- `{source_id}_documents.json` -> now `_metadata.json`
+- `{source_id}_embeddings.json` -> now `_vectors.json`
+- `{source_id}_index.json` -> now `_index.json`
+- `{source_id}_manifest.json` -> merged into `_manifest.json`
+
+**To clean up after migrations:**
+1. Run `cleanup_redundant_files()` on all sources via Source Tools
+2. Verify no sources have legacy files remaining
+3. Delete the fallback code paths listed above
+4. Simplify `SourceHealth` dataclass to remove legacy fields
 
 ---
 
 ## Other Documentation
 
-- [SUMMARY.md](SUMMARY.md) - Executive summary (non-technical overview)
+- [CONTEXT.md](CONTEXT.md) - Architecture and design decisions (AI onboarding)
+- [SUMMARY.md](SUMMARY.md) - Executive summary
 - [README.md](README.md) - Project overview
-- [CONTEXT.md](CONTEXT.md) - Design decisions and rationale
 - [ROADMAP.md](ROADMAP.md) - Future plans
 
 ---

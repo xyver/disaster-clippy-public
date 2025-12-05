@@ -1,4 +1,8 @@
 """
 CLI tools for Disaster Clippy.
-Includes ingest and sync commands for managing the vector database.
+
+Available commands:
+- python -m cli.local    : Local admin tools (metadata, indexing, export)
+- python -m cli.ingest   : Scraping and ingestion tools
+- python -m cli.sync     : Vector DB sync tools
 """

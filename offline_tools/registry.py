@@ -3,6 +3,8 @@ Source Pack Registry
 
 Manages the catalog of available source packs, their health status,
 and determines which packs are ready for distribution.
+
+Uses _manifest.json for source identity.
 """
 
 import json
@@ -11,6 +13,8 @@ from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, field, asdict
 from enum import Enum
 from datetime import datetime
+
+from .schemas import get_manifest_file
 
 
 class PackTier(Enum):
@@ -72,15 +76,14 @@ class SourcePackRegistry:
     Manages the catalog of source packs available for download.
 
     Discovers sources from:
-    - {source_id}_source.json files in backup folder
-    - data/metadata/_master.json (document counts, topics)
+    - _manifest.json files in backup folder
+    - _master.json in backup folder (document counts, topics)
     - Backup folder scanning (for offline availability)
     """
 
     def __init__(self, base_dir: Optional[Path] = None):
         self.base_dir = base_dir or Path(__file__).parent.parent
-        # Sources and metadata are in BACKUP_PATH, not config/data folders
-        self.sources_config_path = self._get_sources_path()
+        self.backup_folder = self._get_backup_folder()
         self.metadata_path = self._get_metadata_path()
 
     def _get_backup_folder(self) -> str:
@@ -97,24 +100,14 @@ class SourcePackRegistry:
             pass
         return os.getenv("BACKUP_PATH", "")
 
-    def _get_sources_path(self) -> Path:
-        """DEPRECATED: Returns backup folder path. Sources are discovered from _source.json files."""
-        backup_path = self._get_backup_folder()
-        if backup_path:
-            return Path(backup_path)
-        return self.base_dir / "config"
-
     def _get_metadata_path(self) -> Path:
-        """Get path to _master.json - check backup folder first"""
-        backup_path = self._get_backup_folder()
-        if backup_path:
-            metadata_path = Path(backup_path) / "_master.json"
-            if metadata_path.exists():
-                return metadata_path
-        return self.base_dir / "data" / "metadata" / "_master.json"
+        """Get path to _master.json in backup folder"""
+        if self.backup_folder:
+            return Path(self.backup_folder) / "_master.json"
+        raise ValueError("No backup folder configured")
 
     def _load_sources_config(self) -> Dict[str, Any]:
-        """Load source definitions by discovering _source.json files in backup folder"""
+        """Load source definitions by discovering _manifest.json files in backup folder"""
         backup_path = self._get_backup_folder()
         sources = {}
 
@@ -124,7 +117,8 @@ class SourcePackRegistry:
                 for source_folder in backup_folder.iterdir():
                     if source_folder.is_dir():
                         source_id = source_folder.name
-                        source_file = source_folder / f"{source_id}_source.json"
+                        # Check for _manifest.json
+                        source_file = source_folder / get_manifest_file()
                         if source_file.exists():
                             try:
                                 with open(source_file, 'r', encoding='utf-8') as f:
@@ -192,7 +186,7 @@ class SourcePackRegistry:
         """
         Determine the quality tier for a source based on completeness.
 
-        Official: license_verified in _source.json (backup is bonus, not required)
+        Official: license_verified in _manifest.json (backup is bonus, not required)
         Community: license reported but not verified
         Personal: No license info
         """

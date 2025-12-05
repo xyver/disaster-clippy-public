@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Jobs - Disaster Clippy Admin</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #1a1a2e;
+            color: #eee;
+            min-height: 100vh;
+        }
+        header {
+            background: #16213e;
+            padding: 1rem 2rem;
+            border-bottom: 1px solid #0f3460;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        header h1 { font-size: 1.5rem; color: #e94560; }
+        header p { font-size: 0.9rem; color: #888; margin-top: 0.25rem; }
+        .nav-links { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+        .nav-links a {
+            color: #4ecca3;
+            text-decoration: none;
+            font-size: 0.85rem;
+            padding: 0.5rem 0.75rem;
+            border-radius: 4px;
+            transition: background 0.2s;
+        }
+        .nav-links a:hover { background: #0f3460; }
+        .nav-links a.active { background: #0f3460; color: #e94560; }
+        .nav-divider { width: 1px; background: #0f3460; margin: 0 0.25rem; }
+        .admin-toggle { display: flex; align-items: center; gap: 0.5rem; padding: 0.4rem 0.75rem; background: #0f3460; border-radius: 4px; font-size: 0.8rem; color: #888; }
+        .admin-toggle.active { background: #4a1942; color: #e94560; }
+        .admin-toggle input { display: none; }
+        .toggle-slider { width: 36px; height: 18px; background: #1a1a2e; border-radius: 9px; position: relative; cursor: pointer; transition: background 0.2s; }
+        .toggle-slider::after { content: ''; position: absolute; width: 14px; height: 14px; background: #888; border-radius: 50%; top: 2px; left: 2px; transition: all 0.2s; }
+        .admin-toggle.active .toggle-slider { background: #e94560; }
+        .admin-toggle.active .toggle-slider::after { left: 20px; background: #fff; }
+        .container { max-width: 1000px; margin: 0 auto; padding: 2rem; }
+        .section {
+            background: #16213e;
+            border: 1px solid #0f3460;
+            border-radius: 8px;
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+        .section h2 {
+            font-size: 1.1rem;
+            color: #e94560;
+            margin-bottom: 1rem;
+            padding-bottom: 0.5rem;
+            border-bottom: 1px solid #0f3460;
+        }
+        .job-list { display: flex; flex-direction: column; gap: 0.5rem; }
+        .job-item {
+            background: #1a1a2e;
+            border: 1px solid #0f3460;
+            border-radius: 4px;
+            padding: 1rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .job-info { flex: 1; }
+        .job-name { color: #4ecca3; font-weight: 500; }
+        .job-meta { font-size: 0.8rem; color: #888; margin-top: 0.25rem; }
+        .job-status {
+            padding: 0.25rem 0.75rem;
+            border-radius: 4px;
+            font-size: 0.8rem;
+            font-weight: 500;
+        }
+        .status-running { background: #0f3460; color: #4ecca3; }
+        .status-completed { background: #1a2e1a; color: #4ecca3; }
+        .status-failed { background: #2e1a1a; color: #e94560; }
+        .status-pending { background: #2e2a1a; color: #f9a825; }
+        .status-cancelled { background: #2e2a2a; color: #888; }
+        .empty { text-align: center; padding: 2rem; color: #666; font-style: italic; }
+        .job-type-tag {
+            display: inline-block;
+            padding: 0.2rem 0.5rem;
+            border-radius: 3px;
+            font-size: 0.7rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            margin-right: 0.5rem;
+        }
+        .tag-download { background: #1a3a5c; color: #4ecdc4; }
+        .tag-upload { background: #3a1a5c; color: #c44ecd; }
+        .tag-index { background: #1a5c3a; color: #4ecd6c; }
+        .tag-metadata { background: #5c4a1a; color: #cdb44e; }
+        .tag-scan { background: #1a4a5c; color: #4eb4cd; }
+        .tag-validate { background: #5c1a3a; color: #cd4e8c; }
+        .job-source { color: #4ecca3; font-weight: 500; }
+        .job-message { font-size: 0.8rem; color: #888; margin-top: 0.25rem; }
+        .progress-bar {
+            width: 100%;
+            height: 4px;
+            background: #0f3460;
+            border-radius: 2px;
+            margin-top: 0.5rem;
+            overflow: hidden;
+        }
+        .progress-fill {
+            height: 100%;
+            background: #4ecca3;
+            transition: width 0.3s;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div>
+            <h1>Jobs</h1>
+            <p>Background job manager</p>
+        </div>
+        <nav class="nav-links">
+            <a href="/useradmin/dashboard">Dashboard</a>
+            <a href="/useradmin/sources">Sources</a>
+            <a href="/useradmin/jobs" class="active">Jobs</a>
+            <a href="/useradmin/cloud">Cloud</a>
+            <a href="/useradmin/settings">Settings</a>
+            <a href="/useradmin/submissions">Submissions</a>
+            <a href="/useradmin/pinecone">Pinecone</a>
+            <a href="/">Chat</a>
+            <span class="nav-divider"></span>
+            <label class="admin-toggle" id="adminToggle" title="Toggle Admin Mode">
+                <input type="checkbox" id="adminModeCheckbox" onchange="toggleAdminMode()">
+                <span>Admin</span>
+                <span class="toggle-slider"></span>
+            </label>
+        </nav>
+    </header>
+
+    <div class="container">
+        <!-- Active Jobs -->
+        <div class="section">
+            <h2>Active Jobs</h2>
+            <div id="activeJobs" class="job-list">
+                <div class="empty">Loading...</div>
+            </div>
+        </div>
+
+        <!-- Completed Jobs -->
+        <div class="section">
+            <h2>Recent Jobs</h2>
+            <div id="recentJobs" class="job-list">
+                <div class="empty">Loading...</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Job type display names and descriptions
+        const JOB_TYPES = {
+            'download': { label: 'Download', desc: 'Downloading source pack from cloud' },
+            'upload': { label: 'Upload', desc: 'Uploading source to cloud storage' },
+            'index': { label: 'Index', desc: 'Creating vector embeddings for search' },
+            'metadata': { label: 'Metadata', desc: 'Generating document metadata' },
+            'scan': { label: 'Scan', desc: 'Scanning backup files' },
+            'validate': { label: 'Validate', desc: 'Validating source for distribution' }
+        };
+
+        function getJobTypeTag(jobType) {
+            const info = JOB_TYPES[jobType] || { label: jobType, desc: '' };
+            return `<span class="job-type-tag tag-${jobType}">${info.label}</span>`;
+        }
+
+        function formatDuration(seconds) {
+            if (!seconds) return '';
+            if (seconds < 60) return `${Math.round(seconds)}s`;
+            const mins = Math.floor(seconds / 60);
+            const secs = Math.round(seconds % 60);
+            return `${mins}m ${secs}s`;
+        }
+
+        async function loadJobs() {
+            // Load active jobs
+            try {
+                const activeResp = await fetch('/useradmin/api/jobs/active');
+                const activeData = await activeResp.json();
+                const activeContainer = document.getElementById('activeJobs');
+
+                if (!activeData.jobs || activeData.jobs.length === 0) {
+                    activeContainer.innerHTML = '<div class="empty">No active jobs</div>';
+                } else {
+                    activeContainer.innerHTML = activeData.jobs.map(job => `
+                        <div class="job-item">
+                            <div class="job-info">
+                                <div class="job-name">
+                                    ${getJobTypeTag(job.job_type)}
+                                    <span class="job-source">${job.source_id}</span>
+                                </div>
+                                <div class="job-message">${job.message || JOB_TYPES[job.job_type]?.desc || ''}</div>
+                                <div class="job-meta">Started: ${new Date(job.started_at).toLocaleString()}</div>
+                                ${job.progress ? `
+                                    <div class="progress-bar">
+                                        <div class="progress-fill" style="width: ${job.progress}%"></div>
+                                    </div>
+                                ` : ''}
+                            </div>
+                            <span class="job-status status-${job.status}">${job.progress || 0}%</span>
+                        </div>
+                    `).join('');
+                }
+            } catch (e) {
+                document.getElementById('activeJobs').innerHTML = '<div class="empty">Error loading jobs</div>';
+            }
+
+            // Load all jobs
+            try {
+                const allResp = await fetch('/useradmin/api/jobs');
+                const allData = await allResp.json();
+                const recentContainer = document.getElementById('recentJobs');
+
+                const completedJobs = (allData.jobs || []).filter(j => j.status !== 'running' && j.status !== 'pending');
+
+                if (completedJobs.length === 0) {
+                    recentContainer.innerHTML = '<div class="empty">No recent jobs</div>';
+                } else {
+                    recentContainer.innerHTML = completedJobs.slice(0, 20).map(job => `
+                        <div class="job-item">
+                            <div class="job-info">
+                                <div class="job-name">
+                                    ${getJobTypeTag(job.job_type)}
+                                    <span class="job-source">${job.source_id}</span>
+                                </div>
+                                <div class="job-meta">
+                                    ${job.completed_at ? new Date(job.completed_at).toLocaleString() : ''}
+                                    ${job.duration_seconds ? ' - ' + formatDuration(job.duration_seconds) : ''}
+                                    ${job.error ? '<br><span style="color: #e94560;">' + job.error + '</span>' : ''}
+                                    ${job.status === 'completed' && job.result?.message ? '<br><span style="color: #4ecca3;">' + job.result.message + '</span>' : ''}
+                                </div>
+                            </div>
+                            <span class="job-status status-${job.status}">${job.status}</span>
+                        </div>
+                    `).join('');
+                }
+            } catch (e) {
+                document.getElementById('recentJobs').innerHTML = '<div class="empty">Error loading jobs</div>';
+            }
+        }
+
+        loadJobs();
+        // Refresh every 3 seconds for more responsive updates
+        setInterval(loadJobs, 3000);
+
+        // Hide Pinecone link if not admin
+        function updatePineconeVisibility() {
+            const isAdmin = localStorage.getItem('adminMode') === 'true';
+            const pineconeLink = document.querySelector('a[href="/useradmin/pinecone"]');
+            if (pineconeLink) {
+                pineconeLink.style.display = isAdmin ? '' : 'none';
+            }
+        }
+        updatePineconeVisibility();
+
+        // Admin Mode Toggle
+        function toggleAdminMode() {
+            const checkbox = document.getElementById('adminModeCheckbox');
+            const toggle = document.getElementById('adminToggle');
+            const isAdmin = checkbox.checked;
+            localStorage.setItem('adminMode', isAdmin ? 'true' : 'false');
+            toggle.classList.toggle('active', isAdmin);
+            updatePineconeVisibility();
+        }
+        function initAdminMode() {
+            const isAdmin = localStorage.getItem('adminMode') === 'true';
+            document.getElementById('adminModeCheckbox').checked = isAdmin;
+            document.getElementById('adminToggle').classList.toggle('active', isAdmin);
+        }
+        initAdminMode();
+    </script>
+</body>
+</html>

@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Create Source - Disaster Clippy Admin</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #1a1a2e;
+            color: #eee;
+            min-height: 100vh;
+        }
+        header {
+            background: #16213e;
+            padding: 1rem 2rem;
+            border-bottom: 1px solid #0f3460;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        header h1 { font-size: 1.5rem; color: #e94560; }
+        header p { font-size: 0.9rem; color: #888; margin-top: 0.25rem; }
+        .nav-links { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+        .nav-links a {
+            color: #4ecca3;
+            text-decoration: none;
+            font-size: 0.85rem;
+            padding: 0.5rem 0.75rem;
+            border-radius: 4px;
+            transition: background 0.2s;
+        }
+        .nav-links a:hover { background: #0f3460; }
+        .nav-links a.active { background: #0f3460; color: #e94560; }
+        .nav-divider { width: 1px; background: #0f3460; margin: 0 0.25rem; }
+        .admin-toggle {
+            display: flex; align-items: center; gap: 0.5rem;
+            padding: 0.4rem 0.75rem; background: #0f3460;
+            border-radius: 4px; font-size: 0.8rem; color: #888;
+        }
+        .admin-toggle.active { background: #4a1942; color: #e94560; }
+        .admin-toggle input { display: none; }
+        .toggle-slider {
+            width: 36px; height: 18px; background: #1a1a2e;
+            border-radius: 9px; position: relative; cursor: pointer; transition: background 0.2s;
+        }
+        .toggle-slider::after {
+            content: ''; position: absolute; width: 14px; height: 14px;
+            background: #888; border-radius: 50%; top: 2px; left: 2px; transition: all 0.2s;
+        }
+        .admin-toggle.active .toggle-slider { background: #e94560; }
+        .admin-toggle.active .toggle-slider::after { left: 20px; background: #fff; }
+        .container { max-width: 1200px; margin: 0 auto; padding: 2rem; }
+        .section {
+            background: #16213e;
+            border: 1px solid #0f3460;
+            border-radius: 8px;
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+        .section h2 {
+            font-size: 1.1rem;
+            color: #e94560;
+            margin-bottom: 1rem;
+            padding-bottom: 0.5rem;
+            border-bottom: 1px solid #0f3460;
+        }
+        .sub-nav {
+            display: flex;
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+        }
+        .sub-nav a {
+            color: #4ecca3;
+            text-decoration: none;
+            padding: 0.5rem 1rem;
+            border: 1px solid #0f3460;
+            border-radius: 4px;
+            font-size: 0.85rem;
+        }
+        .sub-nav a:hover { background: #0f3460; }
+        .sub-nav a.active { background: #0f3460; color: #e94560; }
+        .placeholder {
+            text-align: center;
+            padding: 3rem;
+            color: #666;
+            font-style: italic;
+        }
+        .wizard-steps {
+            display: flex;
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }
+        .step {
+            flex: 1;
+            text-align: center;
+            padding: 1rem;
+            background: #1a1a2e;
+            border: 1px solid #0f3460;
+            border-radius: 4px;
+            color: #666;
+        }
+        .step.active { border-color: #e94560; color: #e94560; }
+        .step.completed { border-color: #4ecca3; color: #4ecca3; }
+    </style>
+</head>
+<body>
+    <header>
+        <div>
+            <h1>Create Source</h1>
+            <p>Create a new content source backup</p>
+        </div>
+        <nav class="nav-links">
+            <a href="/useradmin/dashboard">Dashboard</a>
+            <a href="/useradmin/sources" class="active">Sources</a>
+            <a href="/useradmin/jobs">Jobs</a>
+            <a href="/useradmin/cloud">Cloud</a>
+            <a href="/useradmin/settings">Settings</a>
+            <a href="/useradmin/submissions">Submissions</a>
+            <a href="/useradmin/pinecone">Pinecone</a>
+            <a href="/">Chat</a>
+            <span class="nav-divider"></span>
+            <label class="admin-toggle" id="adminToggle" title="Toggle Admin Mode">
+                <input type="checkbox" id="adminModeCheckbox" onchange="toggleAdminMode()">
+                <span>Admin</span>
+                <span class="toggle-slider"></span>
+            </label>
+        </nav>
+    </header>
+
+    <div class="container">
+        <!-- Sub-navigation -->
+        <div class="sub-nav">
+            <a href="/useradmin/sources">All Sources</a>
+            <a href="/useradmin/sources/tools">Source Tools</a>
+            <a href="/useradmin/sources/create" class="active">Create New</a>
+        </div>
+
+        <!-- Wizard Steps -->
+        <div class="wizard-steps">
+            <div class="step active">1. Choose Type</div>
+            <div class="step">2. Configure</div>
+            <div class="step">3. Scrape/Import</div>
+            <div class="step">4. Index</div>
+            <div class="step">5. Verify</div>
+        </div>
+
+        <div class="section">
+            <h2>Source Type</h2>
+            <div class="placeholder">
+                Source creation wizard coming soon...<br><br>
+                For now, use the CLI tools:<br>
+                <code style="color: #4ecca3;">python -m cli.ingest scrape mediawiki --url https://wiki.example.com</code>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Hide Pinecone link if not admin
+        function updatePineconeVisibility() {
+            const isAdmin = localStorage.getItem('adminMode') === 'true';
+            const pineconeLink = document.querySelector('a[href="/useradmin/pinecone"]');
+            if (pineconeLink) {
+                pineconeLink.style.display = isAdmin ? '' : 'none';
+            }
+        }
+        updatePineconeVisibility();
+
+        // Admin Mode Toggle
+        function toggleAdminMode() {
+            const checkbox = document.getElementById('adminModeCheckbox');
+            const toggle = document.getElementById('adminToggle');
+            const isAdmin = checkbox.checked;
+            localStorage.setItem('adminMode', isAdmin ? 'true' : 'false');
+            toggle.classList.toggle('active', isAdmin);
+            updatePineconeVisibility();
+        }
+        function initAdminMode() {
+            const isAdmin = localStorage.getItem('adminMode') === 'true';
+            document.getElementById('adminModeCheckbox').checked = isAdmin;
+            document.getElementById('adminToggle').classList.toggle('active', isAdmin);
+        }
+        initAdminMode();
+    </script>
+</body>
+</html>

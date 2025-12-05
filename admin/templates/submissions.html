@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Submissions - Disaster Clippy Admin</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #1a1a2e;
+            color: #eee;
+            min-height: 100vh;
+        }
+        header {
+            background: #16213e;
+            padding: 1rem 2rem;
+            border-bottom: 1px solid #0f3460;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        header h1 { font-size: 1.5rem; color: #e94560; }
+        header p { font-size: 0.9rem; color: #888; margin-top: 0.25rem; }
+        .nav-links { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+        .nav-links a {
+            color: #4ecca3;
+            text-decoration: none;
+            font-size: 0.85rem;
+            padding: 0.5rem 0.75rem;
+            border-radius: 4px;
+            transition: background 0.2s;
+        }
+        .nav-links a:hover { background: #0f3460; }
+        .nav-links a.active { background: #0f3460; color: #e94560; }
+        .nav-divider { width: 1px; background: #0f3460; margin: 0 0.25rem; }
+        .admin-toggle { display: flex; align-items: center; gap: 0.5rem; padding: 0.4rem 0.75rem; background: #0f3460; border-radius: 4px; font-size: 0.8rem; color: #888; }
+        .admin-toggle.active { background: #4a1942; color: #e94560; }
+        .admin-toggle input { display: none; }
+        .toggle-slider { width: 36px; height: 18px; background: #1a1a2e; border-radius: 9px; position: relative; cursor: pointer; transition: background 0.2s; }
+        .toggle-slider::after { content: ''; position: absolute; width: 14px; height: 14px; background: #888; border-radius: 50%; top: 2px; left: 2px; transition: all 0.2s; }
+        .admin-toggle.active .toggle-slider { background: #e94560; }
+        .admin-toggle.active .toggle-slider::after { left: 20px; background: #fff; }
+        .container { max-width: 1200px; margin: 0 auto; padding: 2rem; }
+        .section {
+            background: #16213e;
+            border: 1px solid #0f3460;
+            border-radius: 8px;
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+        .section h2 {
+            font-size: 1.1rem;
+            color: #e94560;
+            margin-bottom: 1rem;
+            padding-bottom: 0.5rem;
+            border-bottom: 1px solid #0f3460;
+        }
+        .description {
+            color: #888;
+            font-size: 0.9rem;
+            margin-bottom: 1rem;
+        }
+        .placeholder {
+            text-align: center;
+            padding: 2rem;
+            color: #666;
+            font-style: italic;
+        }
+        .submission-list { display: flex; flex-direction: column; gap: 0.5rem; }
+        .submission-item {
+            background: #1a1a2e;
+            border: 1px solid #0f3460;
+            border-radius: 6px;
+            padding: 1rem;
+        }
+        .submission-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 0.5rem;
+        }
+        .submission-name { color: #4ecca3; font-weight: 500; }
+        .submission-meta { font-size: 0.8rem; color: #888; }
+        .submission-status {
+            padding: 0.25rem 0.75rem;
+            border-radius: 4px;
+            font-size: 0.8rem;
+            font-weight: 500;
+        }
+        .status-pending_review { background: #2e2a1a; color: #f9a825; }
+        .status-approved { background: #1a2e1a; color: #4ecca3; }
+        .status-denied { background: #2e1a1a; color: #e94560; }
+        .admin-message {
+            margin-top: 0.75rem;
+            padding: 0.5rem;
+            background: #0f3460;
+            border-radius: 4px;
+            font-size: 0.85rem;
+        }
+        .admin-message-label {
+            font-size: 0.75rem;
+            color: #888;
+            margin-bottom: 0.25rem;
+        }
+        .summary-stats {
+            display: flex;
+            gap: 2rem;
+            margin-bottom: 1rem;
+            padding: 1rem;
+            background: #1a1a2e;
+            border-radius: 6px;
+        }
+        .stat-item {
+            text-align: center;
+        }
+        .stat-value {
+            font-size: 1.5rem;
+            font-weight: 600;
+            color: #4ecca3;
+        }
+        .stat-label {
+            font-size: 0.8rem;
+            color: #888;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div>
+            <h1>Submissions</h1>
+            <p>Your submitted source packs and their review status</p>
+        </div>
+        <nav class="nav-links">
+            <a href="/useradmin/dashboard">Dashboard</a>
+            <a href="/useradmin/sources">Sources</a>
+            <a href="/useradmin/jobs">Jobs</a>
+            <a href="/useradmin/cloud">Cloud</a>
+            <a href="/useradmin/settings">Settings</a>
+            <a href="/useradmin/submissions" class="active">Submissions</a>
+            <a href="/useradmin/pinecone">Pinecone</a>
+            <a href="/">Chat</a>
+            <span class="nav-divider"></span>
+            <label class="admin-toggle" id="adminToggle" title="Toggle Admin Mode">
+                <input type="checkbox" id="adminModeCheckbox" onchange="toggleAdminMode()">
+                <span>Admin</span>
+                <span class="toggle-slider"></span>
+            </label>
+        </nav>
+    </header>
+
+    <div class="container">
+        <!-- Your Submissions -->
+        <div class="section">
+            <h2 id="submissionsTitle">Your Submissions</h2>
+            <p class="description" id="submissionsDesc">
+                Sources you've submitted for review. Once approved by the admin,
+                they'll be moved to the Global Cloud Backup for all users to access.
+            </p>
+
+            <div id="submissionStats" class="summary-stats" style="display: none;">
+                <div class="stat-item">
+                    <div class="stat-value" id="totalCount">0</div>
+                    <div class="stat-label">Total Submissions</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value" id="pendingCount">0</div>
+                    <div class="stat-label">Pending Review</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value" id="approvedCount">0</div>
+                    <div class="stat-label">Approved</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value" id="totalSize">0 MB</div>
+                    <div class="stat-label">Total Size</div>
+                </div>
+            </div>
+
+            <div id="submissionsList" class="submission-list">
+                <div class="placeholder">Loading...</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        async function loadSubmissions() {
+            const container = document.getElementById('submissionsList');
+            const statsContainer = document.getElementById('submissionStats');
+
+            try {
+                const response = await fetch('/useradmin/api/cloud-backups');
+                const data = await response.json();
+
+                if (data.error) {
+                    container.innerHTML = `<div class="placeholder">${escapeHtml(data.error)}</div>`;
+                    return;
+                }
+
+                if (!data.submissions || Object.keys(data.submissions).length === 0) {
+                    container.innerHTML = '<div class="placeholder">No submissions yet. Upload a source from the Cloud page to submit it for review.</div>';
+                    return;
+                }
+
+                // Show stats
+                statsContainer.style.display = 'flex';
+                document.getElementById('totalCount').textContent = data.total_submissions || 0;
+                document.getElementById('totalSize').textContent = (data.total_size_mb || 0).toFixed(2) + ' MB';
+
+                // Count by status
+                let pendingCount = 0;
+                let approvedCount = 0;
+
+                for (const [submissionId, info] of Object.entries(data.submissions)) {
+                    const status = info.status || 'pending_review';
+                    if (status === 'pending_review') pendingCount++;
+                    if (status === 'approved') approvedCount++;
+                }
+
+                document.getElementById('pendingCount').textContent = pendingCount;
+                document.getElementById('approvedCount').textContent = approvedCount;
+
+                // Build submission list
+                let html = '';
+
+                for (const [submissionId, info] of Object.entries(data.submissions)) {
+                    const parts = submissionId.split('_');
+                    const sourceId = parts.length >= 3 ? parts.slice(2).join('_') : submissionId;
+
+                    // Status styling
+                    const status = info.status || 'pending_review';
+                    let statusColor, statusText;
+
+                    switch(status) {
+                        case 'approved':
+                            statusColor = '#4ecca3';
+                            statusText = 'Approved';
+                            break;
+                        case 'denied':
+                            statusColor = '#e94560';
+                            statusText = 'Denied';
+                            break;
+                        default:
+                            statusColor = '#f9a825';
+                            statusText = 'Pending Review';
+                    }
+
+                    html += `
+                        <div class="submission-item" style="border-left: 3px solid ${statusColor};">
+                            <div class="submission-header">
+                                <span class="submission-name">${escapeHtml(sourceId)}</span>
+                                <span class="submission-status status-${status}">${statusText}</span>
+                            </div>
+                            <div class="submission-meta">
+                                ${info.files.length} file(s) - ${info.total_size_mb.toFixed(2)} MB
+                            </div>
+                    `;
+
+                    // Show admin message if present
+                    if (info.admin_message) {
+                        html += `
+                            <div class="admin-message" style="border-left: 3px solid ${statusColor};">
+                                <div class="admin-message-label">Admin Message:</div>
+                                <div style="color: ${statusColor};">${escapeHtml(info.admin_message)}</div>
+                            </div>
+                        `;
+                    }
+
+                    html += `</div>`;
+                }
+
+                container.innerHTML = html;
+
+            } catch (e) {
+                container.innerHTML = `<div class="placeholder">Error loading submissions: ${escapeHtml(e.message)}</div>`;
+            }
+        }
+
+        function escapeHtml(text) {
+            if (!text) return '';
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        loadSubmissions();
+
+        // Update page based on admin mode
+        function updateAdminView() {
+            const isAdmin = localStorage.getItem('adminMode') === 'true';
+            const title = document.getElementById('submissionsTitle');
+            const desc = document.getElementById('submissionsDesc');
+            const pineconeLink = document.querySelector('a[href="/useradmin/pinecone"]');
+
+            if (isAdmin) {
+                title.textContent = 'Incoming Submissions';
+                desc.textContent = 'User-submitted sources pending review. Approve to add to the Global Cloud Backup.';
+            } else {
+                title.textContent = 'Your Submissions';
+                desc.textContent = 'Sources you\'ve submitted for review. Once approved by the admin, they\'ll be moved to the Global Cloud Backup for all users to access.';
+            }
+
+            if (pineconeLink) {
+                pineconeLink.style.display = isAdmin ? '' : 'none';
+            }
+        }
+        updateAdminView();
+        window.addEventListener('storage', updateAdminView);
+
+        // Admin Mode Toggle
+        function toggleAdminMode() {
+            const checkbox = document.getElementById('adminModeCheckbox');
+            const toggle = document.getElementById('adminToggle');
+            const isAdmin = checkbox.checked;
+            localStorage.setItem('adminMode', isAdmin ? 'true' : 'false');
+            toggle.classList.toggle('active', isAdmin);
+            updateAdminView();
+        }
+        function initAdminMode() {
+            const isAdmin = localStorage.getItem('adminMode') === 'true';
+            document.getElementById('adminModeCheckbox').checked = isAdmin;
+            document.getElementById('adminToggle').classList.toggle('active', isAdmin);
+        }
+        initAdminMode();
+    </script>
+</body>
+</html>

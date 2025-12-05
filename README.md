@@ -81,12 +81,51 @@ All content is Creative Commons or Public Domain with full attribution.
 - **Document types** - Results tagged as Guide, Article, Research, or Product
 - **Multi-turn conversation** - Follow-up questions keep context
 
+### For Local Admins
+
+- **Admin Panel** - Full source management at /useradmin/
+- **5-Step Source Tools** - Wizard for creating and editing sources
+- **Status Boxes** - Visual validation (Config, Backup, Metadata, Embeddings, License)
+- **Web Scrapers** - MediaWiki, Fandom, static sites, PDF extraction
+- **CLI Tools** - Command-line tools for indexing, scraping, sync
+- **Offline Support** - Run without internet using local ChromaDB + ZIM files
+
 ### For Organizations
 
 - **External API** - Embed the chat on your own website
 - **Custom databases** - Create your own vector database from selected sources
-- **Offline support** - (Coming soon) Run without internet access
-- **Location-aware** - (Coming soon) Prioritize locally-relevant content
+- **Cloud Storage** - Cloudflare R2 integration for backup distribution
+- **Mode Switching** - Local admin vs Global admin features
+
+---
+
+## Project Structure
+
+```
+disaster-clippy/
+|-- app.py                    # FastAPI chat interface
+|-- local_settings.json       # User configuration
+|
+|-- cli/                      # Command-line tools
+|   |-- local.py              # Local admin CLI
+|   |-- ingest.py             # Scraping and ingestion CLI
+|   |-- sync.py               # Vector DB sync CLI
+|
+|-- admin/                    # Admin panel (/useradmin/)
+|   |-- app.py                # FastAPI routes
+|   |-- routes/               # API route modules
+|   |-- templates/            # Admin UI templates
+|
+|-- offline_tools/            # Core business logic
+|   |-- indexer.py            # HTML/ZIM/PDF indexing
+|   |-- source_manager.py     # Source CRUD operations
+|   |-- scraper/              # Web scrapers
+|   |-- vectordb/             # Vector database (ChromaDB/Pinecone)
+|   |-- cloud/                # Cloudflare R2 client
+|
+|-- templates/                # Main app templates
+|-- static/                   # Main app static files
+```
 
 ---
 
@@ -119,10 +158,9 @@ All content is Creative Commons or Public Domain with full attribution.
 
 | Document | Purpose |
 |----------|---------|
+| [DEVELOPER.md](DEVELOPER.md) | Repository structure, setup guide, CLI tools |
+| [CONTEXT.md](CONTEXT.md) | Architecture and design decisions (start here for AI onboarding) |
 | [SUMMARY.md](SUMMARY.md) | Executive summary (non-technical overview) |
-| [DEVELOPER.md](DEVELOPER.md) | Setup, configuration, deployment |
-| [DEVELOPER-LOCAL.md](DEVELOPER-LOCAL.md) | Local admin guide |
-| [CONTEXT.md](CONTEXT.md) | Complete project context for AI assistants |
 | [ROADMAP.md](ROADMAP.md) | Future plans and feature development |
 
 ---
@@ -133,8 +171,9 @@ All content is Creative Commons or Public Domain with full attribution.
 - **AI**: OpenAI GPT-4o-mini or Claude (configurable)
 - **Embeddings**: OpenAI API or local sentence-transformers
 - **Vector Database**: ChromaDB (local) or Pinecone (cloud)
-- **Admin UI**: Streamlit
-- **Scrapers**: BeautifulSoup, MediaWiki API, PyMuPDF
+- **Admin UI**: FastAPI + Jinja2 templates
+- **Scrapers**: MediaWiki API, BeautifulSoup, PyMuPDF
+- **Cloud Storage**: Cloudflare R2
 
 ---
 

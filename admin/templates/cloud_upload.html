@@ -40,13 +40,14 @@
 
         .nav-links {
             display: flex;
-            gap: 1rem;
+            gap: 0.5rem;
+            flex-wrap: wrap;
         }
 
         .nav-links a {
             color: #4ecca3;
             text-decoration: none;
-            font-size: 0.9rem;
+            font-size: 0.85rem;
             padding: 0.5rem 0.75rem;
             border-radius: 4px;
             transition: background 0.2s;
@@ -60,6 +61,15 @@
             background: #0f3460;
             color: #e94560;
         }
+
+        .nav-divider { width: 1px; background: #0f3460; margin: 0 0.25rem; }
+        .admin-toggle { display: flex; align-items: center; gap: 0.5rem; padding: 0.4rem 0.75rem; background: #0f3460; border-radius: 4px; font-size: 0.8rem; color: #888; }
+        .admin-toggle.active { background: #4a1942; color: #e94560; }
+        .admin-toggle input { display: none; }
+        .toggle-slider { width: 36px; height: 18px; background: #1a1a2e; border-radius: 9px; position: relative; cursor: pointer; transition: background 0.2s; }
+        .toggle-slider::after { content: ''; position: absolute; width: 14px; height: 14px; background: #888; border-radius: 50%; top: 2px; left: 2px; transition: all 0.2s; }
+        .admin-toggle.active .toggle-slider { background: #e94560; }
+        .admin-toggle.active .toggle-slider::after { left: 20px; background: #fff; }
 
         .container {
             max-width: 1000px;
@@ -343,26 +353,47 @@
 <body>
     <header>
         <div>
-            <h1>Cloud Backup Upload</h1>
-            <p>Upload verified source backups to R2 cloud storage</p>
+            <h1 id="pageTitle">Cloud Backup Upload</h1>
+            <p id="pageSubtitle">Upload verified source backups to R2 cloud storage</p>
         </div>
-        <div class="nav-links">
-            <a href="/useradmin/">Settings</a>
-            <a href="/useradmin/packs">Source Packs</a>
-            <a href="/useradmin/source-tools">Source Tools</a>
-            <a href="/useradmin/cloud-upload" class="active">Cloud Upload</a>
+        <nav class="nav-links">
+            <a href="/useradmin/dashboard">Dashboard</a>
+            <a href="/useradmin/sources">Sources</a>
+            <a href="/useradmin/jobs">Jobs</a>
+            <a href="/useradmin/cloud" class="active">Cloud</a>
+            <a href="/useradmin/settings">Settings</a>
+            <a href="/useradmin/submissions">Submissions</a>
+            <a href="/useradmin/pinecone">Pinecone</a>
             <a href="/">Chat</a>
-        </div>
+            <span class="nav-divider"></span>
+            <label class="admin-toggle" id="adminToggle" title="Toggle Admin Mode">
+                <input type="checkbox" id="adminModeCheckbox" onchange="toggleAdminMode()">
+                <span>Admin</span>
+                <span class="toggle-slider"></span>
+            </label>
+        </nav>
     </header>
+
+    <!-- Local Mode Warning Banner -->
+    <div id="localModeBanner" style="display: none; background: #e94560; color: white; padding: 0.75rem 2rem; text-align: center;">
+        <strong>Read-Only Mode:</strong> Cloud uploads require ADMIN_MODE=global. You can browse but not upload.
+    </div>
 
     <div class="container">
         <!-- Global Cloud Connection Status -->
         <div class="section">
-            <h2>Global Cloud Connection</h2>
-            <p class="description">Connection to the shared R2 cloud storage for submitting verified sources</p>
+            <h2>Global Cloud Connections</h2>
+            <p class="description">Connection status for cloud services (R2 storage and Pinecone vector database)</p>
 
-            <div class="status-card" id="cloudStatus">
-                <div class="loading">Checking connection...</div>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+                <div class="status-card" id="cloudStatus">
+                    <div style="font-size: 0.8rem; color: #888; margin-bottom: 0.5rem;">R2 Cloud Storage</div>
+                    <div class="loading">Checking connection...</div>
+                </div>
+                <div class="status-card" id="pineconeStatus">
+                    <div style="font-size: 0.8rem; color: #888; margin-bottom: 0.5rem;">Pinecone Vector DB</div>
+                    <div class="loading">Checking connection...</div>
+                </div>
             </div>
         </div>
 
@@ -379,18 +410,6 @@
             </div>
         </div>
 
-        <!-- Pending Submissions -->
-        <div class="section">
-            <h2>Your Submissions</h2>
-            <p class="description">
-                Sources you've submitted for review. Once approved by the admin,
-                they'll be moved to the Global Cloud Backup for all users to access.
-            </p>
-
-            <div id="cloudBackups">
-                <div class="loading">Loading...</div>
-            </div>
-        </div>
     </div>
 
     <div class="toast" id="toast"></div>
@@ -409,51 +428,46 @@
 
                 cloudConnected = data.connected;
 
-                let statusHtml = '';
+                let statusHtml = '<div style="font-size: 0.8rem; color: #888; margin-bottom: 0.5rem;">R2 Cloud Storage</div>';
 
                 if (data.connected) {
-                    statusHtml = `
-                        <div style="display: flex; align-items: center; gap: 1rem;">
+                    statusHtml += `
+                        <div style="display: flex; align-items: center; gap: 0.75rem;">
                             <span class="status-indicator status-online"></span>
                             <div>
-                                <strong style="color: #4ecca3;">Connected to Global Cloud</strong>
-                                <div style="font-size: 0.85rem; color: #888;">Ready to submit sources for review</div>
+                                <strong style="color: #4ecca3;">Connected</strong>
+                                <div style="font-size: 0.8rem; color: #888;">Ready for uploads</div>
                             </div>
                         </div>
                     `;
 
                     if (data.token_status && data.token_status.includes('expiring')) {
                         statusHtml += `
-                            <div class="token-warning" style="margin-top: 1rem;">
+                            <div class="token-warning" style="margin-top: 0.75rem; padding: 0.5rem; font-size: 0.8rem;">
                                 <strong>Token Expiring Soon!</strong>
-                                <div style="font-size: 0.85rem; margin-top: 0.25rem;">
-                                    ${data.token_status} - Contact admin to update credentials
-                                </div>
                             </div>
                         `;
                     }
 
                     container.className = 'status-card connected';
                 } else if (data.configured) {
-                    statusHtml = `
-                        <div style="display: flex; align-items: center; gap: 1rem;">
+                    statusHtml += `
+                        <div style="display: flex; align-items: center; gap: 0.75rem;">
                             <span class="status-indicator status-offline"></span>
                             <div>
                                 <strong style="color: #e94560;">Connection Failed</strong>
-                                <div style="font-size: 0.85rem; color: #888;">${data.error || 'Unable to connect to global cloud'}</div>
+                                <div style="font-size: 0.8rem; color: #888;">${data.error || 'Unable to connect'}</div>
                             </div>
                         </div>
                     `;
                     container.className = 'status-card disconnected';
                 } else {
-                    statusHtml = `
-                        <div style="display: flex; align-items: center; gap: 1rem;">
+                    statusHtml += `
+                        <div style="display: flex; align-items: center; gap: 0.75rem;">
                             <span class="status-indicator status-warning"></span>
                             <div>
                                 <strong style="color: #f9a825;">Not Configured</strong>
-                                <div style="font-size: 0.85rem; color: #888;">
-                                    Global cloud storage not configured. Contact admin for setup.
-                                </div>
+                                <div style="font-size: 0.8rem; color: #888;">Set R2 credentials in .env</div>
                             </div>
                         </div>
                     `;
@@ -464,8 +478,81 @@
 
             } catch (e) {
                 container.innerHTML = `
+                    <div style="font-size: 0.8rem; color: #888; margin-bottom: 0.5rem;">R2 Cloud Storage</div>
                     <div style="color: #e94560;">
-                        Error checking cloud status: ${e.message}
+                        Error: ${e.message}
+                    </div>
+                `;
+                container.className = 'status-card disconnected';
+            }
+        }
+
+        // Check Pinecone status
+        async function checkPineconeStatus() {
+            const container = document.getElementById('pineconeStatus');
+
+            try {
+                const response = await fetch('/useradmin/api/pinecone-status');
+                const data = await response.json();
+
+                let statusHtml = '<div style="font-size: 0.8rem; color: #888; margin-bottom: 0.5rem;">Pinecone Vector DB</div>';
+
+                if (data.connected) {
+                    // Format sources count
+                    const sourceCount = Object.keys(data.sources || {}).length;
+                    const totalVectors = data.total_vectors || 0;
+
+                    statusHtml += `
+                        <div style="display: flex; align-items: center; gap: 0.75rem;">
+                            <span class="status-indicator status-online"></span>
+                            <div>
+                                <strong style="color: #4ecca3;">Connected</strong>
+                                <div style="font-size: 0.8rem; color: #888;">${totalVectors.toLocaleString()} vectors, ${sourceCount} sources</div>
+                            </div>
+                        </div>
+                    `;
+
+                    // Show index name
+                    if (data.index_name) {
+                        statusHtml += `
+                            <div style="font-size: 0.75rem; color: #666; margin-top: 0.5rem;">
+                                Index: ${data.index_name}
+                            </div>
+                        `;
+                    }
+
+                    container.className = 'status-card connected';
+                } else if (data.configured) {
+                    statusHtml += `
+                        <div style="display: flex; align-items: center; gap: 0.75rem;">
+                            <span class="status-indicator status-offline"></span>
+                            <div>
+                                <strong style="color: #e94560;">Connection Failed</strong>
+                                <div style="font-size: 0.8rem; color: #888;">${data.error || 'Unable to connect'}</div>
+                            </div>
+                        </div>
+                    `;
+                    container.className = 'status-card disconnected';
+                } else {
+                    statusHtml += `
+                        <div style="display: flex; align-items: center; gap: 0.75rem;">
+                            <span class="status-indicator status-warning"></span>
+                            <div>
+                                <strong style="color: #f9a825;">Not Configured</strong>
+                                <div style="font-size: 0.8rem; color: #888;">Set PINECONE_API_KEY in .env</div>
+                            </div>
+                        </div>
+                    `;
+                    container.className = 'status-card';
+                }
+
+                container.innerHTML = statusHtml;
+
+            } catch (e) {
+                container.innerHTML = `
+                    <div style="font-size: 0.8rem; color: #888; margin-bottom: 0.5rem;">Pinecone Vector DB</div>
+                    <div style="color: #e94560;">
+                        Error: ${e.message}
                     </div>
                 `;
                 container.className = 'status-card disconnected';
@@ -608,95 +695,24 @@
             }
         }
 
-        // Load submissions with status
-        async function loadCloudBackups() {
-            const container = document.getElementById('cloudBackups');
-
+        // Load submitted sources to track which ones are already uploaded
+        async function loadUploadedSources() {
             try {
                 const response = await fetch('/useradmin/api/cloud-backups');
                 const data = await response.json();
 
-                if (data.error) {
-                    container.innerHTML = `<div class="empty-state">${data.error}</div>`;
-                    return;
-                }
-
-                if (!data.submissions || Object.keys(data.submissions).length === 0) {
-                    container.innerHTML = '<div class="empty-state">No submissions yet. Upload a source to submit it for review.</div>';
-                    return;
-                }
-
-                // Track submitted sources
-                for (const submissionId of Object.keys(data.submissions)) {
-                    const parts = submissionId.split('_');
-                    if (parts.length >= 3) {
-                        const sourceId = parts.slice(2).join('_');
-                        uploadedSources.add(sourceId);
+                if (data.submissions) {
+                    // Track submitted sources so upload buttons show correct state
+                    for (const submissionId of Object.keys(data.submissions)) {
+                        const parts = submissionId.split('_');
+                        if (parts.length >= 3) {
+                            const sourceId = parts.slice(2).join('_');
+                            uploadedSources.add(sourceId);
+                        }
                     }
                 }
-
-                let html = `
-                    <div style="margin-bottom: 1rem; color: #888;">
-                        ${data.total_submissions} submission(s) (${data.total_size_mb} MB total)
-                    </div>
-                    <div class="cloud-files">
-                `;
-
-                for (const [submissionId, info] of Object.entries(data.submissions)) {
-                    const parts = submissionId.split('_');
-                    const sourceId = parts.length >= 3 ? parts.slice(2).join('_') : submissionId;
-
-                    // Status styling
-                    const status = info.status || 'pending_review';
-                    let statusColor, statusText, statusBg;
-
-                    switch(status) {
-                        case 'approved':
-                            statusColor = '#4ecca3';
-                            statusText = 'Approved';
-                            statusBg = '#1a2e1a';
-                            break;
-                        case 'denied':
-                            statusColor = '#e94560';
-                            statusText = 'Denied';
-                            statusBg = '#2e1a1a';
-                            break;
-                        default:
-                            statusColor = '#f9a825';
-                            statusText = 'Pending Review';
-                            statusBg = '#2e2a1a';
-                    }
-
-                    html += `
-                        <div class="cloud-file" style="flex-direction: column; align-items: flex-start; padding: 0.75rem; background: ${statusBg}; border-radius: 6px; margin-bottom: 0.5rem;">
-                            <div style="display: flex; justify-content: space-between; width: 100%;">
-                                <span style="color: #4ecca3; font-weight: 500;">${escapeHtml(sourceId)}</span>
-                                <span style="color: ${statusColor}; font-size: 0.8rem; font-weight: 500;">${statusText}</span>
-                            </div>
-                            <div style="font-size: 0.8rem; color: #888; margin-top: 0.25rem;">
-                                ${info.files.length} file(s), ${info.total_size_mb.toFixed(2)} MB
-                            </div>
-                    `;
-
-                    // Show admin message if present
-                    if (info.admin_message) {
-                        const msgColor = status === 'denied' ? '#e94560' : '#4ecca3';
-                        html += `
-                            <div style="margin-top: 0.5rem; padding: 0.5rem; background: #0f3460; border-left: 3px solid ${msgColor}; border-radius: 4px;">
-                                <div style="font-size: 0.75rem; color: #888;">Admin Message:</div>
-                                <div style="font-size: 0.85rem; color: ${msgColor};">${escapeHtml(info.admin_message)}</div>
-                            </div>
-                        `;
-                    }
-
-                    html += `</div>`;
-                }
-
-                html += '</div>';
-                container.innerHTML = html;
-
             } catch (e) {
-                container.innerHTML = `<div class="empty-state">Error: ${e.message}</div>`;
+                console.error('Failed to load uploaded sources:', e);
             }
         }
 
@@ -718,12 +734,86 @@
             return div.innerHTML;
         }
 
-        // Initialize - load cloud backups first so we know which sources are already submitted
+        // Global admin mode state (from backend)
+        let isGlobalAdmin = false;
+
+        // Check backend admin mode and update UI accordingly
+        async function checkAdminMode() {
+            try {
+                const response = await fetch('/useradmin/api/admin-mode');
+                const data = await response.json();
+                isGlobalAdmin = data.is_global;
+
+                // Show warning banner if not in global mode
+                const banner = document.getElementById('localModeBanner');
+                if (banner) {
+                    banner.style.display = isGlobalAdmin ? 'none' : 'block';
+                }
+
+                // Disable upload buttons if not global admin
+                if (!isGlobalAdmin) {
+                    document.querySelectorAll('.btn-primary').forEach(btn => {
+                        if (btn.textContent.includes('Submit') || btn.textContent.includes('Upload')) {
+                            btn.disabled = true;
+                            btn.title = 'Requires ADMIN_MODE=global';
+                        }
+                    });
+                }
+
+                updateAdminView();
+            } catch (e) {
+                console.error('Failed to check admin mode:', e);
+            }
+        }
+
+        // Initialize - load uploaded sources first so we know which ones are already submitted
+        checkAdminMode();
         checkCloudStatus();
-        loadCloudBackups().then(() => {
+        checkPineconeStatus();
+        loadUploadedSources().then(() => {
             loadSources();
         });
+
+        // Update page title and Pinecone visibility based on admin mode
+        function updateAdminView() {
+            // Use backend admin mode, with localStorage toggle for UI preview only
+            const uiPreview = localStorage.getItem('adminMode') === 'true';
+            const showAsAdmin = isGlobalAdmin || uiPreview;
+
+            const title = document.getElementById('pageTitle');
+            const subtitle = document.getElementById('pageSubtitle');
+            const pineconeLink = document.querySelector('a[href="/useradmin/pinecone"]');
+
+            if (showAsAdmin) {
+                title.textContent = 'Global Admin';
+                subtitle.textContent = 'Manage global cloud backups and user submissions';
+            } else {
+                title.textContent = 'Local Admin';
+                subtitle.textContent = 'Upload verified source backups to R2 cloud storage';
+            }
+
+            if (pineconeLink) {
+                pineconeLink.style.display = showAsAdmin ? '' : 'none';
+            }
+        }
+        updateAdminView();
+
+        // Admin Mode Toggle
+        function toggleAdminMode() {
+            const checkbox = document.getElementById('adminModeCheckbox');
+            const toggle = document.getElementById('adminToggle');
+            const isAdmin = checkbox.checked;
+            localStorage.setItem('adminMode', isAdmin ? 'true' : 'false');
+            toggle.classList.toggle('active', isAdmin);
+            updateAdminView();
+        }
+        function initAdminMode() {
+            const isAdmin = localStorage.getItem('adminMode') === 'true';
+            document.getElementById('adminModeCheckbox').checked = isAdmin;
+            document.getElementById('adminToggle').classList.toggle('active', isAdmin);
+        }
+        initAdminMode();
     </script>
-    <script src="/useradmin/static/job-monitor.js"></script>
+    <script src="/admin/static/job-monitor.js"></script>
 </body>
 </html>

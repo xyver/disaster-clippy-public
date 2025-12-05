@@ -3,10 +3,10 @@ Metadata index for fast tracking of ingested documents.
 Stores lightweight metadata in JSON for quick comparisons without querying the vector DB.
 
 Structure:
-  data/metadata/
-    _master.json         # Master index summarizing all sources
-    appropedia.json      # Documents from appropedia.org
-    akvopedia.json       # Documents from akvopedia.org (future)
+  BACKUP_PATH/
+    _master.json                          # Master index summarizing all sources
+    {source_id}/
+      {source_id}_metadata.json           # Per-source metadata
     ...
 """
 
@@ -167,12 +167,26 @@ class MetadataIndex:
     Lightweight JSON-based index of all ingested documents.
     Organized by domain/source for better management.
 
-    - Each source gets its own JSON file (e.g., appropedia.json)
+    - Each source gets its own JSON file (e.g., {source_id}_metadata.json)
     - Master file (_master.json) summarizes all sources
     - Much faster than querying ChromaDB for sync comparisons
     """
 
-    def __init__(self, index_dir: str = "data/metadata"):
+    def __init__(self, index_dir: str = None):
+        # Use BACKUP_PATH as default
+        if index_dir is None:
+            import os
+            index_dir = os.getenv("BACKUP_PATH", "")
+            if not index_dir:
+                try:
+                    from admin.local_config import get_local_config
+                    config = get_local_config()
+                    index_dir = config.get_backup_folder() or ""
+                except ImportError:
+                    pass
+            if not index_dir:
+                raise ValueError("No backup path configured. Set BACKUP_PATH env var or configure in admin settings.")
+
         self.index_dir = Path(index_dir)
         self.index_dir.mkdir(parents=True, exist_ok=True)
         self.master_file = self.index_dir / "_master.json"
@@ -187,11 +201,6 @@ class MetadataIndex:
                     return json.load(f)
             except (json.JSONDecodeError, IOError):
                 return self._empty_master()
-
-        # Check for legacy single-file index and migrate
-        legacy_file = self.index_dir.parent / "metadata_index.json"
-        if legacy_file.exists():
-            return self._migrate_legacy(legacy_file)
 
         return self._empty_master()
 
@@ -289,64 +298,6 @@ class MetadataIndex:
 
         with open(self.master_file, 'w', encoding='utf-8') as f:
             json.dump(self._master, f, indent=2, ensure_ascii=False)
-
-    def _migrate_legacy(self, legacy_file: Path) -> Dict[str, Any]:
-        """Migrate from v1 single-file format to v2 multi-file format"""
-        print(f"Migrating legacy metadata index to new multi-file format...")
-        try:
-            with open(legacy_file, 'r', encoding='utf-8') as f:
-                old_data = json.load(f)
-
-            # Group documents by source
-            by_source: Dict[str, List[tuple]] = {}
-            for doc_id, doc in old_data.get("documents", {}).items():
-                source = doc.get("source", "unknown")
-                if source not in by_source:
-                    by_source[source] = []
-                by_source[source].append((doc_id, doc))
-
-            # Create new master and source files
-            master = self._empty_master()
-
-            for source, docs in by_source.items():
-                source_data = self._empty_source(source)
-                for doc_id, doc in docs:
-                    # Remove source from doc (redundant in source-specific file)
-                    doc_copy = {k: v for k, v in doc.items() if k != "source"}
-                    source_data["documents"][doc_id] = doc_copy
-
-                # Save source file
-                self._source_cache[source] = source_data
-                self._save_source(source)
-
-                # Update master
-                master["sources"][source] = {
-                    "count": len(docs),
-                    "chars": sum(d.get("char_count", 0) for _, d in docs),
-                    "last_sync": old_data.get("sources", {}).get(source, {}).get("last_sync"),
-                    "file": self._get_source_file(source).name,
-                    "topics": []
-                }
-
-            master["total_documents"] = old_data.get("total_documents", 0)
-            master["total_chars"] = sum(info["chars"] for info in master["sources"].values())
-
-            # Save master
-            self._master = master
-            self._update_master()
-
-            # Rename legacy file as backup
-            backup_path = legacy_file.with_suffix(".json.backup")
-            legacy_file.rename(backup_path)
-            print(f"Migration complete!")
-            print(f"  - Legacy file backed up to: {backup_path}")
-            print(f"  - New structure in: {self.index_dir}")
-            print(f"  - Sources migrated: {list(by_source.keys())}")
-
-            return master
-        except Exception as e:
-            print(f"Migration failed: {e}")
-            return self._empty_master()
 
     def add_document(self, doc: Dict[str, Any]):
         """

@@ -58,21 +58,14 @@ def get_metadata_store(mode: Optional[str] = None) -> MetadataIndex:
     """
     Get metadata index for the current mode.
 
-    The metadata index is always local (for fast comparisons),
-    but the path may vary based on mode.
+    The metadata index uses BACKUP_PATH by default.
     """
     if mode is None:
         mode = os.getenv("VECTOR_DB_MODE", "local").lower()
 
     if mode == "railway":
-        index_dir = os.getenv("RAILWAY_VOLUME_PATH", "/data/metadata")
+        index_dir = os.getenv("RAILWAY_VOLUME_PATH", "/data")
         return MetadataIndex(index_dir=index_dir)
 
-    # Default to local metadata
+    # Default uses BACKUP_PATH (handled by MetadataIndex)
     return MetadataIndex()
-
-
-# Convenience for backwards compatibility
-def create_store(**kwargs):
-    """Alias for get_vector_store"""
-    return get_vector_store(**kwargs)

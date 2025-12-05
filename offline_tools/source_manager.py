@@ -18,6 +18,11 @@ from typing import Dict, Any, Optional, List, Callable
 from datetime import datetime
 from dataclasses import dataclass, asdict
 
+from .schemas import (
+    get_manifest_file, get_metadata_file, get_index_file,
+    get_vectors_file, get_backup_manifest_file
+)
+
 
 @dataclass
 class BackupResult:
@@ -69,14 +74,15 @@ class ValidationResult:
     detected_license: str = ""
     suggested_tags: List[str] = None
 
-    # New schema v2 fields
-    schema_version: int = 1  # 1=legacy, 2=new layered format
-    has_source_metadata: bool = False  # {source_id}_source.json
-    has_documents_file: bool = False  # {source_id}_documents.json
-    has_embeddings_file: bool = False  # {source_id}_embeddings.json
-    has_categories: bool = False  # {source_id}_categories/
+    # Schema v3 fields
+    schema_version: int = 1  # 1=legacy, 2=old layered, 3=new v3 format
+    has_manifest: bool = False  # _manifest.json
+    has_metadata_file: bool = False  # _metadata.json
+    has_index_file: bool = False  # _index.json
+    has_vectors_file: bool = False  # _vectors.json
+    has_backup_manifest: bool = False  # backup_manifest.json
     legacy_files: List[str] = None  # Old format files that need migration
-    redundant_files: List[str] = None  # Files that can be safely deleted (v2 exists)
+    redundant_files: List[str] = None  # Files that can be safely deleted
     needs_migration: bool = False  # True if legacy files present
     has_cleanup_needed: bool = False  # True if redundant files can be deleted
 
@@ -144,16 +150,62 @@ class SourceManager:
         ],
     }
 
-    # Common topic keywords for tag suggestions
+    # Topic keywords for tag suggestions during indexing
+    # These tags help categorize content for search across multiple sources
+    # Format: "tag_name": ["keyword1", "keyword2", ...]
     TOPIC_KEYWORDS = {
-        "water": ["water", "filtration", "purification", "well", "pump", "irrigation"],
-        "solar": ["solar", "photovoltaic", "pv", "sun", "renewable"],
-        "energy": ["energy", "power", "electricity", "generator", "battery"],
-        "food": ["food", "agriculture", "farming", "garden", "crop", "cooking"],
-        "shelter": ["shelter", "housing", "building", "construction", "roof"],
-        "health": ["health", "medical", "medicine", "first aid", "sanitation"],
-        "emergency": ["emergency", "disaster", "survival", "preparedness", "crisis"],
-        "diy": ["diy", "homemade", "build", "make", "construct"],
+        # Water and sanitation
+        "water": ["water", "filtration", "purification", "well", "pump", "irrigation", "rainwater", "cistern", "aquifer", "groundwater"],
+        "sanitation": ["sanitation", "sewage", "latrine", "toilet", "waste", "hygiene", "handwashing"],
+
+        # Energy systems
+        "solar": ["solar", "photovoltaic", "pv panel", "sun power", "solar cooker", "solar oven", "solar still"],
+        "energy": ["energy", "power", "electricity", "generator", "battery", "inverter", "off-grid", "microgrid"],
+        "wind": ["wind turbine", "windmill", "wind power", "wind energy"],
+        "biogas": ["biogas", "methane", "digester", "anaerobic"],
+        "fuel": ["fuel", "gasoline", "diesel", "propane", "wood gas", "charcoal", "firewood", "alcohol fuel"],
+
+        # Food and agriculture
+        "food": ["food", "cooking", "preservation", "canning", "drying", "smoking", "fermenting", "recipe"],
+        "agriculture": ["agriculture", "farming", "garden", "crop", "seed", "soil", "compost", "fertilizer", "permaculture"],
+        "livestock": ["livestock", "chicken", "goat", "rabbit", "cattle", "poultry", "animal husbandry", "beekeeping"],
+        "aquaculture": ["fishing", "aquaculture", "fish farming", "aquaponics"],
+        "foraging": ["foraging", "wild edible", "mushroom", "wild plant", "hunting"],
+
+        # Shelter and construction
+        "shelter": ["shelter", "housing", "tent", "tarp", "emergency shelter"],
+        "construction": ["construction", "building", "masonry", "concrete", "timber", "earthbag", "cob", "adobe", "rammed earth"],
+        "tools": ["tools", "workshop", "forge", "metalwork", "woodwork", "blacksmith"],
+
+        # Health and medical
+        "medical": ["medical", "medicine", "first aid", "trauma", "wound", "infection", "disease", "illness", "health"],
+        "herbal": ["herbal", "medicinal plant", "natural remedy", "herb", "botanical"],
+        "mental-health": ["mental health", "stress", "psychological", "coping", "resilience"],
+        "nutrition": ["nutrition", "vitamin", "mineral", "malnutrition", "diet"],
+
+        # Emergency and disaster types
+        "emergency": ["emergency", "disaster", "survival", "preparedness", "crisis", "evacuation", "bug out"],
+        "fire": ["wildfire", "fire safety", "firefighting", "fire starting", "forest fire"],
+        "earthquake": ["earthquake", "seismic", "tremor", "quake"],
+        "flood": ["flood", "flooding", "flash flood", "levee", "dam"],
+        "hurricane": ["hurricane", "typhoon", "cyclone", "storm surge", "tropical storm"],
+        "nuclear": ["nuclear", "radiation", "fallout", "radioactive", "nbc", "emp"],
+        "pandemic": ["pandemic", "epidemic", "quarantine", "infectious disease", "outbreak"],
+
+        # Skills and knowledge
+        "navigation": ["navigation", "compass", "map", "gps", "orienteering", "wayfinding"],
+        "communication": ["communication", "radio", "ham radio", "amateur radio", "signal", "morse code"],
+        "security": ["security", "self-defense", "protection", "perimeter", "opsec"],
+        "knots": ["knots", "rope", "cordage", "lashing", "splicing"],
+
+        # Technology categories
+        "appropriate-tech": ["appropriate technology", "low tech", "intermediate technology", "sustainable technology"],
+        "electronics": ["electronics", "circuit", "arduino", "raspberry pi", "microcontroller"],
+        "vehicles": ["vehicle", "car", "truck", "bicycle", "boat", "motorcycle", "engine"],
+
+        # Content types
+        "reference": ["reference", "manual", "handbook", "guide", "encyclopedia", "wikipedia"],
+        "how-to": ["how to", "tutorial", "instructions", "step by step", "diy", "homemade", "build your own"],
     }
 
     def __init__(self, backup_path: str = None):
@@ -275,9 +327,236 @@ class SourceManager:
             "source_id": source_id
         }
 
+    def rename_source(self, old_source_id: str, new_source_id: str) -> Dict[str, Any]:
+        """
+        Rename a source ID and all associated files.
+
+        This renames:
+        - The source folder itself
+        - All JSON config/metadata files with source_id prefix
+        - The source_id field inside JSON files
+        - ZIM files (if present)
+        - Updates _master.json entry
+        - Updates ChromaDB collection metadata
+
+        Args:
+            old_source_id: Current source ID
+            new_source_id: New source ID (must be valid slug format)
+
+        Returns:
+            Dict with renamed files, updated references, and any errors
+        """
+        import shutil
+        import re
+
+        # Validate new source ID format (slug: lowercase, alphanumeric, underscores, hyphens)
+        if not re.match(r'^[a-z0-9][a-z0-9_-]*$', new_source_id):
+            return {
+                "success": False,
+                "error": "Invalid source ID format. Use lowercase letters, numbers, underscores, and hyphens. Must start with letter or number.",
+                "old_source_id": old_source_id,
+                "new_source_id": new_source_id
+            }
+
+        if new_source_id == old_source_id:
+            return {
+                "success": False,
+                "error": "New source ID is the same as the old one",
+                "old_source_id": old_source_id,
+                "new_source_id": new_source_id
+            }
+
+        old_path = self.get_source_path(old_source_id)
+        new_path = self.get_source_path(new_source_id)
+
+        if not old_path.exists():
+            return {
+                "success": False,
+                "error": f"Source folder not found: {old_source_id}",
+                "old_source_id": old_source_id,
+                "new_source_id": new_source_id
+            }
+
+        if new_path.exists():
+            return {
+                "success": False,
+                "error": f"Target source ID already exists: {new_source_id}",
+                "old_source_id": old_source_id,
+                "new_source_id": new_source_id
+            }
+
+        renamed_files = []
+        updated_json = []
+        errors = []
+
+        # Step 1: Rename files inside the folder BEFORE renaming the folder
+        try:
+            # Find all files with old_source_id prefix
+            for file_path in old_path.iterdir():
+                if file_path.is_file() and file_path.name.startswith(f"{old_source_id}_"):
+                    # Rename file: old_source_id_xxx.json -> new_source_id_xxx.json
+                    suffix = file_path.name[len(old_source_id):]  # e.g., "_source.json"
+                    new_file_name = f"{new_source_id}{suffix}"
+                    new_file_path = file_path.parent / new_file_name
+
+                    try:
+                        file_path.rename(new_file_path)
+                        renamed_files.append({
+                            "old": file_path.name,
+                            "new": new_file_name,
+                            "type": "config"
+                        })
+                    except Exception as e:
+                        errors.append(f"Failed to rename {file_path.name}: {e}")
+
+                # Also rename ZIM files
+                elif file_path.is_file() and file_path.suffix == ".zim":
+                    if file_path.stem == old_source_id or file_path.stem.startswith(f"{old_source_id}_"):
+                        new_zim_name = f"{new_source_id}.zim"
+                        new_zim_path = file_path.parent / new_zim_name
+
+                        try:
+                            self._force_close_zim_handles(file_path)
+                            file_path.rename(new_zim_path)
+                            renamed_files.append({
+                                "old": file_path.name,
+                                "new": new_zim_name,
+                                "type": "zim"
+                            })
+                        except Exception as e:
+                            errors.append(f"Failed to rename ZIM file {file_path.name}: {e}")
+        except Exception as e:
+            errors.append(f"Error scanning source folder: {e}")
+
+        # Step 2: Update source_id field inside JSON files
+        json_files_to_update = [
+            get_manifest_file(),
+            get_metadata_file(),
+            get_index_file(),
+            get_vectors_file(),
+            get_backup_manifest_file(),
+        ]
+
+        for json_file in json_files_to_update:
+            json_path = old_path / json_file
+            if json_path.exists():
+                try:
+                    with open(json_path, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+
+                    # Update source_id field if present
+                    modified = False
+                    if data.get("source_id") == old_source_id:
+                        data["source_id"] = new_source_id
+                        modified = True
+
+                    # Update name if it matches old source_id
+                    if data.get("name") == old_source_id:
+                        data["name"] = new_source_id.replace("_", " ").replace("-", " ").title()
+                        modified = True
+
+                    if modified:
+                        with open(json_path, 'w', encoding='utf-8') as f:
+                            json.dump(data, f, indent=2)
+                        updated_json.append(json_file)
+
+                except Exception as e:
+                    errors.append(f"Failed to update {json_file}: {e}")
+
+        # Step 3: Rename the folder itself
+        try:
+            old_path.rename(new_path)
+            renamed_files.append({
+                "old": old_source_id,
+                "new": new_source_id,
+                "type": "folder"
+            })
+        except Exception as e:
+            return {
+                "success": False,
+                "error": f"Failed to rename source folder: {e}. Files inside may have been renamed.",
+                "old_source_id": old_source_id,
+                "new_source_id": new_source_id,
+                "renamed_files": renamed_files,
+                "errors": errors
+            }
+
+        # Step 4: Update _master.json
+        master_path = self.backup_path / "_master.json"
+        master_updated = False
+        if master_path.exists():
+            try:
+                with open(master_path, 'r', encoding='utf-8') as f:
+                    master_data = json.load(f)
+
+                sources = master_data.get("sources", {})
+                if old_source_id in sources:
+                    # Move entry to new key
+                    sources[new_source_id] = sources.pop(old_source_id)
+                    sources[new_source_id]["source_id"] = new_source_id
+                    master_data["sources"] = sources
+                    master_data["last_updated"] = datetime.now().isoformat()
+
+                    with open(master_path, 'w', encoding='utf-8') as f:
+                        json.dump(master_data, f, indent=2)
+                    master_updated = True
+
+            except Exception as e:
+                errors.append(f"Failed to update _master.json: {e}")
+
+        # Step 5: Update ChromaDB (delete old, re-add with new source_id)
+        chromadb_updated = False
+        chromadb_count = 0
+        try:
+            from offline_tools.vectordb import get_vector_store
+            store = get_vector_store()
+
+            # Get all documents with old source_id
+            results = store.collection.get(
+                where={"source_id": old_source_id},
+                include=["documents", "metadatas", "embeddings"]
+            )
+
+            if results and results.get("ids"):
+                chromadb_count = len(results["ids"])
+
+                # Update metadata with new source_id
+                new_metadatas = []
+                for meta in results.get("metadatas", []):
+                    meta["source_id"] = new_source_id
+                    new_metadatas.append(meta)
+
+                # Delete old entries
+                store.collection.delete(ids=results["ids"])
+
+                # Re-add with updated metadata
+                store.collection.upsert(
+                    ids=results["ids"],
+                    documents=results.get("documents", []),
+                    metadatas=new_metadatas,
+                    embeddings=results.get("embeddings", [])
+                )
+                chromadb_updated = True
+
+        except Exception as e:
+            errors.append(f"Failed to update ChromaDB: {e}")
+
+        return {
+            "success": len(errors) == 0,
+            "old_source_id": old_source_id,
+            "new_source_id": new_source_id,
+            "renamed_files": renamed_files,
+            "updated_json": updated_json,
+            "master_updated": master_updated,
+            "chromadb_updated": chromadb_updated,
+            "chromadb_documents": chromadb_count,
+            "errors": errors,
+            "message": f"Renamed {old_source_id} to {new_source_id}" if len(errors) == 0 else f"Rename completed with {len(errors)} error(s)"
+        }
+
     def get_expected_files(self, source_id: str, source_type: str = None) -> List[str]:
         """
-        Get list of expected files for a v2 schema source package.
+        Get list of expected files for a source package.
 
         Args:
             source_id: Source identifier
@@ -286,41 +565,51 @@ class SourceManager:
         Returns:
             List of expected filenames (relative to source folder)
         """
+        from .schemas import (
+            get_manifest_file, get_metadata_file, get_index_file,
+            get_vectors_file, get_backup_manifest_file
+        )
+
         if not source_type:
             source_type = self._detect_source_type(source_id)
 
         expected = [
-            f"{source_id}_source.json",      # Source-level metadata
-            f"{source_id}_documents.json",   # Document metadata
-            f"{source_id}_embeddings.json",  # Vector embeddings
-            f"{source_id}_manifest.json",    # Distribution manifest
+            get_manifest_file(),      # _manifest.json
+            get_metadata_file(),      # _metadata.json
+            get_index_file(),         # _index.json
+            get_vectors_file(),       # _vectors.json
         ]
 
         # Add backup file based on type
         if source_type == "zim":
             expected.append(f"{source_id}.zim")
+        elif source_type == "html":
+            expected.append(get_backup_manifest_file())  # backup_manifest.json
 
         return expected
 
     def cleanup_redundant_files(self, source_id: str) -> Dict[str, Any]:
         """
-        Delete legacy v1 files ONLY if v2 equivalents exist.
+        Delete legacy/redundant files from a source folder.
 
         This safely removes redundant files like:
-        - {source_id}_index.json (if _embeddings.json exists)
+        - {source_id}_source.json (if _manifest.json exists)
+        - {source_id}_documents.json (if _metadata.json exists)
+        - {source_id}_embeddings.json (if _vectors.json exists)
+        - {source_id}_index.json (legacy)
+        - {source_id}_manifest.json (merged into _manifest.json)
+        - {source_id}_backup_manifest.json (if backup_manifest.json exists)
 
-        NOTE: _metadata.json and _backup_manifest.json are NOT deleted because
-        they serve different purposes than _documents.json and _manifest.json:
-        - _metadata.json: metadata summary from generate_metadata
-        - _backup_manifest.json: backup scan info from scan_backup
-        - _documents.json: indexed document content
-        - _manifest.json: distribution manifest for packs
-
-        Will NOT delete anything if the source is still in v1 format.
+        Will NOT delete anything if the source is still in legacy format.
 
         Returns:
             Dict with deleted files, kept files, and any errors
         """
+        from .schemas import (
+            get_manifest_file, get_metadata_file, get_index_file,
+            get_vectors_file, get_backup_manifest_file
+        )
+
         source_path = self.get_source_path(source_id)
         deleted = []
         kept = []
@@ -329,13 +618,12 @@ class SourceManager:
         if not source_path.exists():
             return {"deleted": [], "kept": [], "errors": ["Source folder does not exist"], "source_id": source_id}
 
-        # Check if v2 schema files exist - ONLY cleanup if we have v2 format
-        v2_embeddings = source_path / f"{source_id}_embeddings.json"
-        v2_source = source_path / f"{source_id}_source.json"
+        # Check if schema files exist - ONLY cleanup if source is fully indexed
+        manifest_path = source_path / get_manifest_file()
+        vectors_path = source_path / get_vectors_file()
 
-        if not v2_embeddings.exists():
-            # No v2 embeddings file - this source hasn't been indexed yet
-            # DO NOT delete anything
+        if not vectors_path.exists():
+            # No vectors file - this source hasn't been indexed yet
             return {
                 "deleted": [],
                 "kept": [f.name for f in source_path.iterdir()],
@@ -345,10 +633,15 @@ class SourceManager:
                 "freed_mb": 0
             }
 
-        # V2 exists, now we can safely identify redundant legacy files
-        # Only _index.json is truly redundant (replaced by _embeddings.json)
+        # Identify legacy files that can be deleted
         legacy_patterns = [
-            f"{source_id}_index.json",      # Replaced by _embeddings.json
+            f"{source_id}_source.json",           # Replaced by _manifest.json
+            f"{source_id}_documents.json",        # Replaced by _metadata.json
+            f"{source_id}_embeddings.json",       # Replaced by _vectors.json
+            f"{source_id}_index.json",            # Legacy
+            f"{source_id}_manifest.json",         # Merged into _manifest.json
+            f"{source_id}_metadata.json",         # Legacy metadata
+            f"{source_id}_backup_manifest.json",  # Replaced by backup_manifest.json
         ]
 
         # File extensions to always keep (backup content)
@@ -357,15 +650,14 @@ class SourceManager:
         # Directories to always keep (backup content)
         keep_dirs = {'pages', 'pdfs', 'images', 'assets'}
 
-        # V2 schema files and other important files to keep
-        v2_files = {
-            f"{source_id}_source.json",
-            f"{source_id}_documents.json",
-            f"{source_id}_embeddings.json",
-            f"{source_id}_manifest.json",
-            f"{source_id}_metadata.json",         # Metadata summary (from generate_metadata)
-            f"{source_id}_backup_manifest.json",  # Backup scan info (from scan_backup)
-            "_collection.json",                   # PDF collection metadata
+        # Schema files and other important files to keep
+        schema_files = {
+            get_manifest_file(),        # _manifest.json
+            get_metadata_file(),        # _metadata.json
+            get_index_file(),           # _index.json
+            get_vectors_file(),         # _vectors.json
+            get_backup_manifest_file(), # backup_manifest.json
+            "_collection.json",         # PDF collection metadata
         }
 
         # Iterate through files in source folder
@@ -379,8 +671,8 @@ class SourceManager:
             if filename in legacy_patterns:
                 should_keep = False
 
-            # Always keep v2 files
-            if filename in v2_files:
+            # Always keep v3 files
+            if filename in schema_files:
                 should_keep = True
 
             # Always keep backup content by extension
@@ -413,7 +705,7 @@ class SourceManager:
         return {
             "deleted": deleted,
             "kept": kept,
-            "expected": list(v2_files),
+            "expected": list(schema_files),
             "errors": errors,
             "source_id": source_id,
             "freed_mb": round(total_freed, 2)
@@ -501,7 +793,8 @@ class SourceManager:
         }
 
         # Save manifest
-        manifest_path = source_path / f"{source_id}_backup_manifest.json"
+        from .schemas import get_backup_manifest_file
+        manifest_path = source_path / get_backup_manifest_file()
         try:
             with open(manifest_path, 'w', encoding='utf-8') as f:
                 json.dump(manifest, f, indent=2)
@@ -540,7 +833,8 @@ class SourceManager:
         }
 
         # Save manifest
-        manifest_path = source_path / f"{source_id}_backup_manifest.json"
+        from .schemas import get_backup_manifest_file
+        manifest_path = source_path / get_backup_manifest_file()
         try:
             with open(manifest_path, 'w', encoding='utf-8') as f:
                 json.dump(manifest, f, indent=2)
@@ -644,7 +938,8 @@ class SourceManager:
         }
 
         # Save manifest
-        manifest_path = source_path / f"{source_id}_backup_manifest.json"
+        from .schemas import get_backup_manifest_file
+        manifest_path = source_path / get_backup_manifest_file()
         try:
             with open(manifest_path, 'w', encoding='utf-8') as f:
                 json.dump(manifest, f, indent=2)
@@ -1080,7 +1375,7 @@ class SourceManager:
 
         Args:
             source_id: Source identifier
-            source_config: Optional source config from _source.json
+            source_config: Optional source config from _manifest.json
 
         Returns:
             ValidationResult with issues and suggestions
@@ -1109,67 +1404,61 @@ class SourceManager:
             result.issues.append("No backup found (no HTML, ZIM, or PDF files)")
             result.is_valid = False
 
-        # V2 schema file paths
-        documents_file = source_path / f"{source_id}_documents.json"
-        embeddings_file = source_path / f"{source_id}_embeddings.json"
-        source_file = source_path / f"{source_id}_source.json"
+        # Schema file paths
+        manifest_file = source_path / get_manifest_file()
+        metadata_file = source_path / get_metadata_file()
+        index_file = source_path / get_index_file()
+        vectors_file = source_path / get_vectors_file()
+        backup_manifest_file = source_path / get_backup_manifest_file()
 
-        # Legacy v1 file paths (for detection)
-        legacy_metadata = source_path / f"{source_id}_metadata.json"
-        legacy_index = source_path / f"{source_id}_index.json"
-
-        # Check metadata/documents - prefer v2, fall back to v1
-        if documents_file.exists():
+        # Check metadata
+        if metadata_file.exists():
             result.has_metadata = True
             result.has_index = True
             # Verify document count
             try:
-                with open(documents_file, 'r', encoding='utf-8') as f:
+                with open(metadata_file, 'r', encoding='utf-8') as f:
                     docs_data = json.load(f)
-                doc_count = len(docs_data.get("documents", []))
+                doc_count = len(docs_data.get("documents", {}))
                 if doc_count == 0:
                     result.has_metadata = False
-                    result.issues.append("Documents file exists but is empty - run 'Generate Metadata'")
+                    result.issues.append("Metadata file exists but is empty - run 'Create Index'")
                     result.is_valid = False
             except Exception:
                 result.has_metadata = False
-                result.issues.append("Documents file exists but could not be read - run 'Generate Metadata'")
+                result.issues.append("Metadata file exists but could not be read - run 'Create Index'")
                 result.is_valid = False
-        elif legacy_metadata.exists():
-            # Has v1 format only
-            result.has_metadata = True
-            result.has_index = True
-            result.warnings.append("Using legacy v1 metadata - run 'Generate Metadata' to upgrade to v2")
         else:
             result.has_metadata = False
             result.has_index = False
-            result.issues.append("No metadata - run 'Generate Metadata' to create")
+            result.issues.append("No metadata - run 'Create Index' to create")
             result.is_valid = False
 
-        # Check embeddings - prefer v2, fall back to v1
-        if embeddings_file.exists():
+        # Check vectors - prefer v3, fall back to legacy
+        if vectors_file.exists():
             result.has_embeddings = True
             # Verify it has actual content
             try:
-                with open(embeddings_file, 'r', encoding='utf-8') as f:
+                with open(vectors_file, 'r', encoding='utf-8') as f:
                     embed_data = json.load(f)
-                # Check both "vectors" (v2 format) and "embeddings" (legacy) keys
-                embed_count = len(embed_data.get("vectors", embed_data.get("embeddings", [])))
-                # Also check document_count field as fallback
+                embed_count = len(embed_data.get("vectors", {}))
                 if embed_count == 0:
                     embed_count = embed_data.get("document_count", 0)
                 if embed_count == 0:
                     result.has_embeddings = False
-                    result.issues.append("Embeddings file exists but is empty - run 'Create Index'")
+                    result.issues.append("Vectors file exists but is empty - run 'Create Index'")
                     result.is_valid = False
             except Exception:
                 result.has_embeddings = False
-                result.issues.append("Embeddings file exists but could not be read - run 'Create Index'")
+                result.issues.append("Vectors file exists but could not be read - run 'Create Index'")
                 result.is_valid = False
-        elif legacy_index.exists():
-            # Has v1 format only
+        elif legacy_embeddings.exists():
+            # Has legacy format only
             result.has_embeddings = True
-            result.warnings.append("Using legacy v1 embeddings - run 'Create Index' to upgrade to v2")
+            result.warnings.append("Using legacy embeddings format - run 'Create Index' to upgrade")
+        elif legacy_index.exists():
+            result.has_embeddings = True
+            result.warnings.append("Using very old index format - run 'Create Index' to upgrade")
         else:
             result.has_embeddings = False
             result.issues.append("No embeddings - run 'Create Index' to create")
@@ -1219,32 +1508,36 @@ class SourceManager:
                 result.suggested_tags = suggested
                 result.warnings.append(f"Suggested tags: {', '.join(suggested)}")
 
-        # Check v2 format files (already defined above, just set result attributes)
-        categories_dir = source_path / f"{source_id}_categories"
+        # Check v3 format files
+        result.has_manifest = manifest_file.exists()
+        result.has_metadata_file = metadata_file.exists()
+        result.has_index_file = index_file.exists()
+        result.has_vectors_file = vectors_file.exists()
+        result.has_backup_manifest = backup_manifest_file.exists()
 
-        result.has_source_metadata = source_file.exists()
-        result.has_documents_file = documents_file.exists()
-        result.has_embeddings_file = embeddings_file.exists()
-        result.has_categories = categories_dir.exists() and categories_dir.is_dir()
-
-        # Check for legacy files that can be cleaned up ONLY if v2 equivalents exist
-        # This is conservative - we only suggest cleanup for known legacy files
-        # NOTE: _metadata.json and _backup_manifest.json are NOT redundant - they serve
-        # different purposes than _documents.json and _manifest.json
+        # Check for legacy files that can be cleaned up
         legacy_files_to_check = [
-            f"{source_id}_index.json",      # Replaced by _embeddings.json
+            f"{source_id}_source.json",
+            f"{source_id}_documents.json",
+            f"{source_id}_embeddings.json",
+            f"{source_id}_index.json",
+            f"{source_id}_manifest.json",
+            f"{source_id}_backup_manifest.json",
         ]
 
         if source_path.exists():
             for legacy_file in legacy_files_to_check:
                 legacy_path = source_path / legacy_file
                 if legacy_path.exists():
-                    # Only mark as redundant if v2 equivalent exists
-                    if "_index.json" in legacy_file and embeddings_file.exists():
+                    result.legacy_files.append(legacy_file)
+                    # Mark as redundant if v3 equivalent exists
+                    if vectors_file.exists() or metadata_file.exists():
                         result.redundant_files.append(legacy_file)
 
         # Determine schema version
-        if result.has_source_metadata and result.has_documents_file and result.has_embeddings_file:
+        if result.has_manifest and result.has_metadata_file and result.has_vectors_file:
+            result.schema_version = 3
+        elif legacy_source.exists() and legacy_documents.exists() and legacy_embeddings.exists():
             result.schema_version = 2
         else:
             result.schema_version = 1
@@ -1284,10 +1577,10 @@ class SourceManager:
         - Has embeddings file with content
         - Has license specified (not "Unknown")
 
-        SCHEMA v2 (when require_v2=True):
-        - {source_id}_source.json (source-level metadata)
-        - {source_id}_documents.json (document metadata)
-        - {source_id}_embeddings.json (vectors only, no content duplication)
+        SCHEMA v3 (when require_v2=True):
+        - _manifest.json (source-level metadata)
+        - _metadata.json (document metadata)
+        - _vectors.json (vectors only, no content duplication)
 
         RECOMMENDED (warnings only):
         - License is verified
@@ -1295,8 +1588,8 @@ class SourceManager:
 
         Args:
             source_id: Source identifier
-            source_config: Source configuration from _source.json
-            require_v2: If True, require schema v2 format (default False for transition)
+            source_config: Source configuration from _manifest.json
+            require_v2: If True, require schema v3 format
 
         Returns:
             ValidationResult with production_ready flag
@@ -1310,25 +1603,27 @@ class SourceManager:
             result.is_valid = False
             result.production_ready = False
 
-        # Check if schema v2 is required
-        if require_v2 and result.schema_version < 2:
-            result.issues.append("PRODUCTION BLOCKER: Schema v2 format required - run migration first")
+        # Check if schema v3 is required
+        if require_v2 and result.schema_version < 3:
+            result.issues.append("PRODUCTION BLOCKER: Schema v3 format required - run Create Index first")
             result.is_valid = False
             result.production_ready = False
 
             # Add specific missing files
-            if not result.has_source_metadata:
-                result.issues.append(f"Missing: {source_id}_source.json")
-            if not result.has_documents_file:
-                result.issues.append(f"Missing: {source_id}_documents.json")
-            if not result.has_embeddings_file:
-                result.issues.append(f"Missing: {source_id}_embeddings.json")
+            from .schemas import get_manifest_file, get_metadata_file, get_vectors_file
+            if not result.has_manifest:
+                result.issues.append(f"Missing: {get_manifest_file()}")
+            if not result.has_metadata_file:
+                result.issues.append(f"Missing: {get_metadata_file()}")
+            if not result.has_vectors_file:
+                result.issues.append(f"Missing: {get_vectors_file()}")
 
         # Check manifest exists
         source_path = self.get_source_path(source_id)
-        manifest_file = source_path / f"{source_id}_manifest.json"
-        if not manifest_file.exists():
-            result.warnings.append("No distribution manifest - will be created on upload")
+        from .schemas import get_manifest_file
+        manifest_file_path = source_path / get_manifest_file()
+        if not manifest_file_path.exists():
+            result.warnings.append("No manifest - will be created on upload")
 
         return result
 
@@ -1341,10 +1636,14 @@ class SourceManager:
         Returns:
             Detected license string or None
         """
+        from .schemas import get_metadata_file, get_manifest_file, get_backup_manifest_file
+
         source_path = self.get_source_path(source_id)
 
-        # Check metadata file first
-        metadata_file = source_path / f"{source_id}_metadata.json"
+        # Check metadata file first (v3 or legacy)
+        metadata_file = source_path / get_metadata_file()
+        if not metadata_file.exists():
+            metadata_file = source_path / f"{source_id}_metadata.json"
         if metadata_file.exists():
             try:
                 with open(metadata_file, 'r', encoding='utf-8') as f:
@@ -1383,8 +1682,10 @@ class SourceManager:
                 except Exception:
                     pass
 
-        # Check backup manifest for license info
-        manifest = source_path / f"{source_id}_backup_manifest.json"
+        # Check backup manifest for license info (v3 or legacy)
+        manifest = source_path / get_backup_manifest_file()
+        if not manifest.exists():
+            manifest = source_path / f"{source_id}_backup_manifest.json"
         if manifest.exists():
             try:
                 with open(manifest, 'r', encoding='utf-8') as f:
@@ -1438,6 +1739,8 @@ class SourceManager:
         Returns:
             List of suggested tag strings
         """
+        from .schemas import get_metadata_file
+
         source_path = self.get_source_path(source_id)
         suggested = set()
 
@@ -1453,8 +1756,10 @@ class SourceManager:
             except Exception:
                 pass
 
-        # Check metadata for titles
-        metadata_file = source_path / f"{source_id}_metadata.json"
+        # Check metadata for titles (v3 or legacy)
+        metadata_file = source_path / get_metadata_file()
+        if not metadata_file.exists():
+            metadata_file = source_path / f"{source_id}_metadata.json"
         if metadata_file.exists():
             try:
                 with open(metadata_file, 'r', encoding='utf-8') as f:
@@ -1484,7 +1789,7 @@ class SourceManager:
                     suggested.add(tag)
                     break
 
-        return list(suggested)[:5]  # Limit to 5 suggestions
+        return list(suggested)[:10]  # Limit to 10 suggestions
 
     # =========================================================================
     # PACK CREATION
@@ -1497,7 +1802,7 @@ class SourceManager:
 
         Args:
             source_id: Source identifier
-            source_config: Source configuration from _source.json
+            source_config: Source configuration from _manifest.json
             approval_info: Optional approval information
 
         Returns:
@@ -1554,7 +1859,8 @@ class SourceManager:
         )
 
         # Save manifest
-        manifest_path = source_path / f"{source_id}_manifest.json"
+        from .schemas import get_manifest_file
+        manifest_path = source_path / get_manifest_file()
         with open(manifest_path, 'w', encoding='utf-8') as f:
             json.dump(manifest, f, indent=2)
 

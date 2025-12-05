@@ -1,8 +1,12 @@
-# Environment
+# =============================================================================
+# SECURITY - Never commit these
+# =============================================================================
 .env
 *.env.local
 
+# =============================================================================
 # Python
+# =============================================================================
 __pycache__/
 *.py[cod]
 *$py.class
@@ -10,49 +14,39 @@ __pycache__/
 .Python
 venv/
 ENV/
+.venv/
+env/
 
-# ALL data is local/regenerable - never in repo
-data/
-
-# IDE
+# =============================================================================
+# IDE / Editor
+# =============================================================================
 .vscode/
 .idea/
 *.swp
 *.swo
+*.sublime-*
 
-# OS
+# =============================================================================
+# OS Files
+# =============================================================================
 .DS_Store
 Thumbs.db
+desktop.ini
 
+# =============================================================================
 # Logs
-logs/
+# =============================================================================
 *.log
 
-# ============================================
-# PRIVATE COMPONENTS (Maintainer Only)
-# These are excluded from the public repository
-# ============================================
+# =============================================================================
+# Local Data (user-specific, not in repo)
+# =============================================================================
+local_settings.json
+chroma/
+*.db
 
-# Admin dashboard (Streamlit) - has Pinecone write access
-admin/
-
-# Web scrapers - rate-limited APIs, potential for abuse
-scraper/
-
-# CLI tools with elevated access
-ingest.py
-sync.py
-
-# Parent developer docs (describes private tools)
-DEVELOPER-PARENT.md
-
-# Local config with user paths
-config/local_settings.json
-
-# Jobs queue (local state)
-jobs/
-
-# Temp scrape/test files
+# =============================================================================
+# Temporary / Generated Files
+# =============================================================================
 *.csv
-ingest_config.json
-test_*.py
+nul

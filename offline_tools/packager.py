@@ -3,7 +3,7 @@ Shared Pack Tools
 Common functions for pack management used by both admin and useradmin.
 
 Source of truth is the backup folder - sources are discovered from
-{source_id}_source.json files in each source subfolder.
+_manifest.json files in each source subfolder.
 """
 
 from pathlib import Path
@@ -12,6 +12,11 @@ from datetime import datetime
 import json
 import hashlib
 import os
+
+from .schemas import (
+    get_manifest_file, get_metadata_file, get_index_file,
+    get_vectors_file, get_backup_manifest_file, CURRENT_SCHEMA_VERSION
+)
 
 
 # =============================================================================
@@ -70,16 +75,8 @@ def get_backup_path() -> Path:
     backup_path = os.getenv("BACKUP_PATH", "")
     if backup_path:
         return Path(backup_path)
-    return get_project_root() / "data" / "metadata"
 
-
-def get_sources_path(prefer_config: bool = False) -> Path:
-    """
-    DEPRECATED: Sources are now discovered from backup folder.
-    This function is kept for backwards compatibility but returns
-    a path that may not exist.
-    """
-    return get_backup_path() / "sources.json"
+    raise ValueError("No backup path configured. Set BACKUP_PATH env var or configure in admin settings.")
 
 
 # =============================================================================
@@ -185,7 +182,7 @@ def detect_backup_status(source_id: str, backup_folder: Optional[Path] = None) -
 
 def validate_submission_files(files: List[Dict[str, Any]], source_id: str = None) -> Dict[str, Any]:
     """
-    Validate a list of submitted files against the v2 schema requirements.
+    Validate a list of submitted files against the schema requirements.
 
     This is the single source of truth for submission validation, used by:
     - admin/app.py (approve_submission)
@@ -202,9 +199,9 @@ def validate_submission_files(files: List[Dict[str, Any]], source_id: str = None
         - is_valid: bool - Whether submission meets all requirements
         - missing: list - List of missing required items
         - has_backup: bool
+        - has_manifest: bool
         - has_metadata: bool
-        - has_embeddings: bool
-        - has_source_config: bool
+        - has_vectors: bool
         - has_license: bool
         - backup_type: str or None - "zim", "html", "pdf", or "zip"
         - source_id: str - Detected or provided source_id
@@ -214,33 +211,33 @@ def validate_submission_files(files: List[Dict[str, Any]], source_id: str = None
         "is_valid": False,
         "missing": [],
         "has_backup": False,
+        "has_manifest": False,
         "has_metadata": False,
-        "has_embeddings": False,
-        "has_source_config": False,
+        "has_vectors": False,
         "has_license": False,
         "backup_type": None,
         "source_id": source_id,
         "files_found": {
             "backup": None,
+            "manifest": None,
             "metadata": None,
-            "embeddings": None,
-            "source_config": None,
-            "submission_manifest": None,
-            "documents": None
+            "index": None,
+            "vectors": None,
+            "backup_manifest": None,
         }
     }
+
+    # Schema file names
+    manifest_file = get_manifest_file()        # _manifest.json
+    metadata_file = get_metadata_file()        # _metadata.json
+    index_file = get_index_file()              # _index.json
+    vectors_file = get_vectors_file()          # _vectors.json
+    backup_manifest_file = get_backup_manifest_file()  # backup_manifest.json
 
     # Extract filenames and categorize
     for f in files:
         key = f.get("key", f) if isinstance(f, dict) else str(f)
         filename = key.split("/")[-1] if "/" in key else key
-
-        # Try to extract source_id from filename if not provided
-        if not result["source_id"] and "_" in filename:
-            # Pattern: {source_id}_source.json, {source_id}_metadata.json, etc.
-            parts = filename.rsplit("_", 1)
-            if len(parts) == 2 and parts[1] in ["source.json", "metadata.json", "embeddings.json", "documents.json"]:
-                result["source_id"] = parts[0]
 
         # Backup files (.zim or .zip)
         if filename.endswith('.zim'):
@@ -257,38 +254,38 @@ def validate_submission_files(files: List[Dict[str, Any]], source_id: str = None
                 result["backup_type"] = "zip"
             result["files_found"]["backup"] = filename
 
-        # V2 schema: {source_id}_source.json - contains license info
-        elif filename.endswith("_source.json"):
-            result["has_source_config"] = True
-            result["files_found"]["source_config"] = filename
+        # _manifest.json
+        elif filename == manifest_file:
+            result["has_manifest"] = True
+            result["files_found"]["manifest"] = filename
 
-        # V2 schema: {source_id}_metadata.json (or legacy metadata.json)
-        elif filename.endswith("_metadata.json") or filename == "metadata.json":
+        # _metadata.json
+        elif filename == metadata_file:
             result["has_metadata"] = True
             result["files_found"]["metadata"] = filename
 
-        # V2 schema: {source_id}_embeddings.json (or legacy index.json)
-        elif filename.endswith("_embeddings.json") or filename.endswith("_index.json") or filename == "index.json":
-            result["has_embeddings"] = True
-            result["files_found"]["embeddings"] = filename
+        # _index.json
+        elif filename == index_file:
+            result["files_found"]["index"] = filename
 
-        # V2 schema: {source_id}_documents.json
-        elif filename.endswith("_documents.json"):
-            result["files_found"]["documents"] = filename
+        # _vectors.json
+        elif filename == vectors_file:
+            result["has_vectors"] = True
+            result["files_found"]["vectors"] = filename
 
-        # Submission manifest (has source_config embedded)
-        elif filename == "submission_manifest.json" or filename == "manifest.json":
-            result["files_found"]["submission_manifest"] = filename
+        # backup_manifest.json
+        elif filename == backup_manifest_file:
+            result["files_found"]["backup_manifest"] = filename
 
     # Build missing list
     if not result["has_backup"]:
         result["missing"].append("backup file (.zim or .zip)")
+    if not result["has_manifest"]:
+        result["missing"].append(f"manifest file ({manifest_file})")
     if not result["has_metadata"]:
-        result["missing"].append("metadata file")
-    if not result["has_embeddings"]:
-        result["missing"].append("embeddings file (for offline search)")
-    if not result["has_source_config"] and not result["files_found"]["submission_manifest"]:
-        result["missing"].append("source config file")
+        result["missing"].append(f"metadata file ({metadata_file})")
+    if not result["has_vectors"]:
+        result["missing"].append(f"vectors file ({vectors_file})")
 
     # Determine overall validity
     result["is_valid"] = len(result["missing"]) == 0
@@ -304,7 +301,7 @@ def validate_submission_content(
     Validate the content of submission files (after downloading/loading them).
 
     Args:
-        source_config: Loaded source config (from _source.json or submission_manifest.source_config)
+        source_config: Loaded source config (from _manifest.json or submission_manifest.source_config)
         metadata: Optional loaded metadata
 
     Returns:
@@ -359,20 +356,6 @@ def load_sources(prefer_config: bool = False) -> Dict[str, Any]:
     }
 
 
-def save_sources(config: Dict[str, Any], prefer_config: bool = False) -> bool:
-    """
-    DEPRECATED: Sources are now stored in {source_id}_source.json files
-    in the backup folder. This function is a no-op for backwards compatibility.
-
-    To update a source, modify its _source.json file directly.
-
-    Returns:
-        True (always succeeds as no-op)
-    """
-    # No-op - sources are discovered from backup folder
-    return True
-
-
 def load_master_metadata() -> Dict[str, Any]:
     """
     Load the master metadata index from backup folder.
@@ -390,18 +373,6 @@ def load_master_metadata() -> Dict[str, Any]:
             print(f"Warning: Failed to load master metadata: {e}")
 
     return {"total_documents": 0, "sources": {}}
-
-
-def sync_sources_from_master(prefer_config: bool = False) -> bool:
-    """
-    DEPRECATED: No longer needed since sources are discovered from backup folder.
-    Kept for backwards compatibility as a no-op.
-
-    Returns:
-        False (no changes made)
-    """
-    # No-op - sources are discovered from backup folder
-    return False
 
 
 def get_source_sync_status(source_id: str) -> Dict[str, Any]:
@@ -426,8 +397,13 @@ def get_source_sync_status(source_id: str) -> Dict[str, Any]:
         "synced": []
     }
 
-    # Get indexed URLs from metadata
-    metadata_file = backup_path / source_id / f"{source_id}_metadata.json"
+    source_folder = backup_path / source_id
+
+    # Get indexed URLs from metadata (v3 or legacy)
+    metadata_file = source_folder / get_metadata_file()
+    if not metadata_file.exists():
+        metadata_file = source_folder / f"{source_id}_metadata.json"
+
     if metadata_file.exists():
         try:
             with open(metadata_file, 'r', encoding='utf-8') as f:
@@ -440,10 +416,12 @@ def get_source_sync_status(source_id: str) -> Dict[str, Any]:
         except Exception:
             pass
 
-    # Get backed up URLs from backup manifest
-    manifest_file = backup_path / source_id / f"{source_id}_backup_manifest.json"
+    # Get backed up URLs from backup manifest (v3 or legacy)
+    manifest_file = source_folder / get_backup_manifest_file()
     if not manifest_file.exists():
-        manifest_file = backup_path / source_id / "manifest.json"
+        manifest_file = source_folder / f"{source_id}_backup_manifest.json"
+    if not manifest_file.exists():
+        manifest_file = source_folder / "manifest.json"
 
     if manifest_file.exists():
         try:
@@ -554,14 +532,14 @@ def generate_metadata_from_html(
 
 
 def save_metadata(source_id: str, metadata: Dict[str, Any]) -> Path:
-    """Save metadata to the backup folder location"""
+    """Save metadata to the backup folder location (v3 format)"""
     backup_dir = get_backup_path()
     backup_dir.mkdir(parents=True, exist_ok=True)
 
     # Source-specific metadata goes in source subfolder
     source_dir = backup_dir / source_id
     source_dir.mkdir(parents=True, exist_ok=True)
-    metadata_file = source_dir / f"{source_id}_metadata.json"
+    metadata_file = source_dir / get_metadata_file()
     with open(metadata_file, 'w', encoding='utf-8') as f:
         json.dump(metadata, f, indent=2)
 
@@ -601,18 +579,22 @@ def update_master_metadata(source_id: str, metadata: Dict[str, Any]) -> None:
 
 
 def load_metadata(source_id: str) -> Optional[Dict[str, Any]]:
-    """Load metadata for a source from backup folder"""
+    """Load metadata for a source from backup folder (v3 or legacy)"""
     backup_dir = get_backup_path()
-    # Try new location first: backup_path/source_id/source_id_metadata.json
-    metadata_path = backup_dir / source_id / f"{source_id}_metadata.json"
+    source_dir = backup_dir / source_id
+
+    # Try v3 format first
+    metadata_path = source_dir / get_metadata_file()
     if metadata_path.exists():
         with open(metadata_path, 'r', encoding='utf-8') as f:
             return json.load(f)
-    # Fallback to legacy location
-    legacy_path = get_project_root() / "data" / "metadata" / f"{source_id}.json"
+
+    # Try legacy format
+    legacy_path = source_dir / f"{source_id}_metadata.json"
     if legacy_path.exists():
         with open(legacy_path, 'r', encoding='utf-8') as f:
             return json.load(f)
+
     return None
 
 
@@ -777,9 +759,9 @@ def get_source_completeness(source_id: str, backup_folder: str = None) -> Dict[s
     root = get_project_root()
     backup_folder = get_backup_path()
 
-    # Check source config from {source_id}_source.json in backup folder
+    # Check source config from _manifest.json
     if backup_folder:
-        source_file = Path(backup_folder) / source_id / f"{source_id}_source.json"
+        source_file = Path(backup_folder) / source_id / get_manifest_file()
         if source_file.exists():
             try:
                 with open(source_file, 'r', encoding='utf-8') as f:
@@ -846,11 +828,11 @@ def create_pack_manifest(
     approval_info: Dict[str, Any] = None
 ) -> Dict[str, Any]:
     """
-    Create a complete pack manifest for distribution.
+    Create a complete pack manifest for distribution (v3 format).
 
     Args:
         source_id: Source identifier
-        source_config: Source configuration from _source.json
+        source_config: Source configuration from _manifest.json
         metadata: Document metadata
         backup_info: Info about the backup file (type, size)
         approval_info: Optional approval information
@@ -859,34 +841,37 @@ def create_pack_manifest(
         Complete manifest dict
     """
     manifest = {
-        "version": 1,
+        "schema_version": CURRENT_SCHEMA_VERSION,
         "source_id": source_id,
         "created_at": datetime.now().isoformat(),
 
         # Source info (flattened for quick access)
         "name": source_config.get("name", source_id),
         "description": source_config.get("description", ""),
-        "url": source_config.get("base_url", source_config.get("url", "")),
+        "base_url": source_config.get("base_url", source_config.get("url", "")),
         "license": source_config.get("license", "Unknown"),
         "license_verified": source_config.get("license_verified", False),
+        "tags": source_config.get("tags", []),
 
-        # Full source config for local users to import
-        "source_config": source_config,
+        # Stats
+        "total_docs": metadata.get("total_documents", metadata.get("document_count", 0)),
+        "total_chars": metadata.get("total_chars", 0),
 
-        # Pack info
-        "pack_info": {
-            "document_count": metadata.get("total_documents", metadata.get("document_count", 0)),
-            "total_chars": metadata.get("total_chars", 0),
-            "backup_type": backup_info.get("type"),
-            "backup_size_mb": backup_info.get("size_mb", 0)
-        },
+        # Backup info
+        "source_type": backup_info.get("type"),
+        "has_backup": True,
+        "has_metadata": True,
+        "has_index": True,
+        "has_vectors": True,
+        "backup_size_mb": backup_info.get("size_mb", 0),
 
-        # Files in this pack
+        # Schema file names
         "files": {
-            "manifest": "manifest.json",
-            "metadata": "metadata.json",
+            "manifest": get_manifest_file(),      # _manifest.json
+            "metadata": get_metadata_file(),      # _metadata.json
+            "index": get_index_file(),            # _index.json
+            "vectors": get_vectors_file(),        # _vectors.json
             "backup": f"{source_id}.zim" if backup_info.get("type") == "zim" else f"{source_id}-html.zip",
-            "index": "index.json"  # Optional
         }
     }
 

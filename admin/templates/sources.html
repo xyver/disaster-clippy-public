@@ -1,0 +1,482 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sources - Disaster Clippy Admin</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #1a1a2e;
+            color: #eee;
+            min-height: 100vh;
+        }
+        header {
+            background: #16213e;
+            padding: 1rem 2rem;
+            border-bottom: 1px solid #0f3460;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        header h1 { font-size: 1.5rem; color: #e94560; }
+        header p { font-size: 0.9rem; color: #888; margin-top: 0.25rem; }
+        .nav-links { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+        .nav-links a {
+            color: #4ecca3;
+            text-decoration: none;
+            font-size: 0.85rem;
+            padding: 0.5rem 0.75rem;
+            border-radius: 4px;
+            transition: background 0.2s;
+        }
+        .nav-links a:hover { background: #0f3460; }
+        .nav-links a.active { background: #0f3460; color: #e94560; }
+        .nav-divider { width: 1px; background: #0f3460; margin: 0 0.25rem; }
+        .admin-toggle {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.4rem 0.75rem;
+            background: #0f3460;
+            border-radius: 4px;
+            font-size: 0.8rem;
+            color: #888;
+        }
+        .admin-toggle.active { background: #4a1942; color: #e94560; }
+        .admin-toggle input { display: none; }
+        .toggle-slider {
+            width: 36px;
+            height: 18px;
+            background: #1a1a2e;
+            border-radius: 9px;
+            position: relative;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        .toggle-slider::after {
+            content: '';
+            position: absolute;
+            width: 14px;
+            height: 14px;
+            background: #888;
+            border-radius: 50%;
+            top: 2px;
+            left: 2px;
+            transition: all 0.2s;
+        }
+        .admin-toggle.active .toggle-slider { background: #e94560; }
+        .admin-toggle.active .toggle-slider::after { left: 20px; background: #fff; }
+        .container { max-width: 1200px; margin: 0 auto; padding: 2rem; }
+        .section {
+            background: #16213e;
+            border: 1px solid #0f3460;
+            border-radius: 8px;
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+        .section h2 {
+            font-size: 1.1rem;
+            color: #e94560;
+            margin-bottom: 1rem;
+            padding-bottom: 0.5rem;
+            border-bottom: 1px solid #0f3460;
+        }
+        .tabs {
+            display: flex;
+            gap: 0.5rem;
+            margin-bottom: 1rem;
+            border-bottom: 1px solid #0f3460;
+            padding-bottom: 0.5rem;
+        }
+        .tab {
+            padding: 0.5rem 1rem;
+            background: transparent;
+            border: none;
+            color: #888;
+            cursor: pointer;
+            border-radius: 4px 4px 0 0;
+            font-size: 0.9rem;
+        }
+        .tab:hover { color: #4ecca3; }
+        .tab.active { background: #0f3460; color: #e94560; }
+        .sub-nav {
+            display: flex;
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+        }
+        .sub-nav a {
+            color: #4ecca3;
+            text-decoration: none;
+            padding: 0.5rem 1rem;
+            border: 1px solid #0f3460;
+            border-radius: 4px;
+            font-size: 0.85rem;
+        }
+        .sub-nav a:hover { background: #0f3460; }
+        .sub-nav a.active { background: #0f3460; color: #e94560; }
+        .source-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 1rem;
+        }
+        .source-card {
+            background: #1a1a2e;
+            border: 1px solid #0f3460;
+            border-radius: 8px;
+            padding: 1rem;
+        }
+        .source-card h3 { color: #4ecca3; font-size: 1rem; margin-bottom: 0.5rem; }
+        .source-card .meta { font-size: 0.8rem; color: #888; }
+        .status-boxes {
+            display: flex;
+            gap: 0.25rem;
+            margin-top: 0.75rem;
+            flex-wrap: wrap;
+        }
+        .status-box {
+            font-size: 0.65rem;
+            padding: 0.2rem 0.4rem;
+            border-radius: 3px;
+            text-transform: uppercase;
+            font-weight: 500;
+        }
+        .status-box.ok { background: #4ecca320; color: #4ecca3; }
+        .status-box.missing { background: #e9456020; color: #e94560; }
+        .status-box.warning { background: #f9a82520; color: #f9a825; }
+        .source-card .actions {
+            margin-top: 0.75rem;
+            display: flex;
+            gap: 0.5rem;
+        }
+        .source-card .btn-small {
+            padding: 0.4rem 0.8rem;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.8rem;
+        }
+        .source-card .btn-install { background: #4ecca3; color: #1a1a2e; }
+        .source-card .btn-edit { background: #0f3460; color: #4ecca3; }
+        .source-card .btn-edit:hover { background: #1a1a3e; }
+        .placeholder {
+            text-align: center;
+            padding: 3rem;
+            color: #666;
+            font-style: italic;
+        }
+        .loading { text-align: center; padding: 2rem; color: #888; }
+    </style>
+</head>
+<body>
+    <header>
+        <div>
+            <h1>Sources</h1>
+            <p>Manage your content sources and packs</p>
+        </div>
+        <nav class="nav-links">
+            <a href="/useradmin/dashboard">Dashboard</a>
+            <a href="/useradmin/sources" class="active">Sources</a>
+            <a href="/useradmin/jobs">Jobs</a>
+            <a href="/useradmin/cloud">Cloud</a>
+            <a href="/useradmin/settings">Settings</a>
+            <a href="/useradmin/submissions">Submissions</a>
+            <a href="/useradmin/pinecone">Pinecone</a>
+            <a href="/">Chat</a>
+            <span class="nav-divider"></span>
+            <label class="admin-toggle" id="adminToggle" title="Toggle Admin Mode">
+                <input type="checkbox" id="adminModeCheckbox" onchange="toggleAdminMode()">
+                <span>Admin</span>
+                <span class="toggle-slider"></span>
+            </label>
+        </nav>
+    </header>
+
+    <div class="container">
+        <!-- Sub-navigation -->
+        <div class="sub-nav">
+            <a href="/useradmin/sources" class="active">All Sources</a>
+            <a href="/useradmin/sources/tools">Source Tools</a>
+        </div>
+
+        <!-- Tabs for filtering -->
+        <div class="section">
+            <div class="tabs">
+                <button class="tab active" data-filter="all">All</button>
+                <button class="tab" data-filter="installed">Installed</button>
+                <button class="tab" data-filter="available">Available</button>
+                <button class="tab" data-filter="local">Local Only</button>
+            </div>
+
+            <div id="sourcesList" class="source-grid">
+                <div class="loading">Loading sources...</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let allSources = [];
+        let currentFilter = 'all';
+
+        async function loadSources() {
+            const container = document.getElementById('sourcesList');
+            container.innerHTML = '<div class="loading">Loading sources...</div>';
+
+            try {
+                // Fetch local sources
+                const localResp = await fetch('/useradmin/api/local-sources');
+                const localData = await localResp.json();
+                const localSources = localData.sources || [];
+
+                // Fetch cloud/global sources
+                let cloudSources = [];
+                try {
+                    const cloudResp = await fetch('/useradmin/api/cloud-sources');
+                    const cloudData = await cloudResp.json();
+                    cloudSources = cloudData.sources || [];
+                } catch (e) {
+                    console.log('Cloud sources not available:', e);
+                }
+
+                // Build combined list with status
+                const localIds = new Set(localSources.map(s => s.source_id));
+                const cloudIds = new Set(cloudSources.map(s => s.source_id));
+
+                allSources = [];
+
+                // Add local sources with status
+                for (const source of localSources) {
+                    const isInCloud = cloudIds.has(source.source_id);
+                    allSources.push({
+                        ...source,
+                        status: isInCloud ? 'installed' : 'local_only'
+                    });
+                }
+
+                // Add cloud sources that aren't installed locally
+                for (const source of cloudSources) {
+                    if (!localIds.has(source.source_id)) {
+                        allSources.push({
+                            ...source,
+                            status: 'available'
+                        });
+                    }
+                }
+
+                renderSources();
+            } catch (e) {
+                container.innerHTML = '<div class="placeholder">Error loading sources: ' + e.message + '</div>';
+            }
+        }
+
+        function renderSources() {
+            const container = document.getElementById('sourcesList');
+
+            // Filter based on current tab
+            let filtered = allSources;
+            if (currentFilter === 'installed') {
+                filtered = allSources.filter(s => s.status === 'installed');
+            } else if (currentFilter === 'available') {
+                filtered = allSources.filter(s => s.status === 'available');
+            } else if (currentFilter === 'local') {
+                filtered = allSources.filter(s => s.status === 'local_only');
+            }
+
+            if (filtered.length === 0) {
+                let message = 'No sources found.';
+                if (currentFilter === 'installed') {
+                    message = 'No installed sources. Sources from the global cloud that you have locally appear here.';
+                } else if (currentFilter === 'available') {
+                    message = 'No available sources from the global cloud. Check your cloud connection.';
+                } else if (currentFilter === 'local') {
+                    message = 'No local-only sources. Custom sources you create that are not in the global cloud appear here.';
+                }
+                container.innerHTML = `<div class="placeholder">${message}</div>`;
+                return;
+            }
+
+            container.innerHTML = filtered.map(source => {
+                // Status badge
+                let statusBadge = '';
+                let statusColor = '#888';
+                if (source.status === 'installed') {
+                    statusBadge = 'Installed';
+                    statusColor = '#4ecca3';
+                } else if (source.status === 'available') {
+                    statusBadge = 'Available';
+                    statusColor = '#f9a825';
+                } else if (source.status === 'local_only') {
+                    statusBadge = 'Local Only';
+                    statusColor = '#888';
+                }
+
+                // Build status boxes for local sources
+                let statusBoxesHtml = '';
+                if (source.status !== 'available') {
+                    const hasConfig = source.has_config !== false;
+                    const hasBackup = source.has_backup !== false;
+                    const hasMetadata = source.has_metadata === true;
+                    const hasEmbeddings = source.has_embeddings === true;
+                    const hasLicense = source.license && source.license !== 'Unknown';
+
+                    statusBoxesHtml = `
+                        <div class="status-boxes">
+                            <span class="status-box ${hasConfig ? 'ok' : 'missing'}">Config</span>
+                            <span class="status-box ${hasBackup ? 'ok' : 'missing'}">Backup</span>
+                            <span class="status-box ${hasMetadata ? 'ok' : 'missing'}">Metadata</span>
+                            <span class="status-box ${hasEmbeddings ? 'ok' : 'warning'}">Index</span>
+                            <span class="status-box ${hasLicense ? 'ok' : 'warning'}">License</span>
+                        </div>
+                    `;
+                }
+
+                return `
+                    <div class="source-card">
+                        <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 0.5rem;">
+                            <h3 style="margin: 0;">${escapeHtml(source.name || source.source_id)}</h3>
+                            <span style="font-size: 0.7rem; padding: 0.2rem 0.5rem; background: ${statusColor}20; color: ${statusColor}; border-radius: 3px;">${statusBadge}</span>
+                        </div>
+                        <div class="meta">
+                            <div>${(source.document_count || 0).toLocaleString()} documents</div>
+                            ${source.backup_type ? `<div>${source.backup_type} backup</div>` : ''}
+                            <div>${source.license || 'Unknown license'}</div>
+                        </div>
+                        ${statusBoxesHtml}
+                        <div class="actions">
+                            ${source.status === 'available' ? `
+                                <button class="btn-small btn-install" onclick="installSource('${source.source_id}')">
+                                    Install
+                                </button>
+                            ` : `
+                                <button class="btn-small btn-edit" onclick="window.location.href='/useradmin/sources/tools?source=${source.source_id}'">
+                                    Edit
+                                </button>
+                            `}
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function escapeHtml(text) {
+            if (!text) return '';
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        async function installSource(sourceId) {
+            // Find the button and disable it
+            const btn = event.target;
+            const originalText = btn.textContent;
+            btn.disabled = true;
+            btn.textContent = 'Starting...';
+            btn.style.opacity = '0.7';
+
+            try {
+                const response = await fetch('/useradmin/api/download-pack', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ source_id: sourceId })
+                });
+
+                const data = await response.json();
+
+                if (response.ok && data.status === 'submitted') {
+                    // Job submitted successfully - show progress
+                    btn.textContent = 'Downloading...';
+                    pollJobStatus(data.job_id, btn, sourceId, originalText);
+                } else if (response.status === 409) {
+                    // Job already running
+                    alert('A download is already in progress for this source.');
+                    btn.textContent = originalText;
+                    btn.disabled = false;
+                    btn.style.opacity = '1';
+                } else {
+                    alert('Failed to start download: ' + (data.detail || 'Unknown error'));
+                    btn.textContent = originalText;
+                    btn.disabled = false;
+                    btn.style.opacity = '1';
+                }
+            } catch (e) {
+                alert('Error: ' + e.message);
+                btn.textContent = originalText;
+                btn.disabled = false;
+                btn.style.opacity = '1';
+            }
+        }
+
+        async function pollJobStatus(jobId, btn, sourceId, originalText) {
+            try {
+                const response = await fetch(`/useradmin/api/jobs/${jobId}`);
+                const job = await response.json();
+
+                if (job.status === 'running' || job.status === 'pending') {
+                    // Still running - update button with progress
+                    const progress = job.progress || 0;
+                    btn.textContent = `${progress}%`;
+                    setTimeout(() => pollJobStatus(jobId, btn, sourceId, originalText), 1000);
+                } else if (job.status === 'completed') {
+                    // Success! Update UI
+                    btn.textContent = 'Installed';
+                    btn.style.background = '#0f3460';
+                    btn.style.color = '#4ecca3';
+
+                    // Refresh sources list after a moment
+                    setTimeout(() => {
+                        loadSources();
+                    }, 1500);
+                } else {
+                    // Failed
+                    alert('Download failed: ' + (job.error || 'Unknown error'));
+                    btn.textContent = originalText;
+                    btn.disabled = false;
+                    btn.style.opacity = '1';
+                }
+            } catch (e) {
+                // Polling error - try again
+                setTimeout(() => pollJobStatus(jobId, btn, sourceId, originalText), 2000);
+            }
+        }
+
+        // Tab switching
+        document.querySelectorAll('.tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                tab.classList.add('active');
+                currentFilter = tab.dataset.filter;
+                renderSources();
+            });
+        });
+
+        loadSources();
+
+        // Hide Pinecone link if not admin
+        function updatePineconeVisibility() {
+            const isAdmin = localStorage.getItem('adminMode') === 'true';
+            const pineconeLink = document.querySelector('a[href="/useradmin/pinecone"]');
+            if (pineconeLink) {
+                pineconeLink.style.display = isAdmin ? '' : 'none';
+            }
+        }
+        updatePineconeVisibility();
+
+        // Admin Mode Toggle
+        function toggleAdminMode() {
+            const checkbox = document.getElementById('adminModeCheckbox');
+            const toggle = document.getElementById('adminToggle');
+            const isAdmin = checkbox.checked;
+            localStorage.setItem('adminMode', isAdmin ? 'true' : 'false');
+            toggle.classList.toggle('active', isAdmin);
+            updatePineconeVisibility();
+        }
+        function initAdminMode() {
+            const isAdmin = localStorage.getItem('adminMode') === 'true';
+            document.getElementById('adminModeCheckbox').checked = isAdmin;
+            document.getElementById('adminToggle').classList.toggle('active', isAdmin);
+        }
+        initAdminMode();
+    </script>
+</body>
+</html>

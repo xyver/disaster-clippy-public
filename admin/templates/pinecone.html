@@ -1,0 +1,496 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pinecone - Disaster Clippy Admin</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #1a1a2e;
+            color: #eee;
+            min-height: 100vh;
+        }
+        header {
+            background: #16213e;
+            padding: 1rem 2rem;
+            border-bottom: 1px solid #0f3460;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        header h1 { font-size: 1.5rem; color: #e94560; }
+        header p { font-size: 0.9rem; color: #888; margin-top: 0.25rem; }
+        .nav-links { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+        .nav-links a {
+            color: #4ecca3;
+            text-decoration: none;
+            font-size: 0.85rem;
+            padding: 0.5rem 0.75rem;
+            border-radius: 4px;
+            transition: background 0.2s;
+        }
+        .nav-links a:hover { background: #0f3460; }
+        .nav-links a.active { background: #0f3460; color: #e94560; }
+        .nav-divider { width: 1px; background: #0f3460; margin: 0 0.25rem; }
+        .admin-toggle { display: flex; align-items: center; gap: 0.5rem; padding: 0.4rem 0.75rem; background: #0f3460; border-radius: 4px; font-size: 0.8rem; color: #888; }
+        .admin-toggle.active { background: #4a1942; color: #e94560; }
+        .admin-toggle input { display: none; }
+        .toggle-slider { width: 36px; height: 18px; background: #1a1a2e; border-radius: 9px; position: relative; cursor: pointer; transition: background 0.2s; }
+        .toggle-slider::after { content: ''; position: absolute; width: 14px; height: 14px; background: #888; border-radius: 50%; top: 2px; left: 2px; transition: all 0.2s; }
+        .admin-toggle.active .toggle-slider { background: #e94560; }
+        .admin-toggle.active .toggle-slider::after { left: 20px; background: #fff; }
+        .container { max-width: 1200px; margin: 0 auto; padding: 2rem; }
+        .section {
+            background: #16213e;
+            border: 1px solid #0f3460;
+            border-radius: 8px;
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+        .section h2 {
+            font-size: 1.1rem;
+            color: #e94560;
+            margin-bottom: 1rem;
+            padding-bottom: 0.5rem;
+            border-bottom: 1px solid #0f3460;
+        }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+            margin-bottom: 1rem;
+        }
+        .stat-card {
+            background: #1a1a2e;
+            border: 1px solid #0f3460;
+            border-radius: 8px;
+            padding: 1rem;
+            text-align: center;
+        }
+        .stat-value { font-size: 1.5rem; color: #4ecca3; font-weight: 600; }
+        .stat-label { font-size: 0.8rem; color: #888; margin-top: 0.25rem; }
+        .status-indicator {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            margin-right: 0.5rem;
+        }
+        .status-connected { background: #4ecca3; }
+        .status-disconnected { background: #e94560; }
+        .source-list { display: flex; flex-direction: column; gap: 0.5rem; }
+        .source-item {
+            background: #1a1a2e;
+            border: 1px solid #0f3460;
+            border-radius: 4px;
+            padding: 0.75rem 1rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .source-name { color: #4ecca3; }
+        .source-count { color: #888; font-size: 0.9rem; }
+        .placeholder {
+            text-align: center;
+            padding: 2rem;
+            color: #666;
+            font-style: italic;
+        }
+        .btn {
+            padding: 0.5rem 1rem;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.85rem;
+            transition: opacity 0.2s;
+        }
+        .btn:hover { opacity: 0.8; }
+        .btn-primary { background: #4ecca3; color: #1a1a2e; }
+        .btn-secondary { background: #0f3460; color: #eee; }
+        .btn-danger { background: #e94560; color: #fff; }
+        .actions { display: flex; gap: 0.5rem; margin-top: 1rem; }
+    </style>
+</head>
+<body>
+    <header>
+        <div>
+            <h1>Pinecone</h1>
+            <p>Vector database settings and sync</p>
+        </div>
+        <nav class="nav-links">
+            <a href="/useradmin/dashboard">Dashboard</a>
+            <a href="/useradmin/sources">Sources</a>
+            <a href="/useradmin/jobs">Jobs</a>
+            <a href="/useradmin/cloud">Cloud</a>
+            <a href="/useradmin/settings">Settings</a>
+            <a href="/useradmin/submissions">Submissions</a>
+            <a href="/useradmin/pinecone" class="active">Pinecone</a>
+            <a href="/">Chat</a>
+            <span class="nav-divider"></span>
+            <label class="admin-toggle" id="adminToggle" title="Toggle Admin Mode">
+                <input type="checkbox" id="adminModeCheckbox" onchange="toggleAdminMode()">
+                <span>Admin</span>
+                <span class="toggle-slider"></span>
+            </label>
+        </nav>
+    </header>
+
+    <!-- Local Mode Warning Banner -->
+    <div id="localModeBanner" style="display: none; background: #e94560; color: white; padding: 0.75rem 2rem; text-align: center;">
+        <strong>Read-Only Mode:</strong> Pinecone sync requires ADMIN_MODE=global. You can view status but not push.
+    </div>
+
+    <div class="container">
+        <!-- Connection Status -->
+        <div class="section">
+            <h2>Connection Status</h2>
+            <div id="connectionStatus" class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-value" id="statusIndicator">...</div>
+                    <div class="stat-label">Status</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="indexName">-</div>
+                    <div class="stat-label">Index Name</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="vectorCount">-</div>
+                    <div class="stat-label">Total Vectors</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="sourceCount">-</div>
+                    <div class="stat-label">Sources</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Sources in Pinecone -->
+        <div class="section">
+            <h2>Indexed Sources</h2>
+            <div id="sourcesList" class="source-list">
+                <div class="placeholder">Loading...</div>
+            </div>
+        </div>
+
+        <!-- Sync Operations -->
+        <div class="section">
+            <h2>Sync Operations</h2>
+            <p style="color: #888; margin-bottom: 1rem;">
+                Sync local ChromaDB vectors to Pinecone for cloud-based search.
+            </p>
+
+            <!-- Sync Status Panel -->
+            <div id="syncPanel" style="background: #1a1a2e; border: 1px solid #0f3460; border-radius: 6px; padding: 1rem; margin-bottom: 1rem;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
+                    <span style="color: #888; font-size: 0.85rem;">Sync Status</span>
+                    <button class="btn btn-secondary" style="padding: 0.3rem 0.6rem; font-size: 0.75rem;" onclick="compareWithPinecone()">Compare</button>
+                </div>
+                <div id="syncComparison" style="font-size: 0.9rem;">
+                    <span style="color: #666;">Click Compare to check sync status</span>
+                </div>
+            </div>
+
+            <div class="actions">
+                <button class="btn btn-primary" id="btnSync" onclick="syncToPinecone(false)">Dry Run</button>
+                <button class="btn btn-success" id="btnSyncCommit" onclick="syncToPinecone(true)" style="background: #4ecca3; color: #1a1a2e;">Push to Pinecone</button>
+                <button class="btn btn-secondary" onclick="refreshStatus()">Refresh Status</button>
+            </div>
+            <div id="syncStatus" style="margin-top: 1rem; color: #888;"></div>
+        </div>
+
+        <!-- Danger Zone -->
+        <div class="section" style="border-color: #e94560;">
+            <h2 style="color: #e94560;">Danger Zone</h2>
+            <p style="color: #888; margin-bottom: 1rem;">
+                These operations cannot be undone. Use with caution.
+            </p>
+            <div class="actions">
+                <button class="btn btn-danger" onclick="deleteNamespace()">Delete Namespace</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Check backend admin mode and update UI
+        let isGlobalAdmin = false;
+
+        async function checkAdminMode() {
+            try {
+                const response = await fetch('/useradmin/api/admin-mode');
+                const data = await response.json();
+                isGlobalAdmin = data.is_global;
+
+                // Show warning banner if not in global mode
+                const banner = document.getElementById('localModeBanner');
+                if (banner) {
+                    banner.style.display = isGlobalAdmin ? 'none' : 'block';
+                }
+
+                // Disable push/delete buttons if not global admin
+                if (!isGlobalAdmin) {
+                    const btnSync = document.getElementById('btnSync');
+                    const btnCommit = document.getElementById('btnSyncCommit');
+                    const btnDelete = document.querySelector('.btn-danger');
+
+                    if (btnSync) {
+                        btnSync.disabled = true;
+                        btnSync.title = 'Requires ADMIN_MODE=global';
+                    }
+                    if (btnCommit) {
+                        btnCommit.disabled = true;
+                        btnCommit.title = 'Requires ADMIN_MODE=global';
+                    }
+                    if (btnDelete) {
+                        btnDelete.disabled = true;
+                        btnDelete.title = 'Requires ADMIN_MODE=global';
+                    }
+                }
+            } catch (e) {
+                console.error('Failed to check admin mode:', e);
+            }
+        }
+
+        // Initialize
+        checkAdminMode();
+
+        async function checkStatus() {
+            try {
+                const resp = await fetch('/useradmin/api/pinecone-status');
+                const data = await resp.json();
+
+                if (data.configured && data.connected) {
+                    document.getElementById('statusIndicator').innerHTML =
+                        '<span class="status-indicator status-connected"></span>Connected';
+                    document.getElementById('indexName').textContent = data.index_name || '-';
+                    document.getElementById('vectorCount').textContent =
+                        (data.total_vectors || 0).toLocaleString();
+
+                    const sources = data.sources || {};
+                    const sourceCount = Object.keys(sources).length;
+                    document.getElementById('sourceCount').textContent = sourceCount;
+
+                    // Populate sources list
+                    const sourcesList = document.getElementById('sourcesList');
+                    if (sourceCount === 0) {
+                        sourcesList.innerHTML = '<div class="placeholder">No sources indexed in Pinecone</div>';
+                    } else {
+                        sourcesList.innerHTML = Object.entries(sources).map(([name, count]) => `
+                            <div class="source-item">
+                                <span class="source-name">${name}</span>
+                                <span class="source-count">${count.toLocaleString()} vectors</span>
+                            </div>
+                        `).join('');
+                    }
+                } else {
+                    document.getElementById('statusIndicator').innerHTML =
+                        '<span class="status-indicator status-disconnected"></span>Not Connected';
+                    document.getElementById('indexName').textContent = '-';
+                    document.getElementById('vectorCount').textContent = '-';
+                    document.getElementById('sourceCount').textContent = '-';
+                    document.getElementById('sourcesList').innerHTML =
+                        `<div class="placeholder">${data.error || 'Pinecone not configured'}</div>`;
+                }
+            } catch (e) {
+                document.getElementById('statusIndicator').innerHTML =
+                    '<span class="status-indicator status-disconnected"></span>Error';
+                document.getElementById('sourcesList').innerHTML =
+                    '<div class="placeholder">Failed to check Pinecone status</div>';
+            }
+        }
+
+        function refreshStatus() {
+            document.getElementById('statusIndicator').textContent = '...';
+            checkStatus();
+        }
+
+        async function compareWithPinecone() {
+            const container = document.getElementById('syncComparison');
+            container.innerHTML = '<span style="color: #888;">Comparing...</span>';
+
+            try {
+                const response = await fetch('/useradmin/api/pinecone-compare', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({})
+                });
+
+                const data = await response.json();
+
+                if (!response.ok) {
+                    container.innerHTML = `<span style="color: #e94560;">Error: ${data.error || 'Compare failed'}</span>`;
+                    return;
+                }
+
+                // Build comparison display
+                let html = '<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 0.75rem;">';
+
+                html += `
+                    <div style="text-align: center;">
+                        <div style="font-size: 1.25rem; color: #4ecca3;">${data.in_sync}</div>
+                        <div style="font-size: 0.75rem; color: #888;">In Sync</div>
+                    </div>
+                    <div style="text-align: center;">
+                        <div style="font-size: 1.25rem; color: ${data.to_push > 0 ? '#f9a825' : '#888'};">${data.to_push}</div>
+                        <div style="font-size: 0.75rem; color: #888;">To Push</div>
+                    </div>
+                    <div style="text-align: center;">
+                        <div style="font-size: 1.25rem; color: ${data.to_update > 0 ? '#f9a825' : '#888'};">${data.to_update}</div>
+                        <div style="font-size: 0.75rem; color: #888;">To Update</div>
+                    </div>
+                    <div style="text-align: center;">
+                        <div style="font-size: 1.25rem; color: ${data.conflicts > 0 ? '#e94560' : '#888'};">${data.conflicts}</div>
+                        <div style="font-size: 0.75rem; color: #888;">Conflicts</div>
+                    </div>
+                `;
+
+                html += '</div>';
+
+                // Show local vs remote totals
+                html += `<div style="margin-top: 0.75rem; font-size: 0.8rem; color: #666;">
+                    Local: ${data.local_total} docs | Remote: ${data.remote_total} docs
+                </div>`;
+
+                // Show conflict details if any
+                if (data.conflicts > 0 && data.conflict_details) {
+                    html += `<div style="margin-top: 0.5rem; padding: 0.5rem; background: #2e1a1a; border-radius: 4px; font-size: 0.8rem;">
+                        <strong style="color: #e94560;">Conflicts:</strong><br>`;
+                    data.conflict_details.forEach(c => {
+                        html += `<span style="color: #f9a825;">${c.title || c.doc_id}</span><br>`;
+                    });
+                    html += '</div>';
+                }
+
+                container.innerHTML = html;
+
+            } catch (e) {
+                container.innerHTML = `<span style="color: #e94560;">Error: ${e.message}</span>`;
+            }
+        }
+
+        async function syncToPinecone(commit = false) {
+            const statusDiv = document.getElementById('syncStatus');
+            const btnSync = document.getElementById('btnSync');
+            const btnCommit = document.getElementById('btnSyncCommit');
+
+            btnSync.disabled = true;
+            btnCommit.disabled = true;
+
+            statusDiv.innerHTML = commit
+                ? '<span style="color: #f9a825;">Pushing to Pinecone... This may take a while.</span>'
+                : '<span style="color: #888;">Running dry run...</span>';
+
+            try {
+                const response = await fetch('/useradmin/api/pinecone-push', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ dry_run: !commit })
+                });
+
+                const data = await response.json();
+
+                if (!response.ok) {
+                    if (response.status === 409) {
+                        // Conflicts
+                        statusDiv.innerHTML = `<span style="color: #e94560;">
+                            Conflicts detected! Remote has newer versions of some documents.<br>
+                            Resolve conflicts before pushing.
+                        </span>`;
+                    } else {
+                        statusDiv.innerHTML = `<span style="color: #e94560;">Error: ${data.error || 'Push failed'}</span>`;
+                    }
+                    return;
+                }
+
+                // Success
+                let msg = commit ? 'Push complete!' : 'Dry run complete (no changes made)';
+                let color = commit ? '#4ecca3' : '#888';
+
+                statusDiv.innerHTML = `
+                    <span style="color: ${color};">${msg}</span><br>
+                    <span style="color: #888; font-size: 0.85rem;">
+                        Pushed: ${data.pushed} | Updated: ${data.updated} | Errors: ${data.errors || 0}
+                    </span>
+                `;
+
+                if (commit && (data.pushed > 0 || data.updated > 0)) {
+                    // Refresh status after successful push
+                    setTimeout(() => {
+                        checkStatus();
+                        compareWithPinecone();
+                    }, 1000);
+                }
+
+            } catch (e) {
+                statusDiv.innerHTML = `<span style="color: #e94560;">Error: ${e.message}</span>`;
+            } finally {
+                btnSync.disabled = false;
+                btnCommit.disabled = false;
+            }
+        }
+
+        async function deleteNamespace() {
+            const vectorCount = document.getElementById('vectorCount').textContent;
+
+            if (!confirm(`Are you sure you want to delete ALL vectors in this namespace?\n\nThis will delete ${vectorCount} vectors.\n\nThis action CANNOT be undone!`)) {
+                return;
+            }
+
+            // Double confirmation
+            const confirmText = prompt('Type "DELETE" to confirm:');
+            if (confirmText !== 'DELETE') {
+                alert('Deletion cancelled.');
+                return;
+            }
+
+            try {
+                const response = await fetch('/useradmin/api/pinecone-namespace', {
+                    method: 'DELETE'
+                });
+
+                const data = await response.json();
+
+                if (!response.ok) {
+                    alert('Error: ' + (data.error || 'Delete failed'));
+                    return;
+                }
+
+                alert(data.message || 'Namespace deleted successfully');
+                checkStatus();  // Refresh
+
+            } catch (e) {
+                alert('Error: ' + e.message);
+            }
+        }
+
+        checkStatus();
+
+        // Hide Pinecone link if not admin
+        function updatePineconeVisibility() {
+            const isAdmin = localStorage.getItem('adminMode') === 'true';
+            const pineconeLink = document.querySelector('a[href="/useradmin/pinecone"]');
+            if (pineconeLink) {
+                pineconeLink.style.display = isAdmin ? '' : 'none';
+            }
+        }
+        updatePineconeVisibility();
+
+        // Admin Mode Toggle
+        function toggleAdminMode() {
+            const checkbox = document.getElementById('adminModeCheckbox');
+            const toggle = document.getElementById('adminToggle');
+            const isAdmin = checkbox.checked;
+            localStorage.setItem('adminMode', isAdmin ? 'true' : 'false');
+            toggle.classList.toggle('active', isAdmin);
+            updatePineconeVisibility();
+        }
+        function initAdminMode() {
+            const isAdmin = localStorage.getItem('adminMode') === 'true';
+            document.getElementById('adminModeCheckbox').checked = isAdmin;
+            document.getElementById('adminToggle').classList.toggle('active', isAdmin);
+        }
+        initAdminMode();
+    </script>
+</body>
+</html>

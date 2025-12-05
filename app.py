@@ -28,6 +28,7 @@ except ImportError:
     ANTHROPIC_AVAILABLE = False
 
 from offline_tools.vectordb import get_vector_store as create_vector_store, MetadataIndex, DOC_TYPE_GUIDE, DOC_TYPE_ARTICLE, DOC_TYPE_PRODUCT, DOC_TYPE_ACADEMIC
+from offline_tools.schemas import get_manifest_file
 
 # Import admin panel
 from admin import router as admin_router
@@ -315,7 +316,7 @@ async def get_sources():
     stats = store.get_stats()
     sources_counts = stats.get("sources", {})
 
-    # Load source names from _source.json files in backup folder
+    # Load source names from _manifest.json files in backup folder
     from admin.local_config import get_local_config
     local_config = get_local_config()
     backup_folder = local_config.get_backup_folder()
@@ -327,10 +328,10 @@ async def get_sources():
             for source_folder in backup_path.iterdir():
                 if source_folder.is_dir():
                     source_id = source_folder.name
-                    source_file = source_folder / f"{source_id}_source.json"
-                    if source_file.exists():
+                    manifest_file = source_folder / get_manifest_file()
+                    if manifest_file.exists():
                         try:
-                            with open(source_file) as f:
+                            with open(manifest_file) as f:
                                 source_data = json.load(f)
                                 source_names[source_id] = source_data.get("name", source_id)
                         except Exception:
@@ -828,7 +829,7 @@ async def ingest_content(request: IngestRequest, _admin: bool = Depends(verify_a
     For MVP, supports Appropedia.
     Requires admin API key.
     """
-    from scraper import ApropediaScraper
+    from offline_tools.scraper import ApropediaScraper
 
     if request.source.lower() != "appropedia":
         return JSONResponse(
@@ -866,7 +867,7 @@ async def scan_database():
     Scan database and compare with config to show sync status.
     """
     import json
-    from scraper import ApropediaScraper
+    from offline_tools.scraper import ApropediaScraper
 
     config_path = BASE_DIR / "ingest_config.json"
     if not config_path.exists():
@@ -952,7 +953,7 @@ async def sync_from_config(clear: bool = False, smart: bool = True, _admin: bool
     - clear=true: Clear DB first, then sync all
     """
     import json
-    from scraper import ApropediaScraper
+    from offline_tools.scraper import ApropediaScraper
 
     config_path = BASE_DIR / "ingest_config.json"
     if not config_path.exists():
@@ -1164,7 +1165,7 @@ _source_base_urls = {}
 
 
 def _get_source_base_url(source_id: str) -> Optional[str]:
-    """Get the base_url for a source from _source.json or known mappings"""
+    """Get the base_url for a source from _manifest.json or known mappings"""
     global _source_base_urls
 
     if source_id in _source_base_urls:
@@ -1185,15 +1186,15 @@ def _get_source_base_url(source_id: str) -> Optional[str]:
         _source_base_urls[source_id] = known_urls[source_id]
         return known_urls[source_id]
 
-    # Try to load from {source_id}_source.json in backup folder
+    # Try to load from _manifest.json in backup folder
     try:
         local_config = get_local_config()
         backup_folder = local_config.get_backup_folder()
 
         if backup_folder:
-            source_file = Path(backup_folder) / source_id / f"{source_id}_source.json"
-            if source_file.exists():
-                with open(source_file) as f:
+            manifest_file = Path(backup_folder) / source_id / get_manifest_file()
+            if manifest_file.exists():
+                with open(manifest_file) as f:
                     source_data = json.load(f)
                     base_url = source_data.get("base_url")
                     if base_url:

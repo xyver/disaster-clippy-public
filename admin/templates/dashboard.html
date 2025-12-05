@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard - Disaster Clippy Admin</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #1a1a2e;
+            color: #eee;
+            min-height: 100vh;
+        }
+        header {
+            background: #16213e;
+            padding: 1rem 2rem;
+            border-bottom: 1px solid #0f3460;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        header h1 { font-size: 1.5rem; color: #e94560; }
+        header p { font-size: 0.9rem; color: #888; margin-top: 0.25rem; }
+        .nav-links { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+        .nav-links a {
+            color: #4ecca3;
+            text-decoration: none;
+            font-size: 0.85rem;
+            padding: 0.5rem 0.75rem;
+            border-radius: 4px;
+            transition: background 0.2s;
+        }
+        .nav-links a:hover { background: #0f3460; }
+        .nav-links a.active { background: #0f3460; color: #e94560; }
+        .nav-divider { width: 1px; background: #0f3460; margin: 0 0.25rem; }
+        .admin-toggle {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.4rem 0.75rem;
+            background: #0f3460;
+            border-radius: 4px;
+            font-size: 0.8rem;
+            color: #888;
+        }
+        .admin-toggle.active { background: #4a1942; color: #e94560; }
+        .admin-toggle input { display: none; }
+        .toggle-slider {
+            width: 36px;
+            height: 18px;
+            background: #1a1a2e;
+            border-radius: 9px;
+            position: relative;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        .toggle-slider::after {
+            content: '';
+            position: absolute;
+            width: 14px;
+            height: 14px;
+            background: #888;
+            border-radius: 50%;
+            top: 2px;
+            left: 2px;
+            transition: all 0.2s;
+        }
+        .admin-toggle.active .toggle-slider { background: #e94560; }
+        .admin-toggle.active .toggle-slider::after { left: 20px; background: #fff; }
+        .container { max-width: 1200px; margin: 0 auto; padding: 2rem; }
+        .section {
+            background: #16213e;
+            border: 1px solid #0f3460;
+            border-radius: 8px;
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+        .section h2 {
+            font-size: 1.1rem;
+            color: #e94560;
+            margin-bottom: 1rem;
+            padding-bottom: 0.5rem;
+            border-bottom: 1px solid #0f3460;
+        }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+        }
+        .stat-card {
+            background: #1a1a2e;
+            border: 1px solid #0f3460;
+            border-radius: 8px;
+            padding: 1rem;
+            text-align: center;
+        }
+        .stat-value { font-size: 2rem; color: #4ecca3; font-weight: bold; }
+        .stat-label { font-size: 0.85rem; color: #888; margin-top: 0.25rem; }
+        .placeholder {
+            text-align: center;
+            padding: 3rem;
+            color: #666;
+            font-style: italic;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div>
+            <h1>Dashboard</h1>
+            <p>Overview of your Disaster Clippy instance</p>
+        </div>
+        <nav class="nav-links">
+            <a href="/useradmin/dashboard" class="active">Dashboard</a>
+            <a href="/useradmin/sources">Sources</a>
+            <a href="/useradmin/jobs">Jobs</a>
+            <a href="/useradmin/cloud">Cloud</a>
+            <a href="/useradmin/settings">Settings</a>
+            <a href="/useradmin/submissions">Submissions</a>
+            <a href="/useradmin/pinecone">Pinecone</a>
+            <a href="/">Chat</a>
+            <span class="nav-divider"></span>
+            <label class="admin-toggle" id="adminToggle" title="Toggle Admin Mode">
+                <input type="checkbox" id="adminModeCheckbox" onchange="toggleAdminMode()">
+                <span>Admin</span>
+                <span class="toggle-slider"></span>
+            </label>
+        </nav>
+    </header>
+
+    <div class="container">
+        <!-- Quick Stats -->
+        <div class="section">
+            <h2>Quick Stats</h2>
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-value" id="totalSources">-</div>
+                    <div class="stat-label">Total Sources</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="totalDocs">-</div>
+                    <div class="stat-label">Total Documents</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="storageUsed">-</div>
+                    <div class="stat-label">Storage Used</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="vectorCount">-</div>
+                    <div class="stat-label">Vectors in Pinecone</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Connection Status -->
+        <div class="section">
+            <h2>Connection Status</h2>
+            <div class="stats-grid">
+                <div class="stat-card" id="r2Status">
+                    <div class="stat-value" style="font-size: 1rem;">Checking...</div>
+                    <div class="stat-label">R2 Cloud Storage</div>
+                </div>
+                <div class="stat-card" id="pineconeStatus">
+                    <div class="stat-value" style="font-size: 1rem;">Checking...</div>
+                    <div class="stat-label">Pinecone Vector DB</div>
+                </div>
+                <div class="stat-card" id="offlineStatus">
+                    <div class="stat-value" style="font-size: 1rem;">Checking...</div>
+                    <div class="stat-label">Offline Mode</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Recent Activity -->
+        <div class="section">
+            <h2>Recent Activity</h2>
+            <div class="placeholder">
+                Activity log coming soon...
+            </div>
+        </div>
+    </div>
+
+    <script>
+        async function loadDashboard() {
+            // Load stats
+            try {
+                const statusResp = await fetch('/useradmin/api/status');
+                const status = await statusResp.json();
+
+                document.getElementById('totalSources').textContent = status.local_sources || 0;
+                document.getElementById('totalDocs').textContent = (status.total_documents || 0).toLocaleString();
+                document.getElementById('storageUsed').textContent = status.storage_mb ? status.storage_mb + ' MB' : '-';
+
+                // Offline status
+                const offlineCard = document.getElementById('offlineStatus');
+                offlineCard.querySelector('.stat-value').textContent = status.offline_mode ? 'Enabled' : 'Disabled';
+                offlineCard.querySelector('.stat-value').style.color = status.offline_mode ? '#f9a825' : '#4ecca3';
+            } catch (e) {
+                console.error('Error loading status:', e);
+            }
+
+            // Load R2 status
+            try {
+                const r2Resp = await fetch('/useradmin/api/cloud-storage-status');
+                const r2 = await r2Resp.json();
+                const r2Card = document.getElementById('r2Status');
+                if (r2.connected) {
+                    r2Card.querySelector('.stat-value').textContent = 'Connected';
+                    r2Card.querySelector('.stat-value').style.color = '#4ecca3';
+                } else {
+                    r2Card.querySelector('.stat-value').textContent = r2.configured ? 'Disconnected' : 'Not Configured';
+                    r2Card.querySelector('.stat-value').style.color = r2.configured ? '#e94560' : '#f9a825';
+                }
+            } catch (e) {
+                document.getElementById('r2Status').querySelector('.stat-value').textContent = 'Error';
+            }
+
+            // Load Pinecone status
+            try {
+                const pcResp = await fetch('/useradmin/api/pinecone-status');
+                const pc = await pcResp.json();
+                const pcCard = document.getElementById('pineconeStatus');
+                if (pc.connected) {
+                    pcCard.querySelector('.stat-value').textContent = 'Connected';
+                    pcCard.querySelector('.stat-value').style.color = '#4ecca3';
+                    document.getElementById('vectorCount').textContent = (pc.total_vectors || 0).toLocaleString();
+                } else {
+                    pcCard.querySelector('.stat-value').textContent = pc.configured ? 'Disconnected' : 'Not Configured';
+                    pcCard.querySelector('.stat-value').style.color = pc.configured ? '#e94560' : '#f9a825';
+                }
+            } catch (e) {
+                document.getElementById('pineconeStatus').querySelector('.stat-value').textContent = 'Error';
+            }
+        }
+
+        loadDashboard();
+
+        // Hide Pinecone link if not admin
+        function updatePineconeVisibility() {
+            const isAdmin = localStorage.getItem('adminMode') === 'true';
+            const pineconeLink = document.querySelector('a[href="/useradmin/pinecone"]');
+            if (pineconeLink) {
+                pineconeLink.style.display = isAdmin ? '' : 'none';
+            }
+        }
+        updatePineconeVisibility();
+
+        // Admin Mode Toggle
+        function toggleAdminMode() {
+            const checkbox = document.getElementById('adminModeCheckbox');
+            const toggle = document.getElementById('adminToggle');
+            const isAdmin = checkbox.checked;
+
+            localStorage.setItem('adminMode', isAdmin ? 'true' : 'false');
+            toggle.classList.toggle('active', isAdmin);
+            updatePineconeVisibility();
+
+            // Dispatch event for other components to react
+            window.dispatchEvent(new CustomEvent('adminModeChanged', { detail: { isAdmin } }));
+        }
+
+        // Initialize admin mode from localStorage
+        function initAdminMode() {
+            const isAdmin = localStorage.getItem('adminMode') === 'true';
+            const checkbox = document.getElementById('adminModeCheckbox');
+            const toggle = document.getElementById('adminToggle');
+
+            checkbox.checked = isAdmin;
+            toggle.classList.toggle('active', isAdmin);
+        }
+
+        // Check if admin mode is enabled
+        function isAdminMode() {
+            return localStorage.getItem('adminMode') === 'true';
+        }
+
+        initAdminMode();
+    </script>
+</body>
+</html>

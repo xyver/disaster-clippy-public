@@ -40,13 +40,14 @@
 
         .nav-links {
             display: flex;
-            gap: 1rem;
+            gap: 0.5rem;
+            flex-wrap: wrap;
         }
 
         .nav-links a {
             color: #4ecca3;
             text-decoration: none;
-            font-size: 0.9rem;
+            font-size: 0.85rem;
             padding: 0.5rem 0.75rem;
             border-radius: 4px;
             transition: background 0.2s;
@@ -60,6 +61,15 @@
             background: #0f3460;
             color: #e94560;
         }
+
+        .nav-divider { width: 1px; background: #0f3460; margin: 0 0.25rem; }
+        .admin-toggle { display: flex; align-items: center; gap: 0.5rem; padding: 0.4rem 0.75rem; background: #0f3460; border-radius: 4px; font-size: 0.8rem; color: #888; }
+        .admin-toggle.active { background: #4a1942; color: #e94560; }
+        .admin-toggle input { display: none; }
+        .toggle-slider { width: 36px; height: 18px; background: #1a1a2e; border-radius: 9px; position: relative; cursor: pointer; transition: background 0.2s; }
+        .toggle-slider::after { content: ''; position: absolute; width: 14px; height: 14px; background: #888; border-radius: 50%; top: 2px; left: 2px; transition: all 0.2s; }
+        .admin-toggle.active .toggle-slider { background: #e94560; }
+        .admin-toggle.active .toggle-slider::after { left: 20px; background: #fff; }
 
         .container {
             max-width: 900px;
@@ -389,13 +399,22 @@
             <h1>Local Admin Panel</h1>
             <p>Manage your offline disaster preparedness system</p>
         </div>
-        <div class="nav-links">
-            <a href="/useradmin/" class="active">Settings</a>
-            <a href="/useradmin/packs">Source Packs</a>
-            <a href="/useradmin/source-tools">Source Tools</a>
-            <a href="/useradmin/cloud-upload">Cloud Upload</a>
+        <nav class="nav-links">
+            <a href="/useradmin/dashboard">Dashboard</a>
+            <a href="/useradmin/sources">Sources</a>
+            <a href="/useradmin/jobs">Jobs</a>
+            <a href="/useradmin/cloud">Cloud</a>
+            <a href="/useradmin/settings" class="active">Settings</a>
+            <a href="/useradmin/submissions">Submissions</a>
+            <a href="/useradmin/pinecone">Pinecone</a>
             <a href="/">Chat</a>
-        </div>
+            <span class="nav-divider"></span>
+            <label class="admin-toggle" id="adminToggle" title="Toggle Admin Mode">
+                <input type="checkbox" id="adminModeCheckbox" onchange="toggleAdminMode()">
+                <span>Admin</span>
+                <span class="toggle-slider"></span>
+            </label>
+        </nav>
     </header>
 
     <div class="container">
@@ -460,7 +479,7 @@
                 <label>Backup Folder</label>
                 <div class="path-input-group">
                     <input type="text" id="backupFolder" placeholder="D:\disaster-backups">
-                    <button onclick="validateAndScanBackups()">Scan</button>
+                    <button onclick="validateAndScanBackups()">Save</button>
                 </div>
             </div>
 
@@ -764,6 +783,32 @@
 
         // Initialize
         loadSettings();
+
+        // Hide Pinecone link if not admin
+        function updatePineconeVisibility() {
+            const isAdmin = localStorage.getItem('adminMode') === 'true';
+            const pineconeLink = document.querySelector('a[href="/useradmin/pinecone"]');
+            if (pineconeLink) {
+                pineconeLink.style.display = isAdmin ? '' : 'none';
+            }
+        }
+        updatePineconeVisibility();
+
+        // Admin Mode Toggle
+        function toggleAdminMode() {
+            const checkbox = document.getElementById('adminModeCheckbox');
+            const toggle = document.getElementById('adminToggle');
+            const isAdmin = checkbox.checked;
+            localStorage.setItem('adminMode', isAdmin ? 'true' : 'false');
+            toggle.classList.toggle('active', isAdmin);
+            updatePineconeVisibility();
+        }
+        function initAdminMode() {
+            const isAdmin = localStorage.getItem('adminMode') === 'true';
+            document.getElementById('adminModeCheckbox').checked = isAdmin;
+            document.getElementById('adminToggle').classList.toggle('active', isAdmin);
+        }
+        initAdminMode();
     </script>
 </body>
 </html>

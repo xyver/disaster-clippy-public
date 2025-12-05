@@ -1,11 +1,11 @@
 """
-Indexer module for ingesting content from ZIM files and HTML backups into the vector database.
+Indexer module for ingesting content from ZIM files, HTML backups, and PDFs.
 
-Outputs v2 schema format:
-    - {source_id}_source.json (source-level metadata)
-    - {source_id}_documents.json (document metadata)
-    - {source_id}_embeddings.json (vectors only, no content duplication)
-    - {source_id}_manifest.json (distribution manifest)
+Outputs schema files:
+    - _manifest.json (source identity + distribution info)
+    - _metadata.json (document metadata for quick scanning)
+    - _index.json (full document content for display)
+    - _vectors.json (embeddings only)
 """
 
 import os
@@ -22,24 +22,28 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from offline_tools.vectordb import VectorStore, MetadataIndex
 from .schemas import (
-    get_source_file, get_documents_file, get_embeddings_file,
-    get_distribution_manifest_file, CURRENT_SCHEMA_VERSION
+    get_manifest_file, get_metadata_file, get_index_file, get_vectors_file,
+    get_backup_manifest_file, CURRENT_SCHEMA_VERSION
 )
 
 
 # =============================================================================
-# SHARED V2 OUTPUT FUNCTIONS
+# V3 OUTPUT FUNCTIONS
 # =============================================================================
 
-def save_source_metadata(output_folder: Path, source_id: str, documents: List[Dict],
-                         base_url: str = "", source_type: str = "unknown",
-                         license_info: str = "Unknown") -> Optional[Path]:
+def save_manifest(output_folder: Path, source_id: str, documents: List[Dict],
+                  source_type: str = "unknown", base_url: str = "",
+                  license_info: str = "Unknown", backup_info: Dict = None,
+                  zim_metadata: Dict = None) -> Optional[Path]:
     """
-    Save source-level metadata file ({source_id}_source.json).
+    Save source manifest file (_manifest.json).
 
-    This is the top-level summary of the source for quick browsing.
-    Preserves user-edited fields (name, description, license, license_verified, etc.)
-    if the file already exists.
+    Combines source identity and distribution info into one file.
+    Preserves user-edited fields if file exists.
+
+    Args:
+        zim_metadata: Optional metadata from ZIM header_fields to auto-populate
+                     name, description, creator, license, tags, etc.
     """
     try:
         total_chars = sum(doc.get("char_count", len(doc.get("content", ""))) for doc in documents)
@@ -60,62 +64,110 @@ def save_source_metadata(output_folder: Path, source_id: str, documents: List[Di
                     categories[cat]["count"] += 1
                     categories[cat]["total_chars"] += doc.get("char_count", 0)
 
-        source_file = output_folder / get_source_file(source_id)
+        manifest_file = output_folder / get_manifest_file()
 
-        # Load existing source config to preserve user-edited fields
-        existing_meta = {}
-        if source_file.exists():
+        # Load existing to preserve user-edited fields
+        existing = {}
+        if manifest_file.exists():
             try:
-                with open(source_file, 'r', encoding='utf-8') as f:
-                    existing_meta = json.load(f)
+                with open(manifest_file, 'r', encoding='utf-8') as f:
+                    existing = json.load(f)
             except Exception:
                 pass
 
-        # User-edited fields that should be preserved
-        preserved_fields = ["name", "description", "license", "license_verified",
-                           "base_url", "tags", "created_at"]
+        # Fields to preserve from existing file (user edits take precedence)
+        preserved = ["name", "description", "license", "license_verified",
+                     "attribution", "base_url", "tags", "created_at", "version",
+                     "language", "publisher"]
 
-        source_meta = {
+        # Calculate file sizes
+        metadata_file = output_folder / get_metadata_file()
+        index_file = output_folder / get_index_file()
+        vectors_file = output_folder / get_vectors_file()
+
+        manifest = {
             "schema_version": CURRENT_SCHEMA_VERSION,
             "source_id": source_id,
             "name": source_id.replace('_', ' ').title(),
             "description": "",
             "license": license_info,
             "license_verified": False,
+            "attribution": "",
             "base_url": base_url,
+            "tags": [],
             "total_docs": len(documents),
             "total_chars": total_chars,
             "categories": categories,
-            "created_at": existing_meta.get("created_at", datetime.now().isoformat()),
-            "last_backup": existing_meta.get("last_backup", ""),
-            "last_indexed": datetime.now().isoformat()
+            "version": "1.0.0",
+            "source_type": source_type,
+            "has_backup": backup_info is not None or (output_folder / "pages").exists(),
+            "has_metadata": True,
+            "has_index": True,
+            "has_vectors": True,
+            "backup_info": backup_info or {},
+            "metadata_size_bytes": metadata_file.stat().st_size if metadata_file.exists() else 0,
+            "index_size_bytes": index_file.stat().st_size if index_file.exists() else 0,
+            "vectors_size_bytes": vectors_file.stat().st_size if vectors_file.exists() else 0,
+            "total_size_bytes": 0,  # Updated below
+            "created_at": existing.get("created_at", datetime.now().isoformat()),
+            "last_backup": existing.get("last_backup", ""),
+            "last_indexed": datetime.now().isoformat(),
         }
 
-        # Preserve user-edited fields from existing file
-        for field in preserved_fields:
-            if field in existing_meta and existing_meta[field]:
-                source_meta[field] = existing_meta[field]
+        # Apply ZIM metadata if available (auto-populate from ZIM header_fields)
+        if zim_metadata:
+            if zim_metadata.get("name"):
+                manifest["name"] = zim_metadata["name"]
+            if zim_metadata.get("description"):
+                manifest["description"] = zim_metadata["description"]
+            if zim_metadata.get("license"):
+                manifest["license"] = zim_metadata["license"]
+            if zim_metadata.get("source_url"):
+                manifest["base_url"] = zim_metadata["source_url"]
+            if zim_metadata.get("tags"):
+                manifest["tags"] = zim_metadata["tags"]
+            if zim_metadata.get("creator"):
+                manifest["attribution"] = zim_metadata["creator"]
+            # Store additional ZIM-specific fields
+            if zim_metadata.get("language"):
+                manifest["language"] = zim_metadata["language"]
+            if zim_metadata.get("publisher"):
+                manifest["publisher"] = zim_metadata["publisher"]
+            if zim_metadata.get("date"):
+                manifest["zim_date"] = zim_metadata["date"]
 
-        with open(source_file, 'w', encoding='utf-8') as f:
-            json.dump(source_meta, f, indent=2, ensure_ascii=False)
+        # Preserve user-edited fields (override ZIM metadata if user has edited)
+        for field in preserved:
+            if field in existing and existing[field]:
+                manifest[field] = existing[field]
 
-        print(f"Saved source metadata: {source_file}")
-        return source_file
+        # Calculate total size
+        manifest["total_size_bytes"] = (
+            manifest["metadata_size_bytes"] +
+            manifest["index_size_bytes"] +
+            manifest["vectors_size_bytes"]
+        )
+
+        with open(manifest_file, 'w', encoding='utf-8') as f:
+            json.dump(manifest, f, indent=2, ensure_ascii=False)
+
+        print(f"Saved manifest: {manifest_file}")
+        return manifest_file
 
     except Exception as e:
-        print(f"Warning: Failed to save source metadata: {e}")
+        print(f"Warning: Failed to save manifest: {e}")
         return None
 
 
-def save_documents_metadata(output_folder: Path, source_id: str,
-                            documents: List[Dict]) -> Optional[Path]:
+def save_metadata(output_folder: Path, source_id: str,
+                  documents: List[Dict]) -> Optional[Path]:
     """
-    Save document metadata file ({source_id}_documents.json).
+    Save document metadata file (_metadata.json).
 
-    This contains per-document metadata for quick scanning without loading embeddings.
+    Contains per-document metadata for quick scanning without loading content.
     """
     try:
-        source_docs = {}
+        doc_metadata = {}
         total_chars = 0
 
         for doc in documents:
@@ -123,299 +175,284 @@ def save_documents_metadata(output_folder: Path, source_id: str,
             char_count = doc.get("char_count", len(doc.get("content", "")))
             total_chars += char_count
 
-            source_docs[doc_id] = {
+            doc_metadata[doc_id] = {
                 "title": doc.get("title", "Unknown"),
                 "url": doc.get("url", ""),
                 "content_hash": doc.get("content_hash", ""),
-                "scraped_at": doc.get("scraped_at", datetime.now().isoformat()),
                 "char_count": char_count,
-                "categories": doc.get("categories", [])
+                "categories": doc.get("categories", []),
+                "doc_type": doc.get("doc_type", "article"),
+                "scraped_at": doc.get("scraped_at", datetime.now().isoformat()),
             }
 
-        docs_data = {
+        metadata = {
             "schema_version": CURRENT_SCHEMA_VERSION,
             "source_id": source_id,
-            "document_count": len(source_docs),
+            "document_count": len(doc_metadata),
             "total_chars": total_chars,
             "last_updated": datetime.now().isoformat(),
-            "documents": source_docs
+            "documents": doc_metadata
         }
 
-        docs_file = output_folder / get_documents_file(source_id)
-        with open(docs_file, 'w', encoding='utf-8') as f:
-            json.dump(docs_data, f, indent=2, ensure_ascii=False)
+        metadata_file = output_folder / get_metadata_file()
+        with open(metadata_file, 'w', encoding='utf-8') as f:
+            json.dump(metadata, f, indent=2, ensure_ascii=False)
 
-        print(f"Saved documents metadata: {docs_file} ({len(source_docs)} documents)")
-        return docs_file
+        print(f"Saved metadata: {metadata_file} ({len(doc_metadata)} documents)")
+        return metadata_file
 
     except Exception as e:
-        print(f"Warning: Failed to save documents metadata: {e}")
+        print(f"Warning: Failed to save metadata: {e}")
         return None
 
 
-def save_embeddings_file(output_folder: Path, source_id: str,
-                         index_data: Dict) -> Optional[Path]:
+def save_index(output_folder: Path, source_id: str,
+               documents: List[Dict]) -> Optional[Path]:
     """
-    Save embeddings file ({source_id}_embeddings.json).
+    Save full content index file (_index.json).
 
-    V2 format: vectors only, no content duplication.
+    Contains full document content for display and scanning.
+    """
+    try:
+        doc_content = {}
+
+        for doc in documents:
+            doc_id = doc.get("id", doc.get("content_hash", ""))
+            doc_content[doc_id] = {
+                "title": doc.get("title", "Unknown"),
+                "url": doc.get("url", ""),
+                "content": doc.get("content", ""),
+                "categories": doc.get("categories", []),
+                "doc_type": doc.get("doc_type", "article"),
+            }
+
+        index_data = {
+            "schema_version": CURRENT_SCHEMA_VERSION,
+            "source_id": source_id,
+            "document_count": len(doc_content),
+            "created_at": datetime.now().isoformat(),
+            "documents": doc_content
+        }
+
+        index_file = output_folder / get_index_file()
+        with open(index_file, 'w', encoding='utf-8') as f:
+            json.dump(index_data, f, ensure_ascii=False)  # No indent - can be large
+
+        print(f"Saved index: {index_file} ({len(doc_content)} documents)")
+        return index_file
+
+    except Exception as e:
+        print(f"Warning: Failed to save index: {e}")
+        return None
+
+
+def save_vectors(output_folder: Path, source_id: str,
+                 index_data: Dict, embedding_model: str = "text-embedding-3-small") -> Optional[Path]:
+    """
+    Save vectors file (_vectors.json).
+
+    Contains only embedding vectors, no content duplication.
     """
     try:
         ids = index_data.get("ids", [])
         embeddings = index_data.get("embeddings", [])
 
         vectors = {}
+        dimensions = 0
         for i in range(len(ids)):
             if i < len(embeddings) and embeddings[i]:
                 vectors[ids[i]] = embeddings[i]
+                if dimensions == 0:
+                    dimensions = len(embeddings[i])
 
-        embeddings_data = {
+        vectors_data = {
             "schema_version": CURRENT_SCHEMA_VERSION,
             "source_id": source_id,
-            "embedding_model": "text-embedding-3-small",
-            "dimensions": 1536,
+            "embedding_model": embedding_model,
+            "dimensions": dimensions or 1536,
             "document_count": len(vectors),
             "created_at": datetime.now().isoformat(),
             "vectors": vectors
         }
 
-        embeddings_file = output_folder / get_embeddings_file(source_id)
-        with open(embeddings_file, 'w', encoding='utf-8') as f:
-            json.dump(embeddings_data, f)  # No indent - keep compact
+        vectors_file = output_folder / get_vectors_file()
+        with open(vectors_file, 'w', encoding='utf-8') as f:
+            json.dump(vectors_data, f)  # No indent - keep compact
 
-        print(f"Saved embeddings: {embeddings_file} ({len(vectors)} vectors)")
-        return embeddings_file
+        print(f"Saved vectors: {vectors_file} ({len(vectors)} vectors)")
+        return vectors_file
 
     except Exception as e:
-        print(f"Warning: Failed to save embeddings file: {e}")
+        print(f"Warning: Failed to save vectors: {e}")
         return None
 
 
-def save_distribution_manifest(output_folder: Path, source_id: str, documents: List[Dict],
-                               source_type: str = "unknown", backup_info: Dict = None,
-                               license_info: str = "Unknown", base_url: str = "") -> Optional[Path]:
+def save_all_outputs(output_folder: Path, source_id: str, documents: List[Dict],
+                     index_data: Dict = None, source_type: str = "unknown",
+                     base_url: str = "", license_info: str = "Unknown",
+                     backup_info: Dict = None, zim_metadata: Dict = None) -> Dict[str, Path]:
     """
-    Save distribution manifest file ({source_id}_manifest.json).
+    Save all output files for a source.
 
-    Contains package info for R2 distribution.
+    Args:
+        zim_metadata: Optional metadata extracted from ZIM header_fields
+                     (name, description, creator, license, tags, etc.)
+
+    Returns dict of saved file paths.
     """
+    output_folder = Path(output_folder)
+    output_folder.mkdir(parents=True, exist_ok=True)
+
+    saved = {}
+
+    # Save metadata first (needed for size calculation in manifest)
+    metadata_path = save_metadata(output_folder, source_id, documents)
+    if metadata_path:
+        saved["metadata"] = metadata_path
+
+    # Save full content index
+    index_path = save_index(output_folder, source_id, documents)
+    if index_path:
+        saved["index"] = index_path
+
+    # Save vectors if we have them
+    if index_data:
+        vectors_path = save_vectors(output_folder, source_id, index_data)
+        if vectors_path:
+            saved["vectors"] = vectors_path
+
+    # Save manifest last (references other files for size info)
+    manifest_path = save_manifest(output_folder, source_id, documents,
+                                  source_type=source_type, base_url=base_url,
+                                  license_info=license_info, backup_info=backup_info,
+                                  zim_metadata=zim_metadata)
+    if manifest_path:
+        saved["manifest"] = manifest_path
+
+    # Update master metadata
     try:
-        total_chars = sum(doc.get("char_count", len(doc.get("content", ""))) for doc in documents)
-
-        manifest = {
-            "schema_version": CURRENT_SCHEMA_VERSION,
-            "source_id": source_id,
-            "name": source_id.replace('_', ' ').title(),
-            "description": "",
-            "version": "1.0.0",
-            "created_at": datetime.now().isoformat(),
+        from offline_tools.packager import update_master_metadata
+        update_master_metadata(source_id, {
             "document_count": len(documents),
-            "has_embeddings": True,
-            "has_categories": False,
-            "license": license_info,
-            "attribution": "",
-            "base_url": base_url,
-            "source_type": source_type,
-            "backup_info": backup_info or {},
-            "files": [
-                get_source_file(source_id),
-                get_documents_file(source_id),
-                get_embeddings_file(source_id)
-            ],
-            "total_chars": total_chars
-        }
-
-        manifest_file = output_folder / get_distribution_manifest_file(source_id)
-        with open(manifest_file, 'w', encoding='utf-8') as f:
-            json.dump(manifest, f, indent=2, ensure_ascii=False)
-
-        print(f"Saved distribution manifest: {manifest_file}")
-        return manifest_file
-
+            "total_chars": sum(d.get("char_count", 0) for d in documents),
+            "last_updated": datetime.now().isoformat()
+        })
     except Exception as e:
-        print(f"Warning: Failed to save distribution manifest: {e}")
-        return None
+        print(f"Warning: Failed to update master metadata: {e}")
 
+    return saved
+
+
+# =============================================================================
+# SHARED UTILITIES
+# =============================================================================
+
+def extract_text_from_html(html_content: str) -> str:
+    """Extract clean text from HTML content"""
+    soup = BeautifulSoup(html_content, 'html.parser')
+
+    # Remove scripts, styles, navigation, ads
+    for tag in soup.find_all(['script', 'style', 'nav', 'header', 'footer', 'aside', 'iframe']):
+        tag.decompose()
+
+    # Try to find main content area
+    main_content = (
+        soup.find('main') or
+        soup.find('article') or
+        soup.find('div', {'id': 'content'}) or
+        soup.find('div', {'class': 'mw-parser-output'})
+    )
+
+    if main_content:
+        text = main_content.get_text(separator=' ', strip=True)
+    else:
+        text = soup.get_text(separator=' ', strip=True)
+
+    # Clean up whitespace
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    return ' '.join(lines)
+
+
+def get_title_from_html(html_content: str, fallback_url: str = "") -> str:
+    """Extract title from HTML or fallback to URL"""
+    soup = BeautifulSoup(html_content, 'html.parser')
+
+    # Try <title> tag
+    title_tag = soup.find('title')
+    if title_tag and title_tag.text.strip():
+        return title_tag.text.strip()
+
+    # Try <h1> tag
+    h1_tag = soup.find('h1')
+    if h1_tag and h1_tag.text.strip():
+        return h1_tag.text.strip()
+
+    # Fallback to URL
+    if fallback_url:
+        return fallback_url.split('/')[-1].replace('_', ' ').replace('.html', '')
+
+    return "Untitled"
+
+
+# =============================================================================
+# ZIM INDEXER
+# =============================================================================
 
 class ZIMIndexer:
-    """
-    Indexes content from ZIM files into the vector database.
-    Uses zimply-core library to read ZIM archives.
-    """
+    """Indexes content from ZIM files into the vector database."""
 
     def __init__(self, zim_path: str, source_id: str, backup_folder: str = None):
         self.zim_path = Path(zim_path)
         self.source_id = source_id
-        # Output folder: use backup_folder directly (caller should pass the source folder)
-        if backup_folder:
-            self.output_folder = Path(backup_folder)
-        else:
-            # Fallback to parent folder of ZIM file
-            self.output_folder = self.zim_path.parent
+        self.output_folder = Path(backup_folder) if backup_folder else self.zim_path.parent
         self.output_folder.mkdir(parents=True, exist_ok=True)
 
         if not self.zim_path.exists():
             raise FileNotFoundError(f"ZIM file not found: {zim_path}")
 
-    def _extract_text_from_html(self, html_content: str) -> str:
-        """Extract clean text from HTML content"""
-        soup = BeautifulSoup(html_content, 'html.parser')
+    def _extract_zim_metadata(self, header_fields: Dict) -> Dict:
+        """
+        Extract metadata from ZIM header_fields.
 
-        # Remove scripts, styles, navigation
-        for tag in soup.find_all(['script', 'style', 'nav', 'header', 'footer', 'aside']):
-            tag.decompose()
+        Common ZIM metadata fields:
+        - Title: Human-readable name
+        - Description: Content description
+        - Creator: Organization that created the content
+        - Publisher: Organization that created the ZIM
+        - Date: Creation date (YYYY-MM-DD)
+        - Language: ISO language code (e.g., 'eng', 'fra')
+        - License: License information
+        - Tags: Semicolon-separated tags
+        - Source: Original URL of the content
 
-        # Get text
-        text = soup.get_text(separator=' ', strip=True)
+        Returns dict with normalized metadata for manifest.
+        """
+        metadata = {
+            "name": header_fields.get("Title", "") or header_fields.get("Name", ""),
+            "description": header_fields.get("Description", ""),
+            "creator": header_fields.get("Creator", ""),
+            "publisher": header_fields.get("Publisher", ""),
+            "date": header_fields.get("Date", ""),
+            "language": header_fields.get("Language", ""),
+            "license": header_fields.get("License", ""),
+            "source_url": header_fields.get("Source", ""),
+            "tags": [],
+        }
 
-        # Clean up whitespace
-        lines = [line.strip() for line in text.splitlines() if line.strip()]
-        text = ' '.join(lines)
+        # Parse tags if present (semicolon-separated in ZIM format)
+        tags_str = header_fields.get("Tags", "")
+        if tags_str:
+            metadata["tags"] = [t.strip() for t in tags_str.split(";") if t.strip()]
 
-        return text
+        # Clean up empty strings
+        for key in list(metadata.keys()):
+            if metadata[key] == "":
+                metadata[key] = None
 
-    def _save_metadata_file(self, documents: List[Dict]) -> Optional[Path]:
-        """Save the per-document metadata file to output folder"""
-        try:
-            # Create source-specific metadata file
-            source_docs = {}
-            total_chars = 0
+        print(f"ZIM metadata extracted: title='{metadata.get('name')}', "
+              f"license='{metadata.get('license')}', language='{metadata.get('language')}'")
 
-            for doc in documents:
-                doc_id = doc.get("id", doc.get("content_hash", ""))
-                char_count = doc.get("char_count", len(doc.get("content", "")))
-                total_chars += char_count
-
-                source_docs[doc_id] = {
-                    "title": doc.get("title", "Unknown"),
-                    "url": doc.get("url", ""),
-                    "content_hash": doc.get("content_hash", ""),
-                    "scraped_at": doc.get("scraped_at", datetime.now().isoformat()),
-                    "char_count": char_count
-                }
-
-            # Write source metadata file to output folder
-            source_meta = {
-                "version": 2,
-                "source_id": self.source_id,
-                "last_updated": datetime.now().isoformat(),
-                "document_count": len(source_docs),
-                "total_chars": total_chars,
-                "documents": source_docs
-            }
-
-            metadata_file = self.output_folder / f"{self.source_id}_metadata.json"
-            with open(metadata_file, 'w', encoding='utf-8') as f:
-                json.dump(source_meta, f, indent=2)
-
-            print(f"Saved metadata file: {metadata_file} ({len(source_docs)} documents)")
-
-            # Update master metadata file
-            try:
-                from offline_tools.packager import update_master_metadata
-                update_master_metadata(self.source_id, source_meta)
-                print(f"Updated master metadata with {self.source_id}")
-            except Exception as e:
-                print(f"Warning: Failed to update master metadata: {e}")
-
-            return metadata_file
-
-        except Exception as e:
-            print(f"Warning: Failed to save metadata file: {e}")
-            return None
-
-    def _save_index_file(self, index_data: Dict) -> Optional[Path]:
-        """Save the vector index data to a JSON file for distribution"""
-        try:
-            index_file = self.output_folder / f"{self.source_id}_index.json"
-
-            # Structure the index file
-            index_export = {
-                "version": 1,
-                "source_id": self.source_id,
-                "created_at": datetime.now().isoformat(),
-                "document_count": len(index_data.get("ids", [])),
-                "embedding_model": "default",
-                "documents": []
-            }
-
-            # Build document entries with embeddings
-            ids = index_data.get("ids", [])
-            embeddings = index_data.get("embeddings", [])
-            contents = index_data.get("contents", [])
-            metadatas = index_data.get("metadatas", [])
-
-            for i in range(len(ids)):
-                doc_entry = {
-                    "id": ids[i],
-                    "embedding": embeddings[i] if i < len(embeddings) else None,
-                    "content": contents[i] if i < len(contents) else None,
-                    "metadata": metadatas[i] if i < len(metadatas) else {}
-                }
-                index_export["documents"].append(doc_entry)
-
-            with open(index_file, 'w', encoding='utf-8') as f:
-                json.dump(index_export, f)
-
-            print(f"Saved index file: {index_file} ({len(ids)} documents)")
-            return index_file
-
-        except Exception as e:
-            print(f"Warning: Failed to save index file: {e}")
-            return None
-
-    def _save_manifest_file(self, documents: List[Dict], backup_info: Dict = None) -> Optional[Path]:
-        """Save the source-level manifest file"""
-        try:
-            manifest_file = self.output_folder / f"{self.source_id}_manifest.json"
-
-            total_chars = sum(doc.get("char_count", len(doc.get("content", ""))) for doc in documents)
-
-            manifest = {
-                "version": 1,
-                "source_id": self.source_id,
-                "created_at": datetime.now().isoformat(),
-                "document_count": len(documents),
-                "total_chars": total_chars,
-                "source_type": "zim",
-                "backup_info": backup_info or {
-                    "type": "zim",
-                    "path": str(self.zim_path),
-                    "size_mb": round(self.zim_path.stat().st_size / (1024*1024), 2) if self.zim_path.exists() else 0
-                },
-                "files": {
-                    "index": f"{self.source_id}_index.json",
-                    "metadata": f"{self.source_id}_metadata.json",
-                    "manifest": f"{self.source_id}_manifest.json"
-                }
-            }
-
-            with open(manifest_file, 'w', encoding='utf-8') as f:
-                json.dump(manifest, f, indent=2)
-
-            print(f"Saved manifest file: {manifest_file}")
-            return manifest_file
-
-        except Exception as e:
-            print(f"Warning: Failed to save manifest file: {e}")
-            return None
-
-    def _get_title_from_html(self, html_content: str, url: str) -> str:
-        """Extract title from HTML or fallback to URL"""
-        soup = BeautifulSoup(html_content, 'html.parser')
-
-        # Try <title> tag
-        title_tag = soup.find('title')
-        if title_tag and title_tag.text.strip():
-            return title_tag.text.strip()
-
-        # Try <h1> tag
-        h1_tag = soup.find('h1')
-        if h1_tag and h1_tag.text.strip():
-            return h1_tag.text.strip()
-
-        # Fallback to URL
-        return url.split('/')[-1].replace('_', ' ').replace('.html', '')
+        return metadata
 
     def index(self, limit: int = 1000, progress_callback: Optional[Callable] = None) -> Dict:
         """
@@ -445,15 +482,15 @@ class ZIMIndexer:
                 progress_callback(0, limit, "Opening ZIM file...")
 
             zim = ZIMFile(str(self.zim_path), 'utf-8')
-
-            # Get article count from header
             article_count = zim.header_fields.get('articleCount', 0)
             print(f"ZIM file contains {article_count} articles")
+
+            # Extract ZIM metadata from header_fields
+            zim_metadata = self._extract_zim_metadata(zim.header_fields)
 
             if progress_callback:
                 progress_callback(0, min(limit, article_count), f"Found {article_count} articles in ZIM")
 
-            # Iterate through articles by ID
             indexed = 0
             skipped = 0
             seen_ids = set()
@@ -468,13 +505,12 @@ class ZIMIndexer:
                         skipped += 1
                         continue
 
-                    # Check mimetype - only want HTML articles
+                    # Only want HTML articles
                     mimetype = getattr(article, 'mimetype', '')
                     if 'text/html' not in str(mimetype).lower():
                         skipped += 1
                         continue
 
-                    # Get content
                     content = article.data
                     if isinstance(content, bytes):
                         content = content.decode('utf-8', errors='ignore')
@@ -483,26 +519,22 @@ class ZIMIndexer:
                         skipped += 1
                         continue
 
-                    # Get URL and title
                     url = getattr(article, 'url', '') or f"article_{i}"
-                    title = getattr(article, 'title', '') or self._get_title_from_html(content, url)
+                    title = getattr(article, 'title', '') or get_title_from_html(content, url)
 
                     # Skip special pages
                     if any(x in url.lower() for x in ['special:', 'file:', 'category:', 'template:', 'mediawiki:', '-/', 'favicon']):
                         skipped += 1
                         continue
 
-                    # Extract text
-                    text = self._extract_text_from_html(content)
+                    text = extract_text_from_html(content)
                     if len(text) < 50:
                         skipped += 1
                         continue
 
-                    # Create document
                     full_url = f"zim://{self.source_id}/{url}"
                     doc_id = hashlib.md5(f"{self.source_id}:{url}".encode()).hexdigest()
 
-                    # Skip duplicates
                     if doc_id in seen_ids:
                         skipped += 1
                         continue
@@ -510,7 +542,7 @@ class ZIMIndexer:
 
                     documents.append({
                         "id": doc_id,
-                        "content": text[:50000],  # Limit content size
+                        "content": text[:50000],
                         "title": title,
                         "url": full_url,
                         "source": self.source_id,
@@ -519,7 +551,6 @@ class ZIMIndexer:
                         "scraped_at": datetime.now().isoformat(),
                         "char_count": len(text),
                         "doc_type": "article",
-                        "from_zim": True
                     })
 
                     indexed += 1
@@ -532,10 +563,8 @@ class ZIMIndexer:
                     errors.append(f"Error processing article {i}: {str(e)}")
                     continue
 
-            # Close ZIM file to release the handle
             zim.close()
-
-            print(f"Extracted {len(documents)} articles from ZIM (skipped {skipped} non-articles)")
+            print(f"Extracted {len(documents)} articles from ZIM (skipped {skipped})")
 
             if not documents:
                 return {
@@ -545,9 +574,9 @@ class ZIMIndexer:
                     "errors": errors
                 }
 
-            # Add to vector store and get index data for saving
+            # Add to vector store
             if progress_callback:
-                progress_callback(len(documents), len(documents), "Computing embeddings and storing...")
+                progress_callback(len(documents), len(documents), "Computing embeddings...")
 
             print("Adding documents to vector store...")
             store = VectorStore()
@@ -555,24 +584,24 @@ class ZIMIndexer:
             count = result["count"]
             index_data = result["index_data"]
 
-            # Save all output files to backup folder (v2 format)
+            # Save all output files with ZIM metadata
             if count > 0:
-                # V2 format: separate files for source, documents, embeddings
-                save_source_metadata(self.output_folder, self.source_id, documents,
-                                    source_type="zim")
-                save_documents_metadata(self.output_folder, self.source_id, documents)
-                if index_data:
-                    save_embeddings_file(self.output_folder, self.source_id, index_data)
-                save_distribution_manifest(self.output_folder, self.source_id, documents,
-                                          source_type="zim",
-                                          backup_info={
-                                              "type": "zim",
-                                              "path": str(self.zim_path),
-                                              "size_mb": round(self.zim_path.stat().st_size / (1024*1024), 2)
-                                          })
+                # Build backup_info with ZIM metadata
+                backup_info = {
+                    "type": "zim",
+                    "path": str(self.zim_path),
+                    "size_mb": round(self.zim_path.stat().st_size / (1024*1024), 2),
+                    "zim_metadata": zim_metadata,  # Full extracted metadata
+                }
 
-                # Also save legacy format for backwards compatibility
-                self._save_metadata_file(documents)
+                save_all_outputs(
+                    self.output_folder, self.source_id, documents, index_data,
+                    source_type="zim",
+                    base_url=zim_metadata.get("source_url") or "",
+                    license_info=zim_metadata.get("license") or "Unknown",
+                    backup_info=backup_info,
+                    zim_metadata=zim_metadata,  # Pass for manifest population
+                )
 
             return {
                 "success": True,
@@ -592,62 +621,35 @@ class ZIMIndexer:
             }
 
 
+# =============================================================================
+# HTML BACKUP INDEXER
+# =============================================================================
+
 class HTMLBackupIndexer:
-    """
-    Indexes content from HTML backup folders into the vector database.
-    Reads from the {source_id}_backup_manifest.json and pages/ folder created by html_backup.py
-    """
+    """Indexes content from HTML backup folders into the vector database."""
 
     def __init__(self, backup_path: str, source_id: str, backup_folder: str = None):
         self.backup_path = Path(backup_path)
         self.source_id = source_id
-        # Try multiple manifest naming conventions
+        self.pages_dir = self.backup_path / "pages"
+        self.output_folder = Path(backup_folder) if backup_folder else self.backup_path
+        self.output_folder.mkdir(parents=True, exist_ok=True)
+
+        # Find manifest file
         self.manifest_path = None
-        manifest_candidates = [
-            self.backup_path / f"{source_id}_backup_manifest.json",  # New naming
-            self.backup_path / f"{source_id}_manifest.json",         # V1 naming from R2
-            self.backup_path / "manifest.json",                       # Legacy fallback
+        candidates = [
+            self.backup_path / get_backup_manifest_file(),  # New: backup_manifest.json
+            self.backup_path / f"{source_id}_backup_manifest.json",  # Legacy v2
+            self.backup_path / f"{source_id}_manifest.json",  # Legacy v1
+            self.backup_path / "manifest.json",  # Very old
         ]
-        for candidate in manifest_candidates:
+        for candidate in candidates:
             if candidate.exists():
                 self.manifest_path = candidate
                 break
-        # Default to first option if none exist (will error later with clear message)
-        if not self.manifest_path:
-            self.manifest_path = manifest_candidates[0]
-        self.pages_dir = self.backup_path / "pages"
-        # Output folder: use backup_folder directly (caller should pass the source folder)
-        if backup_folder:
-            self.output_folder = Path(backup_folder)
-        else:
-            # For HTML backups, output to the backup path itself
-            self.output_folder = self.backup_path
-        self.output_folder.mkdir(parents=True, exist_ok=True)
 
         if not self.backup_path.exists():
             raise FileNotFoundError(f"Backup folder not found: {backup_path}")
-
-    def _extract_text_from_html(self, html_content: str) -> str:
-        """Extract clean text from HTML content"""
-        soup = BeautifulSoup(html_content, 'html.parser')
-
-        # Remove scripts, styles, navigation, ads
-        for tag in soup.find_all(['script', 'style', 'nav', 'header', 'footer', 'aside', 'iframe']):
-            tag.decompose()
-
-        # Try to find main content area
-        main_content = soup.find('main') or soup.find('article') or soup.find('div', {'id': 'content'}) or soup.find('div', {'class': 'mw-parser-output'})
-
-        if main_content:
-            text = main_content.get_text(separator=' ', strip=True)
-        else:
-            text = soup.get_text(separator=' ', strip=True)
-
-        # Clean up whitespace
-        lines = [line.strip() for line in text.splitlines() if line.strip()]
-        text = ' '.join(lines)
-
-        return text
 
     def index(self, limit: int = 1000, progress_callback: Optional[Callable] = None,
               skip_existing: bool = True) -> Dict:
@@ -664,29 +666,25 @@ class HTMLBackupIndexer:
         """
         errors = []
         documents = []
-
-        # Load manifest or scan pages folder
         pages = {}
 
+        # Load manifest or scan pages folder
         if self.manifest_path and self.manifest_path.exists():
             with open(self.manifest_path, 'r', encoding='utf-8') as f:
                 manifest = json.load(f)
             pages = manifest.get("pages", {})
 
-        # If no pages in manifest, scan the pages folder directly
+        # Fallback: scan pages folder directly
         if not pages and self.pages_dir.exists():
             print(f"No pages in manifest, scanning {self.pages_dir}...")
             for html_file in self.pages_dir.glob("*.html"):
-                # Create a synthetic page entry
                 filename = html_file.name
-                # Try to reconstruct URL from filename (reverse of html_backup.py naming)
                 url_path = filename.replace(".html", "").replace("_", "/")
-                url = f"/{url_path}"
-                pages[url] = {
+                pages[f"/{url_path}"] = {
                     "filename": filename,
                     "title": filename.replace(".html", "").replace("_", " ")
                 }
-            print(f"Found {len(pages)} HTML files in pages folder")
+            print(f"Found {len(pages)} HTML files")
 
         if not pages:
             return {
@@ -697,7 +695,7 @@ class HTMLBackupIndexer:
 
         print(f"Found {len(pages)} pages to index")
 
-        # Get existing document IDs if skipping
+        # Get existing IDs if skipping
         existing_ids = set()
         if skip_existing:
             store = VectorStore()
@@ -705,9 +703,8 @@ class HTMLBackupIndexer:
             print(f"Found {len(existing_ids)} already indexed documents")
 
         if progress_callback:
-            progress_callback(0, min(limit, len(pages)), "Loading pages from backup...")
+            progress_callback(0, min(limit, len(pages)), "Loading pages...")
 
-        # Process each page
         indexed = 0
         skipped = 0
 
@@ -715,10 +712,8 @@ class HTMLBackupIndexer:
             if indexed >= limit:
                 break
 
-            # Generate doc_id from source and URL (consistent with how it was created)
             doc_id = hashlib.md5(f"{self.source_id}:{url}".encode()).hexdigest()
 
-            # Skip if already indexed
             if skip_existing and doc_id in existing_ids:
                 skipped += 1
                 continue
@@ -731,7 +726,6 @@ class HTMLBackupIndexer:
                     errors.append(f"No filename for {url}")
                     continue
 
-                # Read HTML file
                 html_path = self.pages_dir / filename
                 if not html_path.exists():
                     errors.append(f"File not found: {filename}")
@@ -740,15 +734,14 @@ class HTMLBackupIndexer:
                 with open(html_path, 'r', encoding='utf-8') as f:
                     html_content = f.read()
 
-                # Extract text
-                text = self._extract_text_from_html(html_content)
+                text = extract_text_from_html(html_content)
                 if len(text) < 50:
                     skipped += 1
                     continue
 
                 documents.append({
                     "id": doc_id,
-                    "content": text[:50000],  # Limit content size
+                    "content": text[:50000],
                     "title": title,
                     "url": url,
                     "source": self.source_id,
@@ -757,7 +750,6 @@ class HTMLBackupIndexer:
                     "scraped_at": datetime.now().isoformat(),
                     "char_count": len(text),
                     "doc_type": "article",
-                    "from_backup": True
                 })
 
                 indexed += 1
@@ -768,9 +760,8 @@ class HTMLBackupIndexer:
 
             except Exception as e:
                 errors.append(f"Error processing {url}: {str(e)}")
-                continue
 
-        print(f"Prepared {len(documents)} documents for indexing (skipped {skipped})")
+        print(f"Prepared {len(documents)} documents (skipped {skipped})")
 
         if not documents:
             if skipped > 0:
@@ -788,9 +779,9 @@ class HTMLBackupIndexer:
                 "errors": errors
             }
 
-        # Add to vector store and get index data for saving
+        # Add to vector store
         if progress_callback:
-            progress_callback(len(documents), len(documents), "Computing embeddings and storing...")
+            progress_callback(len(documents), len(documents), "Computing embeddings...")
 
         print("Adding documents to vector store...")
         store = VectorStore()
@@ -798,29 +789,22 @@ class HTMLBackupIndexer:
         count = result["count"]
         index_data = result["index_data"]
 
-        # Save all output files to backup folder (v2 format)
+        # Get base_url from manifest
+        base_url = ""
+        try:
+            if self.manifest_path and self.manifest_path.exists():
+                with open(self.manifest_path, 'r', encoding='utf-8') as f:
+                    manifest = json.load(f)
+                base_url = manifest.get("base_url", "")
+        except Exception:
+            pass
+
+        # Save all output files (v3 format)
         if count > 0:
-            # Get base_url from manifest if available
-            base_url = ""
-            try:
-                if self.manifest_path.exists():
-                    with open(self.manifest_path, 'r', encoding='utf-8') as f:
-                        manifest = json.load(f)
-                    base_url = manifest.get("base_url", "")
-            except Exception:
-                pass
-
-            # V2 format: separate files for source, documents, embeddings
-            save_source_metadata(self.output_folder, self.source_id, documents,
-                                base_url=base_url, source_type="html")
-            save_documents_metadata(self.output_folder, self.source_id, documents)
-            if index_data:
-                save_embeddings_file(self.output_folder, self.source_id, index_data)
-            save_distribution_manifest(self.output_folder, self.source_id, documents,
-                                       source_type="html", base_url=base_url)
-
-            # Also save legacy format for backwards compatibility (can remove later)
-            self._save_metadata_file(documents)
+            save_all_outputs(
+                self.output_folder, self.source_id, documents, index_data,
+                source_type="html", base_url=base_url
+            )
 
         return {
             "success": True,
@@ -831,169 +815,27 @@ class HTMLBackupIndexer:
             "output_folder": str(self.output_folder)
         }
 
-    def _save_metadata_file(self, documents: List[Dict]) -> Optional[Path]:
-        """Save the per-document metadata file to output folder"""
-        try:
-            # Create source-specific metadata file
-            source_docs = {}
-            total_chars = 0
 
-            for doc in documents:
-                doc_id = doc.get("id", doc.get("content_hash", ""))
-                char_count = doc.get("char_count", len(doc.get("content", "")))
-                total_chars += char_count
-
-                source_docs[doc_id] = {
-                    "title": doc.get("title", "Unknown"),
-                    "url": doc.get("url", ""),
-                    "content_hash": doc.get("content_hash", ""),
-                    "scraped_at": doc.get("scraped_at", datetime.now().isoformat()),
-                    "char_count": char_count
-                }
-
-            # Write source metadata file to output folder
-            source_meta = {
-                "version": 2,
-                "source_id": self.source_id,
-                "last_updated": datetime.now().isoformat(),
-                "document_count": len(source_docs),
-                "total_chars": total_chars,
-                "documents": source_docs
-            }
-
-            metadata_file = self.output_folder / f"{self.source_id}_metadata.json"
-            with open(metadata_file, 'w', encoding='utf-8') as f:
-                json.dump(source_meta, f, indent=2)
-
-            print(f"Saved metadata file: {metadata_file} ({len(source_docs)} documents)")
-
-            # Update master metadata file
-            try:
-                from offline_tools.packager import update_master_metadata
-                update_master_metadata(self.source_id, source_meta)
-                print(f"Updated master metadata with {self.source_id}")
-            except Exception as e:
-                print(f"Warning: Failed to update master metadata: {e}")
-
-            return metadata_file
-
-        except Exception as e:
-            print(f"Warning: Failed to save metadata file: {e}")
-            return None
-
-    def _save_index_file(self, index_data: Dict) -> Optional[Path]:
-        """Save the vector index data to a JSON file for distribution"""
-        try:
-            index_file = self.output_folder / f"{self.source_id}_index.json"
-
-            # Structure the index file
-            index_export = {
-                "version": 1,
-                "source_id": self.source_id,
-                "created_at": datetime.now().isoformat(),
-                "document_count": len(index_data.get("ids", [])),
-                "embedding_model": "default",
-                "documents": []
-            }
-
-            # Build document entries with embeddings
-            ids = index_data.get("ids", [])
-            embeddings = index_data.get("embeddings", [])
-            contents = index_data.get("contents", [])
-            metadatas = index_data.get("metadatas", [])
-
-            for i in range(len(ids)):
-                doc_entry = {
-                    "id": ids[i],
-                    "embedding": embeddings[i] if i < len(embeddings) else None,
-                    "content": contents[i] if i < len(contents) else None,
-                    "metadata": metadatas[i] if i < len(metadatas) else {}
-                }
-                index_export["documents"].append(doc_entry)
-
-            with open(index_file, 'w', encoding='utf-8') as f:
-                json.dump(index_export, f)
-
-            print(f"Saved index file: {index_file} ({len(ids)} documents)")
-            return index_file
-
-        except Exception as e:
-            print(f"Warning: Failed to save index file: {e}")
-            return None
-
-    def _save_manifest_file(self, documents: List[Dict], backup_info: Dict = None) -> Optional[Path]:
-        """Save the source-level manifest file"""
-        try:
-            manifest_file = self.output_folder / f"{self.source_id}_manifest.json"
-
-            total_chars = sum(doc.get("char_count", len(doc.get("content", ""))) for doc in documents)
-
-            # Calculate backup size if available
-            backup_size_mb = 0
-            if self.backup_path.exists():
-                try:
-                    total_size = sum(f.stat().st_size for f in self.backup_path.rglob('*') if f.is_file())
-                    backup_size_mb = round(total_size / (1024*1024), 2)
-                except Exception:
-                    pass
-
-            manifest = {
-                "version": 1,
-                "source_id": self.source_id,
-                "created_at": datetime.now().isoformat(),
-                "document_count": len(documents),
-                "total_chars": total_chars,
-                "source_type": "html",
-                "backup_info": backup_info or {
-                    "type": "html",
-                    "path": str(self.backup_path),
-                    "size_mb": backup_size_mb
-                },
-                "files": {
-                    "index": f"{self.source_id}_index.json",
-                    "metadata": f"{self.source_id}_metadata.json",
-                    "manifest": f"{self.source_id}_manifest.json"
-                }
-            }
-
-            with open(manifest_file, 'w', encoding='utf-8') as f:
-                json.dump(manifest, f, indent=2)
-
-            print(f"Saved manifest file: {manifest_file}")
-            return manifest_file
-
-        except Exception as e:
-            print(f"Warning: Failed to save manifest file: {e}")
-            return None
-
+# =============================================================================
+# PDF INDEXER
+# =============================================================================
 
 class PDFIndexer:
-    """
-    Indexes content from PDF files or PDF collection folders into the vector database.
-    Handles both individual PDFs and collections managed by PDFCollectionManager.
-    """
+    """Indexes content from PDF files into the vector database."""
 
     def __init__(self, source_path: str, source_id: str, backup_folder: str = None):
-        """
-        Args:
-            source_path: Path to a PDF file or folder containing PDFs
-            source_id: Source identifier for this content
-            backup_folder: Optional folder to save output files
-        """
         self.source_path = Path(source_path)
         self.source_id = source_id
 
         if backup_folder:
             self.output_folder = Path(backup_folder)
+        elif self.source_path.is_file():
+            self.output_folder = self.source_path.parent
         else:
-            # Default to source_path parent if it's a file, or source_path if folder
-            if self.source_path.is_file():
-                self.output_folder = self.source_path.parent
-            else:
-                self.output_folder = self.source_path
+            self.output_folder = self.source_path
         self.output_folder.mkdir(parents=True, exist_ok=True)
 
-        # Try to import PDF extraction library
+        # Check for PDF library
         self.has_pymupdf = False
         self.has_pypdf = False
         try:
@@ -1009,9 +851,7 @@ class PDFIndexer:
 
         if not self.has_pymupdf and not self.has_pypdf:
             raise ImportError(
-                "No PDF library available. Install one of:\n"
-                "  pip install pymupdf  (recommended)\n"
-                "  pip install pypdf"
+                "No PDF library available. Install: pip install pymupdf"
             )
 
     def _extract_text(self, pdf_path: Path) -> str:
@@ -1019,19 +859,13 @@ class PDFIndexer:
         if self.has_pymupdf:
             import fitz
             doc = fitz.open(str(pdf_path))
-            text_parts = []
-            for page in doc:
-                text_parts.append(page.get_text())
+            text_parts = [page.get_text() for page in doc]
             doc.close()
             return "\n".join(text_parts)
         elif self.has_pypdf:
             from pypdf import PdfReader
             reader = PdfReader(str(pdf_path))
-            text_parts = []
-            for page in reader.pages:
-                text = page.extract_text()
-                if text:
-                    text_parts.append(text)
+            text_parts = [page.extract_text() or "" for page in reader.pages]
             return "\n".join(text_parts)
         return ""
 
@@ -1046,9 +880,6 @@ class PDFIndexer:
                 return {
                     "title": metadata.get("title", ""),
                     "author": metadata.get("author", ""),
-                    "subject": metadata.get("subject", ""),
-                    "keywords": metadata.get("keywords", ""),
-                    "creator": metadata.get("creator", ""),
                 }
             elif self.has_pypdf:
                 from pypdf import PdfReader
@@ -1057,28 +888,15 @@ class PDFIndexer:
                     return {
                         "title": reader.metadata.get("/Title", ""),
                         "author": reader.metadata.get("/Author", ""),
-                        "subject": reader.metadata.get("/Subject", ""),
-                        "keywords": reader.metadata.get("/Keywords", ""),
-                        "creator": reader.metadata.get("/Creator", ""),
                     }
-        except Exception as e:
-            print(f"Error extracting metadata from {pdf_path}: {e}")
+        except Exception:
+            pass
         return {}
-
-    def _clean_filename_to_title(self, filename: str) -> str:
-        """Convert filename to readable title"""
-        import re
-        name = Path(filename).stem
-        name = re.sub(r'[-_]+', ' ', name)
-        name = re.sub(r'^\d{4}[-_]?\d{0,2}[-_]?\d{0,2}[-_]?', '', name)
-        return name.strip().title()
 
     def _get_pdf_files(self) -> list:
         """Get list of PDF files to process"""
-        if self.source_path.is_file():
-            if self.source_path.suffix.lower() == '.pdf':
-                return [self.source_path]
-            return []
+        if self.source_path.is_file() and self.source_path.suffix.lower() == '.pdf':
+            return [self.source_path]
         elif self.source_path.is_dir():
             return list(self.source_path.glob("*.pdf"))
         return []
@@ -1090,12 +908,12 @@ class PDFIndexer:
 
         Args:
             limit: Maximum number of PDFs to index
-            progress_callback: Function(current, total, message) for progress updates
-            skip_existing: Skip PDFs already in the database
+            progress_callback: Function(current, total, message)
+            skip_existing: Skip PDFs already in database
             chunk_size: Characters per chunk for long PDFs
 
         Returns:
-            Dict with success status, count, errors
+            Dict with results
         """
         errors = []
         documents = []
@@ -1111,11 +929,9 @@ class PDFIndexer:
                 "indexed_count": 0
             }
 
-        # Get existing IDs to check for duplicates
         existing_ids = set()
         if skip_existing:
             try:
-                from offline_tools.vectordb.store import VectorStore
                 store = VectorStore()
                 existing_ids = store.get_existing_ids()
             except:
@@ -1126,16 +942,14 @@ class PDFIndexer:
                 progress_callback(i + 1, total_pdfs, f"Processing {pdf_path.name}")
 
             try:
-                # Extract text and metadata
                 text = self._extract_text(pdf_path)
                 if len(text) < 100:
-                    errors.append(f"{pdf_path.name}: Too little text extracted")
+                    errors.append(f"{pdf_path.name}: Too little text")
                     continue
 
                 metadata = self._extract_metadata(pdf_path)
-                title = metadata.get("title") or self._clean_filename_to_title(pdf_path.name)
+                title = metadata.get("title") or pdf_path.stem.replace('_', ' ').replace('-', ' ').title()
 
-                # Generate content hash
                 content_hash = hashlib.md5(text.encode()).hexdigest()[:12]
                 doc_id = f"{self.source_id}_{content_hash}"
 
@@ -1146,20 +960,20 @@ class PDFIndexer:
                 # Chunk long PDFs
                 if len(text) > chunk_size:
                     chunks = [text[j:j+chunk_size] for j in range(0, len(text), chunk_size)]
-                    for chunk_idx, chunk in enumerate(chunks):
-                        chunk_id = f"{doc_id}_chunk{chunk_idx}"
+                    for idx, chunk in enumerate(chunks):
+                        chunk_id = f"{doc_id}_chunk{idx}"
                         if chunk_id in existing_ids:
                             continue
                         documents.append({
                             "id": chunk_id,
                             "content": chunk,
-                            "url": f"file://{pdf_path}#chunk{chunk_idx}",
-                            "title": f"{title} (Part {chunk_idx + 1}/{len(chunks)})",
+                            "url": f"file://{pdf_path}#chunk{idx}",
+                            "title": f"{title} (Part {idx + 1}/{len(chunks)})",
                             "source": self.source_id,
                             "categories": [],
-                            "content_hash": f"{content_hash}_{chunk_idx}",
+                            "content_hash": f"{content_hash}_{idx}",
                             "char_count": len(chunk),
-                            "pdf_file": pdf_path.name,
+                            "doc_type": "research",
                         })
                 else:
                     documents.append({
@@ -1171,7 +985,7 @@ class PDFIndexer:
                         "categories": [],
                         "content_hash": content_hash,
                         "char_count": len(text),
-                        "pdf_file": pdf_path.name,
+                        "doc_type": "research",
                     })
 
             except Exception as e:
@@ -1182,7 +996,6 @@ class PDFIndexer:
         index_data = None
         if documents:
             try:
-                from offline_tools.vectordb.store import VectorStore
                 store = VectorStore()
                 result = store.add_documents(documents, return_index_data=True)
                 indexed_count = result["count"]
@@ -1190,27 +1003,18 @@ class PDFIndexer:
             except Exception as e:
                 return {
                     "success": False,
-                    "error": f"Failed to index to vector store: {e}",
+                    "error": f"Failed to index: {e}",
                     "indexed_count": 0,
                     "errors": errors
                 }
 
-        # Save v2 format files
+        # Save v3 format files
         if indexed_count > 0:
-            save_source_metadata(self.output_folder, self.source_id, documents,
-                                source_type="pdf")
-            save_documents_metadata(self.output_folder, self.source_id, documents)
-            if index_data:
-                save_embeddings_file(self.output_folder, self.source_id, index_data)
-            save_distribution_manifest(self.output_folder, self.source_id, documents,
-                                      source_type="pdf",
-                                      backup_info={"type": "pdf", "total_pdfs": total_pdfs})
-
-            # Also save legacy format
-            self._save_metadata(documents, total_pdfs)
-
-        # Update master metadata
-        self._update_master(len(documents))
+            save_all_outputs(
+                self.output_folder, self.source_id, documents, index_data,
+                source_type="pdf",
+                backup_info={"type": "pdf", "total_pdfs": total_pdfs}
+            )
 
         return {
             "success": True,
@@ -1221,102 +1025,15 @@ class PDFIndexer:
             "errors": errors
         }
 
-    def _save_metadata(self, documents: list, total_pdfs: int) -> None:
-        """Save metadata file for this source"""
-        from datetime import datetime
 
-        metadata = {
-            "source_id": self.source_id,
-            "source_type": "pdf",
-            "indexed_at": datetime.now().isoformat(),
-            "total_documents": len(documents),
-            "total_pdfs": total_pdfs,
-            "total_chars": sum(d.get("char_count", 0) for d in documents),
-            "documents": {d["id"]: {
-                "title": d["title"],
-                "url": d["url"],
-                "content_hash": d["content_hash"],
-                "char_count": d["char_count"],
-                "pdf_file": d.get("pdf_file", ""),
-            } for d in documents}
-        }
-
-        metadata_file = self.output_folder / f"{self.source_id}_metadata.json"
-        with open(metadata_file, 'w', encoding='utf-8') as f:
-            json.dump(metadata, f, indent=2)
-        print(f"Saved metadata: {metadata_file}")
-
-    def _update_master(self, doc_count: int) -> None:
-        """Update master metadata file"""
-        from datetime import datetime
-
-        try:
-            # Find master file in backup path
-            master_file = self.output_folder.parent / "_master.json"
-            if not master_file.exists():
-                master_file = self.output_folder / "_master.json"
-
-            master = {"version": 2, "sources": {}}
-            if master_file.exists():
-                with open(master_file, 'r', encoding='utf-8') as f:
-                    master = json.load(f)
-
-            if "sources" not in master:
-                master["sources"] = {}
-
-            master["sources"][self.source_id] = {
-                "count": doc_count,
-                "type": "pdf",
-                "last_sync": datetime.now().isoformat()
-            }
-            master["last_updated"] = datetime.now().isoformat()
-
-            with open(master_file, 'w', encoding='utf-8') as f:
-                json.dump(master, f, indent=2)
-
-        except Exception as e:
-            print(f"Warning: Failed to update master metadata: {e}")
-
-
-def index_pdf_folder(pdf_path: str, source_id: str, limit: int = 1000,
-                     progress_callback: Optional[Callable] = None,
-                     skip_existing: bool = True,
-                     backup_folder: str = None) -> Dict:
-    """
-    Convenience function to index a PDF file or folder.
-
-    Args:
-        pdf_path: Path to PDF file or folder containing PDFs
-        source_id: Source identifier for the content
-        limit: Maximum PDFs to index
-        progress_callback: Progress callback function
-        skip_existing: Skip PDFs already in database
-        backup_folder: Folder to save output files
-
-    Returns:
-        Dict with results
-    """
-    indexer = PDFIndexer(pdf_path, source_id, backup_folder=backup_folder)
-    return indexer.index(limit=limit, progress_callback=progress_callback,
-                        skip_existing=skip_existing)
-
+# =============================================================================
+# CONVENIENCE FUNCTIONS
+# =============================================================================
 
 def index_zim_file(zim_path: str, source_id: str, limit: int = 1000,
                    progress_callback: Optional[Callable] = None,
                    backup_folder: str = None) -> Dict:
-    """
-    Convenience function to index a ZIM file.
-
-    Args:
-        zim_path: Path to ZIM file
-        source_id: Source identifier for the content
-        limit: Maximum articles to index
-        progress_callback: Progress callback function
-        backup_folder: Folder to save output files (index, metadata, manifest)
-
-    Returns:
-        Dict with results
-    """
+    """Index a ZIM file."""
     indexer = ZIMIndexer(zim_path, source_id, backup_folder=backup_folder)
     return indexer.index(limit=limit, progress_callback=progress_callback)
 
@@ -1325,33 +1042,27 @@ def index_html_backup(backup_path: str, source_id: str, limit: int = 1000,
                       progress_callback: Optional[Callable] = None,
                       skip_existing: bool = True,
                       backup_folder: str = None) -> Dict:
-    """
-    Convenience function to index an HTML backup.
-
-    Args:
-        backup_path: Path to backup folder (containing manifest.json)
-        source_id: Source identifier for the content
-        limit: Maximum pages to index
-        progress_callback: Progress callback function
-        skip_existing: Skip pages already in database
-        backup_folder: Folder to save output files (index, metadata, manifest)
-
-    Returns:
-        Dict with results
-    """
+    """Index an HTML backup folder."""
     indexer = HTMLBackupIndexer(backup_path, source_id, backup_folder=backup_folder)
     return indexer.index(limit=limit, progress_callback=progress_callback,
                         skip_existing=skip_existing)
 
 
+def index_pdf_folder(pdf_path: str, source_id: str, limit: int = 1000,
+                     progress_callback: Optional[Callable] = None,
+                     skip_existing: bool = True,
+                     backup_folder: str = None) -> Dict:
+    """Index PDF files."""
+    indexer = PDFIndexer(pdf_path, source_id, backup_folder=backup_folder)
+    return indexer.index(limit=limit, progress_callback=progress_callback,
+                        skip_existing=skip_existing)
+
+
 if __name__ == "__main__":
-    # Test with command line args
     import sys
 
     if len(sys.argv) < 3:
-        print("Usage: python indexer.py <zim|html> <path> [source_id] [limit]")
-        print("  python indexer.py zim D:\\backups\\bitcoin.zim bitcoin 100")
-        print("  python indexer.py html D:\\backups\\solarcooking solarcooking 100")
+        print("Usage: python indexer.py <zim|html|pdf> <path> [source_id] [limit]")
         sys.exit(1)
 
     index_type = sys.argv[1]
@@ -1366,6 +1077,8 @@ if __name__ == "__main__":
         result = index_zim_file(path, source_id, limit, progress)
     elif index_type == "html":
         result = index_html_backup(path, source_id, limit, progress)
+    elif index_type == "pdf":
+        result = index_pdf_folder(path, source_id, limit, progress)
     else:
         print(f"Unknown type: {index_type}")
         sys.exit(1)

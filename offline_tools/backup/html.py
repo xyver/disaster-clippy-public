@@ -3,6 +3,8 @@ HTML Backup Scraper
 
 Downloads entire websites to local HTML files for offline access.
 Supports MediaWiki and static sites.
+
+Uses backup_manifest.json for backup tracking.
 """
 
 import os
@@ -14,6 +16,8 @@ from pathlib import Path
 from datetime import datetime
 from urllib.parse import urljoin, urlparse, unquote
 from bs4 import BeautifulSoup
+
+from ..schemas import get_backup_manifest_file, CURRENT_SCHEMA_VERSION
 
 
 class HTMLBackupScraper:
@@ -52,30 +56,40 @@ class HTMLBackupScraper:
         self.session.headers.update(self.headers)
 
         # Load existing manifest if resuming
-        # New naming convention: {source_id}_backup_manifest.json
-        self.manifest_path = self.output_dir / f"{source_id}_backup_manifest.json"
-        # Also check for legacy manifest.json and migrate if needed
-        self.legacy_manifest_path = self.output_dir / "manifest.json"
+        # V3 naming convention: backup_manifest.json
+        self.manifest_path = self.output_dir / get_backup_manifest_file()
+        # Legacy paths for migration
+        self.legacy_manifest_paths = [
+            self.output_dir / f"{source_id}_backup_manifest.json",  # v2 format
+            self.output_dir / "manifest.json",  # very old format
+        ]
         self.manifest = self._load_manifest()
 
     def _load_manifest(self):
-        """Load existing manifest or create new one. Migrates from legacy manifest.json if needed."""
-        # Try new naming convention first
+        """Load existing manifest or create new one. Migrates from legacy formats if needed."""
+        # Try v3 format first
         if self.manifest_path.exists():
             with open(self.manifest_path, 'r', encoding='utf-8') as f:
                 return json.load(f)
-        # Check for legacy manifest.json and migrate
-        if self.legacy_manifest_path.exists():
-            print(f"Migrating legacy manifest.json to {self.manifest_path.name}")
-            with open(self.legacy_manifest_path, 'r', encoding='utf-8') as f:
-                manifest = json.load(f)
-            # Save to new location
-            with open(self.manifest_path, 'w', encoding='utf-8') as f:
-                json.dump(manifest, f, indent=2, ensure_ascii=False)
-            # Remove legacy file
-            self.legacy_manifest_path.unlink()
-            return manifest
+
+        # Check for legacy formats and migrate
+        for legacy_path in self.legacy_manifest_paths:
+            if legacy_path.exists():
+                print(f"Migrating {legacy_path.name} to {self.manifest_path.name}")
+                with open(legacy_path, 'r', encoding='utf-8') as f:
+                    manifest = json.load(f)
+                # Update schema version
+                manifest["schema_version"] = CURRENT_SCHEMA_VERSION
+                # Save to new location
+                with open(self.manifest_path, 'w', encoding='utf-8') as f:
+                    json.dump(manifest, f, indent=2, ensure_ascii=False)
+                # Remove legacy file
+                legacy_path.unlink()
+                return manifest
+
+        # Create new manifest
         return {
+            "schema_version": CURRENT_SCHEMA_VERSION,
             "source_id": self.source_id,
             "base_url": self.base_url,
             "scraper_type": self.scraper_type,
@@ -712,12 +726,21 @@ def get_backup_status(backup_path, source_id):
     Returns dict with backed_up_count, backed_up_urls, manifest info.
     """
     backup_dir = Path(backup_path) / source_id
-    # Check new naming convention first, then legacy
-    manifest_path = backup_dir / f"{source_id}_backup_manifest.json"
-    if not manifest_path.exists():
-        manifest_path = backup_dir / "manifest.json"  # Legacy fallback
 
-    if not manifest_path.exists():
+    # Check v3 format first, then legacy
+    manifest_candidates = [
+        backup_dir / get_backup_manifest_file(),  # v3: backup_manifest.json
+        backup_dir / f"{source_id}_backup_manifest.json",  # v2 format
+        backup_dir / "manifest.json",  # very old format
+    ]
+
+    manifest_path = None
+    for candidate in manifest_candidates:
+        if candidate.exists():
+            manifest_path = candidate
+            break
+
+    if not manifest_path:
         return {
             "has_backup": False,
             "backed_up_count": 0,
