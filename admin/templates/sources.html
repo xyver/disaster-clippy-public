@@ -208,10 +208,48 @@
                 <button class="tab" data-filter="installed">Installed</button>
                 <button class="tab" data-filter="available">Available</button>
                 <button class="tab" data-filter="local">Local Only</button>
+                <button class="tab" data-filter="languages">Languages</button>
+                <button class="tab" data-filter="models">LLM Models</button>
             </div>
 
-            <div id="sourcesList" class="source-grid">
-                <div class="loading">Loading sources...</div>
+            <!-- All tab content - shows 4 sections -->
+            <div id="allTabContent">
+                <h3 style="color: #4ecca3; margin: 1rem 0 0.5rem 0; font-size: 0.95rem;">Local Sources</h3>
+                <div id="localSection" class="source-grid">
+                    <div class="loading">Loading...</div>
+                </div>
+
+                <h3 style="color: #4ecca3; margin: 1.5rem 0 0.5rem 0; font-size: 0.95rem;">Installed Sources</h3>
+                <div id="installedSection" class="source-grid">
+                    <div class="loading">Loading...</div>
+                </div>
+
+                <h3 style="color: #4ecca3; margin: 1.5rem 0 0.5rem 0; font-size: 0.95rem;">Languages</h3>
+                <div id="languagesSection" class="source-grid">
+                    <div class="placeholder">Language packs coming soon</div>
+                </div>
+
+                <h3 style="color: #4ecca3; margin: 1.5rem 0 0.5rem 0; font-size: 0.95rem;">LLM Models</h3>
+                <div id="modelsSection" class="source-grid">
+                    <div class="placeholder">LLM model management coming soon</div>
+                </div>
+            </div>
+
+            <!-- Single filter tab content -->
+            <div id="filterTabContent" style="display: none;">
+                <div id="sourcesList" class="source-grid">
+                    <div class="loading">Loading sources...</div>
+                </div>
+            </div>
+
+            <!-- Languages tab placeholder -->
+            <div id="languagesTabContent" style="display: none;">
+                <div class="placeholder">Language packs coming soon. Configure language filters for ZIM indexing and download language-specific content packs.</div>
+            </div>
+
+            <!-- Models tab placeholder -->
+            <div id="modelsTabContent" style="display: none;">
+                <div class="placeholder">LLM model management coming soon. Download and manage local LLM models for offline AI capabilities.</div>
             </div>
         </div>
     </div>
@@ -272,6 +310,58 @@
         }
 
         function renderSources() {
+            // Handle "All" tab - show sectioned view
+            if (currentFilter === 'all') {
+                document.getElementById('allTabContent').style.display = 'block';
+                document.getElementById('filterTabContent').style.display = 'none';
+                document.getElementById('languagesTabContent').style.display = 'none';
+                document.getElementById('modelsTabContent').style.display = 'none';
+
+                // Render Local section
+                const localSources = allSources.filter(s => s.status === 'local_only');
+                const localContainer = document.getElementById('localSection');
+                if (localSources.length === 0) {
+                    localContainer.innerHTML = '<div class="placeholder">No local-only sources</div>';
+                } else {
+                    localContainer.innerHTML = localSources.map(s => renderSourceCard(s)).join('');
+                }
+
+                // Render Installed section
+                const installedSources = allSources.filter(s => s.status === 'installed');
+                const installedContainer = document.getElementById('installedSection');
+                if (installedSources.length === 0) {
+                    installedContainer.innerHTML = '<div class="placeholder">No installed sources</div>';
+                } else {
+                    installedContainer.innerHTML = installedSources.map(s => renderSourceCard(s)).join('');
+                }
+
+                return;
+            }
+
+            // Handle Languages tab
+            if (currentFilter === 'languages') {
+                document.getElementById('allTabContent').style.display = 'none';
+                document.getElementById('filterTabContent').style.display = 'none';
+                document.getElementById('languagesTabContent').style.display = 'block';
+                document.getElementById('modelsTabContent').style.display = 'none';
+                return;
+            }
+
+            // Handle Models tab
+            if (currentFilter === 'models') {
+                document.getElementById('allTabContent').style.display = 'none';
+                document.getElementById('filterTabContent').style.display = 'none';
+                document.getElementById('languagesTabContent').style.display = 'none';
+                document.getElementById('modelsTabContent').style.display = 'block';
+                return;
+            }
+
+            // Handle other filter tabs (Installed, Available, Local Only)
+            document.getElementById('allTabContent').style.display = 'none';
+            document.getElementById('filterTabContent').style.display = 'block';
+            document.getElementById('languagesTabContent').style.display = 'none';
+            document.getElementById('modelsTabContent').style.display = 'none';
+
             const container = document.getElementById('sourcesList');
 
             // Filter based on current tab
@@ -297,67 +387,69 @@
                 return;
             }
 
-            container.innerHTML = filtered.map(source => {
-                // Status badge
-                let statusBadge = '';
-                let statusColor = '#888';
-                if (source.status === 'installed') {
-                    statusBadge = 'Installed';
-                    statusColor = '#4ecca3';
-                } else if (source.status === 'available') {
-                    statusBadge = 'Available';
-                    statusColor = '#f9a825';
-                } else if (source.status === 'local_only') {
-                    statusBadge = 'Local Only';
-                    statusColor = '#888';
-                }
+            container.innerHTML = filtered.map(source => renderSourceCard(source)).join('');
+        }
 
-                // Build status boxes for local sources
-                let statusBoxesHtml = '';
-                if (source.status !== 'available') {
-                    const hasConfig = source.has_config !== false;
-                    const hasBackup = source.has_backup !== false;
-                    const hasMetadata = source.has_metadata === true;
-                    const hasEmbeddings = source.has_embeddings === true;
-                    const hasLicense = source.license && source.license !== 'Unknown';
+        function renderSourceCard(source) {
+            // Status badge
+            let statusBadge = '';
+            let statusColor = '#888';
+            if (source.status === 'installed') {
+                statusBadge = 'Installed';
+                statusColor = '#4ecca3';
+            } else if (source.status === 'available') {
+                statusBadge = 'Available';
+                statusColor = '#f9a825';
+            } else if (source.status === 'local_only') {
+                statusBadge = 'Local Only';
+                statusColor = '#888';
+            }
 
-                    statusBoxesHtml = `
-                        <div class="status-boxes">
-                            <span class="status-box ${hasConfig ? 'ok' : 'missing'}">Config</span>
-                            <span class="status-box ${hasBackup ? 'ok' : 'missing'}">Backup</span>
-                            <span class="status-box ${hasMetadata ? 'ok' : 'missing'}">Metadata</span>
-                            <span class="status-box ${hasEmbeddings ? 'ok' : 'warning'}">Index</span>
-                            <span class="status-box ${hasLicense ? 'ok' : 'warning'}">License</span>
-                        </div>
-                    `;
-                }
+            // Build status boxes for local sources
+            let statusBoxesHtml = '';
+            if (source.status !== 'available') {
+                const hasConfig = source.has_config !== false;
+                const hasBackup = source.has_backup !== false;
+                const hasMetadata = source.has_metadata === true;
+                const hasEmbeddings = source.has_embeddings === true;
+                const hasLicense = source.license && source.license !== 'Unknown';
 
-                return `
-                    <div class="source-card">
-                        <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 0.5rem;">
-                            <h3 style="margin: 0;">${escapeHtml(source.name || source.source_id)}</h3>
-                            <span style="font-size: 0.7rem; padding: 0.2rem 0.5rem; background: ${statusColor}20; color: ${statusColor}; border-radius: 3px;">${statusBadge}</span>
-                        </div>
-                        <div class="meta">
-                            <div>${(source.document_count || 0).toLocaleString()} documents</div>
-                            ${source.backup_type ? `<div>${source.backup_type} backup</div>` : ''}
-                            <div>${source.license || 'Unknown license'}</div>
-                        </div>
-                        ${statusBoxesHtml}
-                        <div class="actions">
-                            ${source.status === 'available' ? `
-                                <button class="btn-small btn-install" onclick="installSource('${source.source_id}')">
-                                    Install
-                                </button>
-                            ` : `
-                                <button class="btn-small btn-edit" onclick="window.location.href='/useradmin/sources/tools?source=${source.source_id}'">
-                                    Edit
-                                </button>
-                            `}
-                        </div>
+                statusBoxesHtml = `
+                    <div class="status-boxes">
+                        <span class="status-box ${hasConfig ? 'ok' : 'missing'}">Config</span>
+                        <span class="status-box ${hasBackup ? 'ok' : 'missing'}">Backup</span>
+                        <span class="status-box ${hasMetadata ? 'ok' : 'missing'}">Metadata</span>
+                        <span class="status-box ${hasEmbeddings ? 'ok' : 'warning'}">Index</span>
+                        <span class="status-box ${hasLicense ? 'ok' : 'warning'}">License</span>
                     </div>
                 `;
-            }).join('');
+            }
+
+            return `
+                <div class="source-card">
+                    <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 0.5rem;">
+                        <h3 style="margin: 0;">${escapeHtml(source.name || source.source_id)}</h3>
+                        <span style="font-size: 0.7rem; padding: 0.2rem 0.5rem; background: ${statusColor}20; color: ${statusColor}; border-radius: 3px;">${statusBadge}</span>
+                    </div>
+                    <div class="meta">
+                        <div>${(source.document_count || 0).toLocaleString()} documents</div>
+                        ${source.backup_type ? `<div>${source.backup_type} backup</div>` : ''}
+                        <div>${source.license || 'Unknown license'}</div>
+                    </div>
+                    ${statusBoxesHtml}
+                    <div class="actions">
+                        ${source.status === 'available' ? `
+                            <button class="btn-small btn-install" onclick="installSource('${source.source_id}')">
+                                Install
+                            </button>
+                        ` : `
+                            <button class="btn-small btn-edit" onclick="window.location.href='/useradmin/sources/tools?source=${source.source_id}'">
+                                Edit
+                            </button>
+                        `}
+                    </div>
+                </div>
+            `;
         }
 
         function escapeHtml(text) {

@@ -28,6 +28,31 @@ from offline_tools.schemas import get_manifest_file, get_metadata_file
 
 
 # =============================================================================
+# PUBLIC MODE - Disables admin UI for public deployments (Railway)
+# =============================================================================
+
+def is_public_mode() -> bool:
+    """
+    Check if running in public mode (Railway deployment).
+    When PUBLIC_MODE=true, all admin UI routes are blocked.
+    """
+    return os.getenv("PUBLIC_MODE", "").lower() in ("true", "1", "yes")
+
+
+def block_in_public_mode():
+    """
+    Dependency that blocks access to admin routes in public mode.
+    Use on Railway to prevent unauthorized access to admin features.
+    """
+    if is_public_mode():
+        raise HTTPException(
+            status_code=404,
+            detail="Not found"
+        )
+    return True
+
+
+# =============================================================================
 # ADMIN MODE - Controls access to global cloud features
 # =============================================================================
 
@@ -70,7 +95,12 @@ from .routes.source_tools import router as source_tools_router
 from .routes.packs import router as packs_router
 from .routes.jobs import router as jobs_router
 
-router = APIRouter(prefix="/useradmin", tags=["User Admin"])
+# Create router with public mode check - blocks all routes when PUBLIC_MODE=true
+router = APIRouter(
+    prefix="/useradmin",
+    tags=["User Admin"],
+    dependencies=[Depends(block_in_public_mode)]
+)
 router.include_router(cloud_upload_router)
 router.include_router(source_tools_router)
 router.include_router(packs_router)

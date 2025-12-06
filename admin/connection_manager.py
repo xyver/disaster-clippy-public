@@ -25,6 +25,7 @@ class ConnectionState(Enum):
     DISCONNECTED = "disconnected"  # Connection lost (in online mode)
     OFFLINE = "offline"            # User chose offline mode (intentional)
     RECOVERING = "recovering"      # Was offline, now detecting recovery
+    UNAVAILABLE = "unavailable"    # Global system (Railway proxy) is down/unreachable
 
 
 class ConnectionManager:
@@ -69,6 +70,8 @@ class ConnectionManager:
         self._is_checking = False  # Currently performing ping check
         self._recent_failures = []  # Track recent failure timestamps
         self._connection_state = ConnectionState.ONLINE
+        self._global_system_unavailable = False  # Railway/proxy system is down
+        self._last_global_system_error = 0  # Timestamp of last global system error
 
     def set_mode(self, mode: str):
         """Set connection mode"""
@@ -147,6 +150,35 @@ class ConnectionManager:
         # Trigger immediate check
         self._check_connectivity()
 
+    def on_global_system_error(self, error: Optional[Exception] = None):
+        """
+        Called when the global system (Railway proxy) returns an error.
+        This is different from network issues - the user has internet but
+        the central service is down (5xx errors, timeouts to proxy).
+        """
+        was_state = self._connection_state
+        self._global_system_unavailable = True
+        self._last_global_system_error = time.time()
+        self._update_connection_state()
+        if was_state != self._connection_state:
+            self._notify_status_change(False)
+
+    def on_global_system_ok(self):
+        """
+        Called when a global system (Railway proxy) call succeeds.
+        Clears the unavailable flag.
+        """
+        if self._global_system_unavailable:
+            was_state = self._connection_state
+            self._global_system_unavailable = False
+            self._update_connection_state()
+            if was_state != self._connection_state:
+                self._notify_status_change(True)
+
+    def is_global_system_available(self) -> bool:
+        """Check if the global system (Railway proxy) is available"""
+        return not self._global_system_unavailable
+
     def _update_connection_state(self):
         """Update the connection state based on current conditions"""
         now = time.time()
@@ -157,6 +189,12 @@ class ConnectionManager:
 
         if self._is_checking:
             self._connection_state = ConnectionState.CHECKING
+            return
+
+        # Check if global system (Railway proxy) is unavailable
+        # This takes priority - user has internet but the service is down
+        if self._global_system_unavailable:
+            self._connection_state = ConnectionState.UNAVAILABLE
             return
 
         if not self._is_online:
@@ -286,6 +324,7 @@ class ConnectionManager:
             "state_icon": state_info["icon"],
             "is_online": self._is_online,
             "temporarily_offline": self._temporarily_offline,
+            "global_system_unavailable": self._global_system_unavailable,
             "effective_mode": self._get_effective_mode(),
             "message": state_info["message"],
             "last_successful_call": self._last_successful_api_call,
@@ -332,6 +371,12 @@ class ConnectionManager:
                 "color": "blue",
                 "icon": "sync",
                 "message": "Connection restored - verifying..."
+            },
+            ConnectionState.UNAVAILABLE: {
+                "label": "System Unavailable",
+                "color": "orange",
+                "icon": "cloud_off",
+                "message": "Global system temporarily unavailable - using local resources"
             }
         }
         return state_info.get(state, state_info[ConnectionState.ONLINE])
@@ -343,6 +388,9 @@ class ConnectionManager:
         """
         if self._mode == "offline_only":
             return "offline"
+        # Global system unavailable affects all online modes
+        if self._global_system_unavailable:
+            return "global_unavailable"
         if self._mode == "online_only":
             return "online" if self._is_online else "online_disconnected"
         # Hybrid

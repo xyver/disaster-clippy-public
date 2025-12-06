@@ -733,4 +733,38 @@ The following locations contain legacy file format handling that can be deleted 
 
 ---
 
+Summary
+New R2 Storage Features (r2.py)
+Bucket getters:
+get_backups_storage() - Uses R2_BACKUPS_BUCKET (reads official content)
+get_submissions_storage() - Uses R2_SUBMISSIONS_BUCKET (writes user submissions)
+get_r2_storage() - Legacy single-bucket mode (backward compatible)
+Server-side copy methods:
+copy_to_bucket(source_key, dest_bucket, dest_key) - Cross-bucket copy
+move_to_bucket(source_key, dest_bucket, dest_key) - Copy + delete
+Helper functions:
+approve_submission(submission_key, dest_source_id, dest_filename) - Server-side approve
+reject_submission(submission_key, reason) - Move to rejected folder
+Environment Variables
+Railway (create two R2 tokens with limited access):
+R2_ACCESS_KEY_ID=<railway-token-id>
+R2_SECRET_ACCESS_KEY=<railway-token-secret>
+R2_ENDPOINT_URL=https://<account>.r2.cloudflarestorage.com
+R2_BACKUPS_BUCKET=disaster-clippy-backups      # Read-only token
+R2_SUBMISSIONS_BUCKET=disaster-clippy-submissions  # Write-only token
+Global Admin (full access token):
+R2_ACCESS_KEY_ID=<admin-token-id>
+R2_SECRET_ACCESS_KEY=<admin-token-secret>
+R2_ENDPOINT_URL=https://<account>.r2.cloudflarestorage.com
+R2_BACKUPS_BUCKET=disaster-clippy-backups
+R2_SUBMISSIONS_BUCKET=disaster-clippy-submissions
+Cloudflare R2 Setup
+Create bucket: disaster-clippy-backups
+Create bucket: disaster-clippy-submissions
+Create API token for Railway: Read on backups, Write on submissions
+Create API token for Global Admin: Full access on both
+The code is backward compatible - if you only set R2_BUCKET_NAME, it uses single-bucket mode.
+
+
+
 *Last Updated: December 2025*

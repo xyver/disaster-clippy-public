@@ -16,6 +16,11 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
+# Rate limiting for API endpoints
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.messages import HumanMessage, AIMessage
@@ -42,6 +47,7 @@ from admin.zim_server import router as zim_router
 # Import unified AI service and connection manager
 from admin.ai_service import get_ai_service, SearchMethod, ResponseMethod
 from admin.connection_manager import get_connection_manager, sync_mode_from_config, ConnectionState
+from admin.local_config import get_local_config
 
 # Load environment
 load_dotenv()
@@ -75,6 +81,23 @@ app = FastAPI(
     description="Conversational search for DIY and humanitarian resources",
     version="0.1.0"
 )
+
+# Rate limiter - uses IP address for identification
+# Limits can be applied per-route with @limiter.limit("10/minute")
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+
+# Custom rate limit handler with friendly message
+async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
+    return JSONResponse(
+        status_code=429,
+        content={
+            "error": "rate_limit_exceeded",
+            "message": "You're sending messages too quickly. Please wait a few seconds before trying again.",
+            "retry_after": exc.detail
+        }
+    )
+app.add_exception_handler(RateLimitExceeded, rate_limit_handler)
 
 # CORS for frontend
 app.add_middleware(
@@ -524,14 +547,16 @@ def format_offline_response(query: str, context: str) -> str:
 
 
 @app.post("/chat", response_model=ChatResponse)
-async def chat(request: ChatRequest):
+@limiter.limit("10/minute")
+async def chat(request: Request, body: ChatRequest):
     """
     Main chat endpoint.
     Handles conversational queries with context from vector store.
     Respects connection mode setting (online_only, hybrid, offline_only).
+    Rate limited to 10 requests per minute per IP.
     """
-    session_id = request.session_id or datetime.utcnow().isoformat()
-    message = request.message.strip()
+    session_id = body.session_id or datetime.utcnow().isoformat()
+    message = body.message.strip()
 
     # Get connection mode
     mode = get_connection_mode()
@@ -554,14 +579,14 @@ async def chat(request: ChatRequest):
         articles = handle_similarity_query(message, session["last_results"])
     else:
         # Search using appropriate method based on connection mode
-        # request.sources: None = all, [] = none, [ids] = specific
+        # body.sources: None = all, [] = none, [ids] = specific
         source_filter = None
-        if request.sources is not None:
-            if len(request.sources) == 0:
+        if body.sources is not None:
+            if len(body.sources) == 0:
                 # Empty list = no sources selected, return empty results
                 articles = []
             else:
-                source_filter = {"source": {"$in": request.sources}}
+                source_filter = {"source": {"$in": body.sources}}
                 articles = search_articles(message, n_results=10,
                                           source_filter=source_filter, mode=mode)
         else:
@@ -572,8 +597,8 @@ async def chat(request: ChatRequest):
     articles = prioritize_results_by_doc_type(articles, preferred_doc_type)
 
     # Filter by sources if specified (post-filter for similarity queries)
-    if request.sources is not None and len(request.sources) > 0:
-        articles = [a for a in articles if a.get("metadata", {}).get("source") in request.sources]
+    if body.sources is not None and len(body.sources) > 0:
+        articles = [a for a in articles if a.get("metadata", {}).get("source") in body.sources]
 
     # Return top 5 after re-ranking
     articles = articles[:5]
@@ -622,13 +647,15 @@ async def chat(request: ChatRequest):
 # =============================================================================
 
 @app.post("/api/v1/chat", response_model=SimpleQueryResponse)
-async def simple_chat(request: SimpleQueryRequest):
+@limiter.limit("10/minute")
+async def simple_chat(request: Request, body: SimpleQueryRequest):
     """
     Simple chat API for external websites.
 
     Just send a message, get a response. No articles sidebar, no complex data.
     Perfect for embedding a simple chat widget on other sites.
     Uses unified AI service for consistent behavior.
+    Rate limited to 10 requests per minute per IP.
 
     Example:
         POST /api/v1/chat
@@ -637,8 +664,8 @@ async def simple_chat(request: SimpleQueryRequest):
         Response:
         {"response": "Here are some methods...", "session_id": "abc123"}
     """
-    session_id = request.session_id or datetime.utcnow().isoformat()
-    message = request.message.strip()
+    session_id = body.session_id or datetime.utcnow().isoformat()
+    message = body.message.strip()
 
     if not message:
         return SimpleQueryResponse(
@@ -663,18 +690,18 @@ async def simple_chat(request: SimpleQueryRequest):
 
     # Build source filter
     source_filter = None
-    if request.sources is not None:
-        if len(request.sources) == 0:
+    if body.sources is not None:
+        if len(body.sources) == 0:
             articles = []
         else:
-            source_filter = {"source": {"$in": request.sources}}
+            source_filter = {"source": {"$in": body.sources}}
 
     if any(phrase in message.lower() for phrase in ["more like", "similar to", "like #", "like number"]):
         articles = handle_similarity_query(message, session["last_results"])
         # Post-filter for similarity queries
-        if request.sources is not None and len(request.sources) > 0:
-            articles = [a for a in articles if a.get("metadata", {}).get("source") in request.sources]
-    elif request.sources is not None and len(request.sources) == 0:
+        if body.sources is not None and len(body.sources) > 0:
+            articles = [a for a in articles if a.get("metadata", {}).get("source") in body.sources]
+    elif body.sources is not None and len(body.sources) == 0:
         articles = []  # No sources selected
     else:
         articles = search_articles(message, n_results=10, source_filter=source_filter)
@@ -704,12 +731,14 @@ async def simple_chat(request: SimpleQueryRequest):
 
 
 @app.post("/api/v1/chat/stream")
-async def stream_chat(request: SimpleQueryRequest):
+@limiter.limit("10/minute")
+async def stream_chat(request: Request, body: SimpleQueryRequest):
     """
     Streaming chat API - returns Server-Sent Events (SSE) for real-time response.
 
     Use this endpoint for a "typing" effect where tokens appear as they're generated.
     Connect using EventSource in JavaScript.
+    Rate limited to 10 requests per minute per IP.
 
     Example JavaScript:
         const eventSource = new EventSource('/api/v1/chat/stream?message=...');
@@ -721,8 +750,8 @@ async def stream_chat(request: SimpleQueryRequest):
             }
         };
     """
-    session_id = request.session_id or datetime.utcnow().isoformat()
-    message = request.message.strip()
+    session_id = body.session_id or datetime.utcnow().isoformat()
+    message = body.message.strip()
 
     if not message:
         async def empty_response():
@@ -747,19 +776,19 @@ async def stream_chat(request: SimpleQueryRequest):
 
     # Build source filter
     source_filter = None
-    if request.sources is not None:
-        if len(request.sources) == 0:
+    if body.sources is not None:
+        if len(body.sources) == 0:
             # Empty list = no sources selected
             articles = []
         else:
-            source_filter = {"source": {"$in": request.sources}}
+            source_filter = {"source": {"$in": body.sources}}
 
     if any(phrase in message.lower() for phrase in ["more like", "similar to", "like #", "like number"]):
         articles = handle_similarity_query(message, session["last_results"])
         # Post-filter for similarity queries
-        if request.sources is not None and len(request.sources) > 0:
-            articles = [a for a in articles if a.get("metadata", {}).get("source") in request.sources]
-    elif request.sources is not None and len(request.sources) == 0:
+        if body.sources is not None and len(body.sources) > 0:
+            articles = [a for a in articles if a.get("metadata", {}).get("source") in body.sources]
+    elif body.sources is not None and len(body.sources) == 0:
         articles = []  # No sources selected
     else:
         articles = search_articles(message, n_results=10, source_filter=source_filter)
@@ -883,6 +912,13 @@ async def get_embed_code():
             background: #e9ecef;
             color: #333;
         }}
+        .clippy-bot a {{
+            color: #007bff;
+            text-decoration: underline;
+        }}
+        .clippy-bot a:hover {{
+            color: #0056b3;
+        }}
         #clippy-input {{
             width: calc(100% - 70px);
             padding: 10px;
@@ -916,6 +952,31 @@ async def get_embed_code():
 const CLIPPY_API = "{base_url}/api/v1/chat";
 let clippySessionId = null;
 
+// Escape HTML to prevent XSS
+function escapeHtml(text) {{
+    if (!text) return '';
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}}
+
+// Parse markdown links to clickable HTML
+function parseMarkdown(text) {{
+    if (!text) return '';
+    let html = escapeHtml(text);
+    // Convert [text](url) to clickable links
+    html = html.replace(/\\[([^\\]]+)\\]\\((https?:\\/\\/[^\\)]+)\\)/g,
+        '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+    html = html.replace(/\\[([^\\]]+)\\]\\((\\/[^\\)]+)\\)/g,
+        '<a href="{base_url}$2" target="_blank">$1</a>');
+    // Convert **bold** and *italic*
+    html = html.replace(/\\*\\*([^*]+)\\*\\*/g, '<strong>$1</strong>');
+    html = html.replace(/\\*([^*]+)\\*/g, '<em>$1</em>');
+    // Convert line breaks
+    html = html.replace(/\\n/g, '<br>');
+    return html;
+}}
+
 async function sendToClippy() {{
     const input = document.getElementById("clippy-input");
     const messages = document.getElementById("clippy-messages");
@@ -923,8 +984,8 @@ async function sendToClippy() {{
 
     if (!message) return;
 
-    // Show user message
-    messages.innerHTML += '<div class="clippy-msg clippy-user">' + message + '</div>';
+    // Show user message (escaped)
+    messages.innerHTML += '<div class="clippy-msg clippy-user">' + escapeHtml(message) + '</div>';
     input.value = "";
     messages.scrollTop = messages.scrollHeight;
 
@@ -941,8 +1002,8 @@ async function sendToClippy() {{
         const data = await response.json();
         clippySessionId = data.session_id;
 
-        // Show bot response
-        messages.innerHTML += '<div class="clippy-msg clippy-bot">' + data.response + '</div>';
+        // Show bot response with markdown parsing
+        messages.innerHTML += '<div class="clippy-msg clippy-bot">' + parseMarkdown(data.response) + '</div>';
         messages.scrollTop = messages.scrollHeight;
     }} catch (error) {{
         messages.innerHTML += '<div class="clippy-msg clippy-bot">Sorry, I could not connect. Please try again.</div>';
@@ -977,6 +1038,312 @@ document.getElementById("clippy-input").addEventListener("keypress", function(e)
             "No API key required for basic usage"
         ]
     }
+
+
+# =============================================================================
+# CLOUD PROXY API - Allows local admins to access R2 through Railway
+# =============================================================================
+
+@app.get("/api/cloud/sources")
+@limiter.limit("30/minute")
+async def cloud_sources(request: Request):
+    """
+    List available backup sources from R2 cloud storage.
+    This is a proxy endpoint - Railway has R2 keys, local admins call this.
+
+    Uses the backups bucket (R2_BACKUPS_BUCKET or R2_BUCKET_NAME).
+
+    Returns:
+        List of available sources with metadata
+    """
+    try:
+        from offline_tools.cloud.r2 import get_backups_storage
+        storage = get_backups_storage()
+
+        if not storage.is_configured():
+            # R2 not configured on this instance
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "error": "cloud_not_configured",
+                    "message": "Cloud storage not available on this server"
+                }
+            )
+
+        conn_status = storage.test_connection()
+        if not conn_status["connected"]:
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "error": "cloud_connection_failed",
+                    "message": conn_status.get("error", "Failed to connect to cloud storage")
+                }
+            )
+
+        # Try to load _master.json for source metadata
+        master_data = {}
+        import tempfile
+        tmp_path = Path(tempfile.gettempdir()) / "cloud_master_proxy.json"
+        if storage.download_file("backups/_master.json", str(tmp_path)):
+            try:
+                with open(tmp_path, 'r', encoding='utf-8') as f:
+                    master_data = json.load(f)
+            except Exception:
+                pass
+
+        master_sources = master_data.get("sources", {})
+        if master_sources:
+            sources = []
+            for source_id, source_info in master_sources.items():
+                sources.append({
+                    "source_id": source_id,
+                    "name": source_info.get("name", source_id.replace("-", " ").replace("_", " ").title()),
+                    "description": source_info.get("description", ""),
+                    "license": source_info.get("license", "Unknown"),
+                    "document_count": source_info.get("count", source_info.get("document_count", 0)),
+                    "backup_type": source_info.get("backup_type", "cloud"),
+                    "base_url": source_info.get("base_url", "")
+                })
+            sources.sort(key=lambda x: x["name"].lower())
+            return {
+                "sources": sources,
+                "connected": True,
+                "total": len(sources)
+            }
+
+        # Fallback: List folders in backups/
+        files = storage.list_files("backups/")
+        source_ids = set()
+        skip_files = {"_master.json", "sources.json", "backups.json"}
+
+        for f in files:
+            key = f["key"]
+            parts = key.split("/")
+            if len(parts) >= 2:
+                source_id = parts[1]
+                if source_id and source_id not in skip_files and not source_id.startswith("_"):
+                    source_ids.add(source_id)
+
+        sources = [
+            {
+                "source_id": sid,
+                "name": sid.replace("-", " ").replace("_", " ").title(),
+                "description": "",
+                "document_count": 0
+            }
+            for sid in sorted(source_ids)
+        ]
+
+        return {
+            "sources": sources,
+            "connected": True,
+            "total": len(sources)
+        }
+
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": "cloud_error",
+                "message": str(e)
+            }
+        )
+
+
+@app.get("/api/cloud/download/{source_id}")
+@limiter.limit("10/minute")
+async def cloud_download(request: Request, source_id: str):
+    """
+    Get download info for a source from R2.
+    Returns list of files available for download.
+
+    Uses the backups bucket (R2_BACKUPS_BUCKET or R2_BUCKET_NAME).
+
+    For actual file streaming, use /api/cloud/download/{source_id}/{filename}
+    """
+    try:
+        from offline_tools.cloud.r2 import get_backups_storage
+        storage = get_backups_storage()
+
+        if not storage.is_configured():
+            return JSONResponse(
+                status_code=503,
+                content={"error": "cloud_not_configured", "message": "Cloud storage not available"}
+            )
+
+        prefix = f"backups/{source_id}/"
+        files = storage.list_files(prefix)
+
+        if not files:
+            return JSONResponse(
+                status_code=404,
+                content={"error": "source_not_found", "message": f"No files found for source: {source_id}"}
+            )
+
+        # Return file list with sizes
+        file_list = []
+        total_size = 0
+        for f in files:
+            filename = f["key"].replace(prefix, "")
+            if filename:  # Skip empty (the folder itself)
+                file_list.append({
+                    "filename": filename,
+                    "size_bytes": f["size"],
+                    "size_mb": f["size_mb"],
+                    "last_modified": f["last_modified"]
+                })
+                total_size += f["size"]
+
+        return {
+            "source_id": source_id,
+            "files": file_list,
+            "total_files": len(file_list),
+            "total_size_mb": round(total_size / (1024 * 1024), 2)
+        }
+
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"error": "cloud_error", "message": str(e)}
+        )
+
+
+@app.get("/api/cloud/download/{source_id}/{filename:path}")
+@limiter.limit("5/minute")
+async def cloud_download_file(request: Request, source_id: str, filename: str):
+    """
+    Stream a specific file from R2.
+    Used by local admins to download backup files.
+
+    Uses the backups bucket (R2_BACKUPS_BUCKET or R2_BUCKET_NAME).
+    """
+    try:
+        from offline_tools.cloud.r2 import get_backups_storage
+        storage = get_backups_storage()
+
+        if not storage.is_configured():
+            return JSONResponse(
+                status_code=503,
+                content={"error": "cloud_not_configured", "message": "Cloud storage not available"}
+            )
+
+        remote_key = f"backups/{source_id}/{filename}"
+
+        # Get the S3 client to stream the file
+        client = storage._get_client()
+
+        try:
+            response = client.get_object(
+                Bucket=storage.config.bucket_name,
+                Key=remote_key
+            )
+        except Exception as e:
+            return JSONResponse(
+                status_code=404,
+                content={"error": "file_not_found", "message": f"File not found: {filename}"}
+            )
+
+        # Stream the file content
+        def iterfile():
+            for chunk in response["Body"].iter_chunks(chunk_size=8192):
+                yield chunk
+
+        # Determine content type
+        content_type = "application/octet-stream"
+        if filename.endswith(".json"):
+            content_type = "application/json"
+        elif filename.endswith(".zip"):
+            content_type = "application/zip"
+
+        return StreamingResponse(
+            iterfile(),
+            media_type=content_type,
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"',
+                "Content-Length": str(response.get("ContentLength", 0))
+            }
+        )
+
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"error": "cloud_error", "message": str(e)}
+        )
+
+
+class CloudSubmission(BaseModel):
+    """Schema for content submission"""
+    source_name: str
+    title: str
+    content: str
+    url: Optional[str] = None
+    submitter_name: Optional[str] = None
+    submitter_email: Optional[str] = None
+    notes: Optional[str] = None
+
+
+@app.post("/api/cloud/submit")
+@limiter.limit("5/minute")
+async def cloud_submit(request: Request, submission: CloudSubmission):
+    """
+    Submit content for review.
+    Writes to the submissions bucket (R2_SUBMISSIONS_BUCKET) pending/ folder.
+
+    Global admin reviews and approves/rejects submissions.
+    Approved submissions are server-side copied to backups bucket.
+    """
+    try:
+        from offline_tools.cloud.r2 import get_submissions_storage
+        storage = get_submissions_storage()
+
+        if not storage.is_configured():
+            return JSONResponse(
+                status_code=503,
+                content={"error": "cloud_not_configured", "message": "Cloud storage not available"}
+            )
+
+        # Create submission record
+        import uuid
+        submission_id = str(uuid.uuid4())[:8]
+        timestamp = datetime.utcnow().isoformat()
+
+        submission_data = {
+            "id": submission_id,
+            "submitted_at": timestamp,
+            "source_name": submission.source_name,
+            "title": submission.title,
+            "content": submission.content,
+            "url": submission.url,
+            "submitter_name": submission.submitter_name,
+            "submitter_email": submission.submitter_email,
+            "notes": submission.notes,
+            "status": "pending"
+        }
+
+        # Upload to submissions/pending/
+        remote_key = f"submissions/pending/{submission_id}.json"
+
+        import io
+        json_bytes = json.dumps(submission_data, indent=2).encode('utf-8')
+        file_obj = io.BytesIO(json_bytes)
+
+        if storage.upload_fileobj(file_obj, remote_key):
+            return {
+                "status": "submitted",
+                "submission_id": submission_id,
+                "message": "Content submitted for review. Thank you!"
+            }
+        else:
+            return JSONResponse(
+                status_code=500,
+                content={"error": "upload_failed", "message": "Failed to save submission"}
+            )
+
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"error": "submission_error", "message": str(e)}
+        )
 
 
 @app.post("/ingest")

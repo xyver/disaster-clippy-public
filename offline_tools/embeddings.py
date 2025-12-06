@@ -45,8 +45,16 @@ class EmbeddingService:
 
     def _init_openai(self, model: str):
         """Initialize OpenAI embedding client"""
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            raise ValueError(
+                "OPENAI_API_KEY not set. Either:\n"
+                "  1. Set OPENAI_API_KEY in your .env file, or\n"
+                "  2. Set EMBEDDING_MODE=local and install sentence-transformers:\n"
+                "     pip install sentence-transformers"
+            )
         from openai import OpenAI
-        self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        self.client = OpenAI(api_key=api_key)
         self.model = model
         self._local_model = None
         print(f"Using OpenAI embeddings: {model}")
@@ -61,10 +69,18 @@ class EmbeddingService:
             self.client = None
             print(f"Local model loaded: {model} (dimension: {self._local_model.get_sentence_embedding_dimension()})")
         except ImportError:
-            print("sentence-transformers not installed. Run: pip install sentence-transformers")
-            print("Falling back to OpenAI embeddings...")
-            self._init_openai("text-embedding-3-small")
-            self.mode = "openai"
+            # Check if we can fall back to OpenAI
+            if os.getenv("OPENAI_API_KEY"):
+                print("sentence-transformers not installed. Run: pip install sentence-transformers")
+                print("Falling back to OpenAI embeddings...")
+                self._init_openai("text-embedding-3-small")
+                self.mode = "openai"
+            else:
+                raise ValueError(
+                    "EMBEDDING_MODE=local but sentence-transformers is not installed.\n"
+                    "Install it with: pip install sentence-transformers\n"
+                    "Or set OPENAI_API_KEY to use OpenAI embeddings instead."
+                )
 
     def embed_text(self, text: str) -> List[float]:
         """

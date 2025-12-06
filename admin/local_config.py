@@ -23,6 +23,7 @@ class LocalConfig:
         "offline_mode": "hybrid",      # "online_only", "hybrid", "offline_only"
         "auto_fallback": True,         # Automatically use offline when internet unavailable
         "selected_sources": [],        # Empty = all sources; otherwise list of source IDs
+        "railway_proxy_url": "",       # URL of Railway deployment for cloud proxy (e.g., https://disaster-clippy.up.railway.app)
         "cache_responses": True,       # Cache LLM responses for offline use
         "last_sync": None,             # Last time sources were synced
         "ui_preferences": {
@@ -220,6 +221,63 @@ Only recommend articles that are in the provided context - do not make up articl
     def update_last_sync(self) -> None:
         """Update last sync timestamp"""
         self.config["last_sync"] = datetime.now().isoformat()
+
+    # Railway Proxy settings (for local admins without R2 keys)
+    def get_railway_proxy_url(self) -> str:
+        """Get Railway proxy URL for cloud operations"""
+        # First check environment variable, then config
+        env_url = os.getenv("RAILWAY_PROXY_URL", "")
+        if env_url:
+            return env_url.rstrip("/")
+        return self.config.get("railway_proxy_url", "").rstrip("/")
+
+    def set_railway_proxy_url(self, url: str) -> None:
+        """Set Railway proxy URL"""
+        self.config["railway_proxy_url"] = url.rstrip("/") if url else ""
+
+    def should_use_proxy(self) -> bool:
+        """
+        Check if we should use Railway proxy for cloud operations.
+        Returns True if:
+        - R2 keys are NOT configured locally
+        - Railway proxy URL IS configured
+        """
+        from offline_tools.cloud.r2 import get_r2_storage
+        storage = get_r2_storage()
+        has_r2_keys = storage.is_configured()
+        has_proxy_url = bool(self.get_railway_proxy_url())
+        return not has_r2_keys and has_proxy_url
+
+    def should_use_proxy_for_search(self) -> bool:
+        """
+        Check if we should use Railway proxy for online search.
+        Returns True if:
+        - Pinecone key is NOT configured locally (VECTOR_DB_MODE != pinecone or no key)
+        - Railway proxy URL IS configured
+        - We're in online or hybrid mode (not offline_only)
+
+        This allows local admins without Pinecone keys to still use
+        online semantic search through the Railway deployment.
+        """
+        # Check if we're in offline_only mode - no proxy needed
+        if self.get_offline_mode() == "offline_only":
+            return False
+
+        # Check if proxy URL is configured
+        proxy_url = self.get_railway_proxy_url()
+        if not proxy_url:
+            return False
+
+        # Check if Pinecone is configured locally
+        vector_mode = os.getenv("VECTOR_DB_MODE", "local").lower()
+        pinecone_key = os.getenv("PINECONE_API_KEY", "")
+
+        # If using pinecone mode with a key, don't need proxy
+        if vector_mode == "pinecone" and pinecone_key:
+            return False
+
+        # No Pinecone configured, use proxy for online search
+        return True
 
     # Ollama settings
     def get_ollama_config(self) -> Dict[str, Any]:

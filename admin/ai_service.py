@@ -111,19 +111,37 @@ class AIService:
 
         Automatically selects the appropriate search method based on:
         1. Connection mode (online_only, hybrid, offline_only)
-        2. Forced method override (for testing)
-        3. Fallback on failure
+        2. Railway proxy availability (for local admins without Pinecone)
+        3. Forced method override (for testing)
+        4. Fallback on failure
 
         Args:
             query: Search query
             n_results: Number of results to return
-            source_filter: Optional filter dict
+            source_filter: Optional filter dict (ChromaDB format)
             force_method: Override automatic method selection
 
         Returns:
             SearchResult with articles and metadata
         """
         conn = self._get_connection_manager()
+
+        # Check if we should use Railway proxy for search
+        from admin.local_config import get_local_config
+        config = get_local_config()
+
+        if config.should_use_proxy_for_search() and not force_method:
+            # Use Railway proxy for online search
+            result = self._search_via_proxy(query, n_results, source_filter)
+            if result and not result.error:
+                return result
+            # Fallback to local on proxy failure if hybrid mode
+            if conn.get_mode() == "hybrid":
+                print("Proxy search failed, falling back to local search")
+            else:
+                return result  # Return error in online_only mode
+
+        # Local search path
         store = self._get_vector_store()
 
         # Determine method
@@ -171,6 +189,78 @@ class AIService:
             return SearchResult(
                 articles=[],
                 method=SearchMethod.KEYWORD,
+                query=query,
+                error=str(e)
+            )
+
+    def _search_via_proxy(self, query: str, n_results: int = 10,
+                          source_filter: Optional[Dict[str, Any]] = None) -> SearchResult:
+        """
+        Search using Railway proxy.
+        Used when local admin doesn't have Pinecone but wants online search.
+
+        Args:
+            query: Search query
+            n_results: Number of results
+            source_filter: ChromaDB filter dict (e.g., {"source": {"$in": [...]}})
+
+        Returns:
+            SearchResult from proxy
+        """
+        try:
+            from admin.cloud_proxy import get_proxy_client
+            proxy = get_proxy_client()
+
+            if not proxy.is_configured():
+                return SearchResult(
+                    articles=[],
+                    method=SearchMethod.SEMANTIC,
+                    query=query,
+                    error="Proxy not configured"
+                )
+
+            # Convert ChromaDB filter to source list for proxy
+            sources = None
+            if source_filter and "source" in source_filter:
+                source_val = source_filter["source"]
+                if isinstance(source_val, dict) and "$in" in source_val:
+                    sources = source_val["$in"]
+
+            result = proxy.search(query, n_results=n_results, sources=sources)
+
+            if "error" in result:
+                return SearchResult(
+                    articles=[],
+                    method=SearchMethod.SEMANTIC,
+                    query=query,
+                    error=result["error"]
+                )
+
+            # Convert proxy articles to expected format
+            articles = []
+            for a in result.get("articles", []):
+                articles.append({
+                    "id": a.get("title", ""),  # Use title as ID
+                    "content": a.get("snippet", ""),
+                    "score": a.get("score", 0),
+                    "metadata": {
+                        "title": a.get("title", "Unknown"),
+                        "url": a.get("url", ""),
+                        "source": a.get("source", "unknown")
+                    }
+                })
+
+            return SearchResult(
+                articles=articles,
+                method=SearchMethod.SEMANTIC,
+                query=query
+            )
+
+        except Exception as e:
+            print(f"Proxy search error: {e}")
+            return SearchResult(
+                articles=[],
+                method=SearchMethod.SEMANTIC,
                 query=query,
                 error=str(e)
             )

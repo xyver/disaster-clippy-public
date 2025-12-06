@@ -35,12 +35,19 @@ class R2Config:
     token_expires: Optional[datetime] = None  # When the API token expires
 
     @classmethod
-    def from_env(cls) -> Optional['R2Config']:
-        """Load config from environment variables"""
+    def from_env(cls, bucket_env_var: str = "R2_BUCKET_NAME",
+                 default_bucket: str = "disaster-clippy-backups") -> Optional['R2Config']:
+        """
+        Load config from environment variables.
+
+        Args:
+            bucket_env_var: Environment variable name for bucket (allows different buckets)
+            default_bucket: Default bucket name if env var not set
+        """
         access_key = os.getenv("R2_ACCESS_KEY_ID", "")
         secret_key = os.getenv("R2_SECRET_ACCESS_KEY", "")
         endpoint = os.getenv("R2_ENDPOINT_URL", "")
-        bucket = os.getenv("R2_BUCKET_NAME", "disaster-clippy-backups")
+        bucket = os.getenv(bucket_env_var, default_bucket)
 
         # Parse token expiration date if set
         expires_str = os.getenv("R2_TOKEN_EXPIRES", "")
@@ -409,14 +416,182 @@ class R2Storage:
         """Get the last error message"""
         return self._last_error
 
+    def copy_to_bucket(self, source_key: str, dest_bucket: str, dest_key: str) -> bool:
+        """
+        Copy a file to a different bucket (server-side copy, no download/upload needed).
 
-# Singleton instance
+        This is useful for moving approved submissions to the backups bucket
+        without transferring data over the network.
+
+        Args:
+            source_key: Source key (path) in this bucket
+            dest_bucket: Destination bucket name
+            dest_key: Destination key (path) in destination bucket
+
+        Returns:
+            True if successful
+        """
+        try:
+            client = self._get_client()
+            copy_source = {'Bucket': self.config.bucket_name, 'Key': source_key}
+            client.copy_object(
+                CopySource=copy_source,
+                Bucket=dest_bucket,
+                Key=dest_key
+            )
+            logger.info(f"Copied r2://{self.config.bucket_name}/{source_key} to r2://{dest_bucket}/{dest_key}")
+            return True
+        except ClientError as e:
+            logger.error(f"Cross-bucket copy failed: {e}")
+            self._last_error = str(e)
+            return False
+
+    def move_to_bucket(self, source_key: str, dest_bucket: str, dest_key: str) -> bool:
+        """
+        Move a file to a different bucket (copy then delete original).
+
+        Args:
+            source_key: Source key (path) in this bucket
+            dest_bucket: Destination bucket name
+            dest_key: Destination key (path) in destination bucket
+
+        Returns:
+            True if successful
+        """
+        if self.copy_to_bucket(source_key, dest_bucket, dest_key):
+            return self.delete_file(source_key)
+        return False
+
+
+# =============================================================================
+# SINGLETON INSTANCES - Separate buckets for backups and submissions
+# =============================================================================
+
+# Backups bucket (read-only for Railway, full access for global admin)
+_backups_storage: Optional[R2Storage] = None
+
+# Submissions bucket (write for Railway, read/delete for global admin)
+_submissions_storage: Optional[R2Storage] = None
+
+# Legacy single-bucket storage (for backward compatibility)
 _r2_storage: Optional[R2Storage] = None
 
 
 def get_r2_storage() -> R2Storage:
-    """Get or create the R2 storage singleton"""
+    """
+    Get or create the R2 storage singleton (legacy single-bucket mode).
+
+    Uses R2_BUCKET_NAME environment variable.
+    For new code, prefer get_backups_storage() or get_submissions_storage().
+    """
     global _r2_storage
     if _r2_storage is None:
         _r2_storage = R2Storage()
     return _r2_storage
+
+
+def get_backups_storage() -> R2Storage:
+    """
+    Get storage for the backups bucket (official curated content).
+
+    Environment variable: R2_BACKUPS_BUCKET (defaults to R2_BUCKET_NAME for compatibility)
+
+    This bucket contains:
+    - Official curated backups
+    - Read by Railway proxy for downloads
+    - Write only by global admin
+    """
+    global _backups_storage
+    if _backups_storage is None:
+        # Try R2_BACKUPS_BUCKET first, fall back to R2_BUCKET_NAME for compatibility
+        backups_bucket = os.getenv("R2_BACKUPS_BUCKET", "")
+        if backups_bucket:
+            config = R2Config.from_env("R2_BACKUPS_BUCKET", "disaster-clippy-backups")
+        else:
+            # Fallback to single bucket mode
+            config = R2Config.from_env("R2_BUCKET_NAME", "disaster-clippy-backups")
+        _backups_storage = R2Storage(config)
+    return _backups_storage
+
+
+def get_submissions_storage() -> R2Storage:
+    """
+    Get storage for the submissions bucket (user-submitted content).
+
+    Environment variable: R2_SUBMISSIONS_BUCKET
+
+    This bucket contains:
+    - pending/ - New submissions awaiting review
+    - approved/ - Approved submissions (moved to backups bucket)
+    - rejected/ - Rejected submissions
+
+    If R2_SUBMISSIONS_BUCKET is not set, falls back to backups bucket
+    (single-bucket mode for backward compatibility).
+    """
+    global _submissions_storage
+    if _submissions_storage is None:
+        submissions_bucket = os.getenv("R2_SUBMISSIONS_BUCKET", "")
+        if submissions_bucket:
+            config = R2Config.from_env("R2_SUBMISSIONS_BUCKET", "disaster-clippy-submissions")
+        else:
+            # Fallback to single bucket mode - use same as backups
+            config = R2Config.from_env("R2_BUCKET_NAME", "disaster-clippy-backups")
+        _submissions_storage = R2Storage(config)
+    return _submissions_storage
+
+
+def approve_submission(submission_key: str, dest_source_id: str, dest_filename: str) -> bool:
+    """
+    Approve a submission by moving it from submissions bucket to backups bucket.
+
+    This performs a server-side copy (data stays in R2, no network transfer).
+
+    Args:
+        submission_key: Key in submissions bucket (e.g., 'pending/abc123.json')
+        dest_source_id: Destination source ID in backups (e.g., 'community-guides')
+        dest_filename: Destination filename (e.g., 'guide-123.json')
+
+    Returns:
+        True if successful
+    """
+    submissions = get_submissions_storage()
+    backups = get_backups_storage()
+
+    # Server-side copy to backups bucket
+    dest_key = f"backups/{dest_source_id}/{dest_filename}"
+
+    if submissions.copy_to_bucket(submission_key, backups.config.bucket_name, dest_key):
+        # Move to approved folder in submissions bucket (keep record)
+        approved_key = submission_key.replace("pending/", "approved/")
+        submissions.move_file(submission_key, approved_key)
+        logger.info(f"Approved submission: {submission_key} -> {dest_key}")
+        return True
+    return False
+
+
+def reject_submission(submission_key: str, reason: str = "") -> bool:
+    """
+    Reject a submission by moving it to the rejected folder.
+
+    Args:
+        submission_key: Key in submissions bucket (e.g., 'pending/abc123.json')
+        reason: Optional rejection reason
+
+    Returns:
+        True if successful
+    """
+    submissions = get_submissions_storage()
+
+    rejected_key = submission_key.replace("pending/", "rejected/")
+    if submissions.move_file(submission_key, rejected_key):
+        logger.info(f"Rejected submission: {submission_key} -> {rejected_key}")
+        return True
+    return False
+
+
+def reset_storage_singletons():
+    """Reset all storage singletons (useful when config changes)"""
+    global _r2_storage, _backups_storage, _submissions_storage
+    _r2_storage = None
+    _backups_storage = None
+    _submissions_storage = None

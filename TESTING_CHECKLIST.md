@@ -309,6 +309,60 @@ Test automatic tag suggestions after indexing.
 
 ---
 
+## Test 10: Security - Railway Proxy Flow
+
+Test the security proxy flow for local admins without API keys.
+
+### Prerequisites
+- [ ] Railway deployment running at a known URL
+- [ ] Local instance running WITHOUT Pinecone/R2 keys
+
+### Test 10a: Configure Proxy URL
+- [ ] Go to Settings in admin panel
+- [ ] Set "Railway Proxy URL" to your Railway deployment URL
+- [ ] Save settings
+- [ ] Verify `local_settings.json` contains `railway_proxy_url`
+
+### Test 10b: Cloud Source Listing via Proxy
+- [ ] Go to Sources -> Cloud tab
+- [ ] Verify sources are listed (fetched from Railway proxy)
+- [ ] Check browser network tab shows requests to Railway `/api/cloud/sources`
+
+### Test 10c: Cloud Download via Proxy
+- [ ] Select a cloud source
+- [ ] Click "Download"
+- [ ] Verify download progresses (requests go to Railway proxy)
+- [ ] Verify files appear in local backup folder
+
+### Test 10d: Online Search via Proxy
+- [ ] Set connection mode to "Hybrid" or "Online"
+- [ ] Ensure `PINECONE_API_KEY` is NOT set locally
+- [ ] Go to main chat interface
+- [ ] Enter a search query
+- [ ] Verify results appear (fetched via Railway proxy)
+- [ ] Check console for "Using Railway proxy for search"
+
+### Test 10e: Fallback to Local Search
+- [ ] Stop Railway deployment (or disconnect internet)
+- [ ] Enter a search query
+- [ ] Verify fallback to local ChromaDB search (hybrid mode)
+- [ ] Or verify error message (online_only mode)
+
+### Test 10f: EMBEDDING_MODE=local Error Handling
+- [ ] Unset `OPENAI_API_KEY` environment variable
+- [ ] Set `EMBEDDING_MODE=local`
+- [ ] Verify sentence-transformers loads local model
+- [ ] OR verify clear error message if not installed
+
+### Test 10g: PUBLIC_MODE Blocks Admin
+- [ ] On Railway: Set `PUBLIC_MODE=true`
+- [ ] Visit Railway URL
+- [ ] Verify chat interface works
+- [ ] Visit `/useradmin/` on Railway
+- [ ] Verify admin is blocked with "Public mode" message
+
+---
+
 ## Common Issues
 
 ### Status box shows red but files exist

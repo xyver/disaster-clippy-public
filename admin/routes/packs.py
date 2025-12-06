@@ -162,14 +162,36 @@ async def get_cloud_sources():
     """
     Get sources available from the Global Cloud (R2 backups/ folder).
     Returns sources in a format compatible with the sources page filtering.
+
+    Uses Railway proxy if R2 keys aren't configured locally.
     """
     try:
+        # Check if we should use proxy (no R2 keys, but proxy URL configured)
+        config = get_local_config()
+        if config.should_use_proxy():
+            from admin.cloud_proxy import get_proxy_client
+            proxy = get_proxy_client()
+            result = proxy.get_sources()
+            if "error" in result and not result.get("connected", False):
+                return {"sources": [], "connected": False, "error": result["error"], "via": "proxy"}
+            result["via"] = "proxy"
+            return result
+
+        # Direct R2 access
         from dotenv import load_dotenv
         load_dotenv()
         from offline_tools.cloud.r2 import get_r2_storage
         storage = get_r2_storage()
 
         if not storage.is_configured():
+            # No R2 keys and no proxy - show helpful message
+            proxy_url = config.get_railway_proxy_url()
+            if not proxy_url:
+                return {
+                    "sources": [],
+                    "connected": False,
+                    "error": "R2 not configured. Set RAILWAY_PROXY_URL to use cloud through Railway proxy."
+                }
             return {"sources": [], "connected": False, "error": "R2 not configured"}
 
         conn_status = storage.test_connection()
@@ -330,22 +352,16 @@ async def get_available_packs():
 def _run_download_pack(source_id: str, progress_callback=None):
     """
     Background job function to download a source pack from R2.
+    Automatically uses Railway proxy if R2 keys aren't configured.
     """
     import zipfile
     from datetime import datetime
     from dotenv import load_dotenv
     load_dotenv()
-    from offline_tools.cloud.r2 import get_r2_storage
 
     def update_progress(pct, msg):
         if progress_callback:
             progress_callback(pct, msg)
-
-    update_progress(0, "Connecting to R2 storage...")
-    storage = get_r2_storage()
-
-    if not storage.is_configured():
-        raise Exception("R2 storage not configured")
 
     config = get_local_config()
     backup_folder = config.get_backup_folder()
@@ -356,33 +372,84 @@ def _run_download_pack(source_id: str, progress_callback=None):
     source_folder = Path(backup_folder) / source_id
     source_folder.mkdir(parents=True, exist_ok=True)
 
-    update_progress(5, "Listing files in R2...")
-    prefix = f"backups/{source_id}/"
-    files = storage.list_files(prefix)
+    # Check if we should use proxy
+    use_proxy = config.should_use_proxy()
 
-    if not files:
-        raise Exception(f"No files found for source: {source_id}")
+    if use_proxy:
+        # Use Railway proxy
+        from admin.cloud_proxy import get_proxy_client
+        update_progress(0, "Connecting via Railway proxy...")
+        proxy = get_proxy_client()
 
-    downloaded_files = []
-    total_size = 0
-    total_files = len(files)
+        if not proxy.is_configured():
+            raise Exception("Railway proxy URL not configured")
 
-    for idx, f in enumerate(files):
-        key = f["key"]
-        relative_path = key.replace(prefix, "")
-        if not relative_path:
-            continue
+        update_progress(5, "Listing files via proxy...")
+        file_info = proxy.get_source_files(source_id)
 
-        local_path = source_folder / relative_path
-        local_path.parent.mkdir(parents=True, exist_ok=True)
+        if "error" in file_info:
+            raise Exception(f"Failed to get file list: {file_info['error']}")
 
-        pct = 10 + int((idx / total_files) * 60)
-        update_progress(pct, f"Downloading {relative_path}...")
+        files = file_info.get("files", [])
+        if not files:
+            raise Exception(f"No files found for source: {source_id}")
 
-        success = storage.download_file(key, str(local_path))
-        if success:
-            downloaded_files.append(relative_path)
-            total_size += f.get("size_mb", 0)
+        downloaded_files = []
+        total_size = 0
+        total_files = len(files)
+
+        for idx, f in enumerate(files):
+            filename = f["filename"]
+            if not filename:
+                continue
+
+            local_path = source_folder / filename
+            local_path.parent.mkdir(parents=True, exist_ok=True)
+
+            pct = 10 + int((idx / total_files) * 60)
+            update_progress(pct, f"Downloading {filename}...")
+
+            success = proxy.download_file(source_id, filename, str(local_path))
+            if success:
+                downloaded_files.append(filename)
+                total_size += f.get("size_mb", 0)
+
+    else:
+        # Direct R2 access
+        from offline_tools.cloud.r2 import get_r2_storage
+        update_progress(0, "Connecting to R2 storage...")
+        storage = get_r2_storage()
+
+        if not storage.is_configured():
+            raise Exception("R2 storage not configured. Set RAILWAY_PROXY_URL to use proxy instead.")
+
+        update_progress(5, "Listing files in R2...")
+        prefix = f"backups/{source_id}/"
+        files = storage.list_files(prefix)
+
+        if not files:
+            raise Exception(f"No files found for source: {source_id}")
+
+        downloaded_files = []
+        total_size = 0
+        total_files = len(files)
+
+        for idx, f in enumerate(files):
+            key = f["key"]
+            relative_path = key.replace(prefix, "")
+            if not relative_path:
+                continue
+
+            local_path = source_folder / relative_path
+            local_path.parent.mkdir(parents=True, exist_ok=True)
+
+            pct = 10 + int((idx / total_files) * 60)
+            update_progress(pct, f"Downloading {relative_path}...")
+
+            success = storage.download_file(key, str(local_path))
+            if success:
+                downloaded_files.append(relative_path)
+                total_size += f.get("size_mb", 0)
 
     # Extract HTML zip files if present
     update_progress(70, "Extracting zip files...")
@@ -496,26 +563,47 @@ async def download_pack_from_r2(request: DownloadPackRequest):
     """
     Download a source pack from R2 cloud storage.
     Submits as background job - returns job_id for tracking.
+
+    Automatically uses Railway proxy if R2 keys aren't configured.
     """
     try:
-        from dotenv import load_dotenv
-        load_dotenv()
-        from offline_tools.cloud.r2 import get_r2_storage
-        storage = get_r2_storage()
-
-        if not storage.is_configured():
-            raise HTTPException(400, "R2 storage not configured")
-
         config = get_local_config()
         backup_folder = config.get_backup_folder()
 
         if not backup_folder:
             raise HTTPException(400, "No backup folder configured. Set it in Settings first.")
 
-        prefix = f"backups/{request.source_id}/"
-        files = storage.list_files(prefix)
-        if not files:
-            raise HTTPException(404, f"No files found for source: {request.source_id}")
+        # Check if we should use proxy
+        use_proxy = config.should_use_proxy()
+
+        if use_proxy:
+            # Verify proxy is configured and source exists
+            from admin.cloud_proxy import get_proxy_client
+            proxy = get_proxy_client()
+
+            if not proxy.is_configured():
+                raise HTTPException(400, "Railway proxy URL not configured")
+
+            file_info = proxy.get_source_files(request.source_id)
+            if "error" in file_info:
+                raise HTTPException(503, f"Proxy error: {file_info['error']}")
+            if not file_info.get("files"):
+                raise HTTPException(404, f"No files found for source: {request.source_id}")
+
+        else:
+            # Direct R2 access
+            from dotenv import load_dotenv
+            load_dotenv()
+            from offline_tools.cloud.r2 import get_r2_storage
+            storage = get_r2_storage()
+
+            if not storage.is_configured():
+                raise HTTPException(400, "R2 not configured. Set RAILWAY_PROXY_URL to use proxy instead.")
+
+            prefix = f"backups/{request.source_id}/"
+            files = storage.list_files(prefix)
+            if not files:
+                raise HTTPException(404, f"No files found for source: {request.source_id}")
 
         from admin.job_manager import get_job_manager
         manager = get_job_manager()
