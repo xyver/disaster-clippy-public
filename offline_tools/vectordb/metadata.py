@@ -184,14 +184,21 @@ class MetadataIndex:
                     index_dir = config.get_backup_folder() or ""
                 except ImportError:
                     pass
-            if not index_dir:
-                raise ValueError("No backup path configured. Set BACKUP_PATH env var or configure in admin settings.")
 
-        self.index_dir = Path(index_dir)
-        self.index_dir.mkdir(parents=True, exist_ok=True)
-        self.master_file = self.index_dir / "_master.json"
-        self._source_cache: Dict[str, Dict[str, Any]] = {}  # Lazy-loaded source data (must be before _load_master)
-        self._master = self._load_master()
+        # Allow cloud-only mode (no local backup path)
+        # In this mode, MetadataIndex returns empty results
+        self._cloud_only = not index_dir
+        self._source_cache: Dict[str, Dict[str, Any]] = {}
+
+        if self._cloud_only:
+            self.index_dir = None
+            self.master_file = None
+            self._master = self._empty_master()
+        else:
+            self.index_dir = Path(index_dir)
+            self.index_dir.mkdir(parents=True, exist_ok=True)
+            self.master_file = self.index_dir / "_master.json"
+            self._master = self._load_master()
 
     def _load_master(self) -> Dict[str, Any]:
         """Load master index from disk"""
@@ -225,8 +232,10 @@ class MetadataIndex:
             "documents": {}  # doc_id -> {title, url, categories, content_hash, scraped_at, char_count}
         }
 
-    def _get_source_file(self, source: str) -> Path:
+    def _get_source_file(self, source: str) -> Optional[Path]:
         """Get path to source-specific JSON file"""
+        if self._cloud_only:
+            return None
         # Sanitize source name for filename
         safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in source.lower())
         return self.index_dir / f"{safe_name}.json"
@@ -236,8 +245,14 @@ class MetadataIndex:
         if source in self._source_cache:
             return self._source_cache[source]
 
+        # Cloud-only mode returns empty source
+        if self._cloud_only:
+            data = self._empty_source(source)
+            self._source_cache[source] = data
+            return data
+
         source_file = self._get_source_file(source)
-        if source_file.exists():
+        if source_file and source_file.exists():
             try:
                 with open(source_file, 'r', encoding='utf-8') as f:
                     data = json.load(f)
@@ -252,6 +267,10 @@ class MetadataIndex:
 
     def _save_source(self, source: str):
         """Save source-specific data to disk"""
+        # No-op in cloud-only mode
+        if self._cloud_only:
+            return
+
         if source not in self._source_cache:
             return
 
@@ -261,11 +280,16 @@ class MetadataIndex:
         data["total_chars"] = sum(d.get("char_count", 0) for d in data["documents"].values())
 
         source_file = self._get_source_file(source)
-        with open(source_file, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
+        if source_file:
+            with open(source_file, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
 
     def _update_master(self):
         """Recalculate and save master index from all source files"""
+        # No-op in cloud-only mode
+        if self._cloud_only:
+            return
+
         total_docs = 0
         total_chars = 0
 
@@ -296,8 +320,9 @@ class MetadataIndex:
         self._master["total_chars"] = total_chars
         self._master["last_updated"] = datetime.utcnow().isoformat()
 
-        with open(self.master_file, 'w', encoding='utf-8') as f:
-            json.dump(self._master, f, indent=2, ensure_ascii=False)
+        if self.master_file:
+            with open(self.master_file, 'w', encoding='utf-8') as f:
+                json.dump(self._master, f, indent=2, ensure_ascii=False)
 
     def add_document(self, doc: Dict[str, Any]):
         """
@@ -359,11 +384,12 @@ class MetadataIndex:
 
         # Ensure source is in master
         if source not in self._master["sources"]:
+            source_file = self._get_source_file(source)
             self._master["sources"][source] = {
                 "count": 0,
                 "chars": 0,
                 "last_sync": None,
-                "file": self._get_source_file(source).name,
+                "file": source_file.name if source_file else None,
                 "topics": []
             }
 

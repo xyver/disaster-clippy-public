@@ -36,16 +36,33 @@ class R2Config:
 
     @classmethod
     def from_env(cls, bucket_env_var: str = "R2_BUCKET_NAME",
-                 default_bucket: str = "disaster-clippy-backups") -> Optional['R2Config']:
+                 default_bucket: str = "disaster-clippy-backups",
+                 key_prefix: str = "") -> Optional['R2Config']:
         """
         Load config from environment variables.
 
         Args:
-            bucket_env_var: Environment variable name for bucket (allows different buckets)
+            bucket_env_var: Environment variable name for bucket
             default_bucket: Default bucket name if env var not set
+            key_prefix: Prefix for credential env vars (e.g., "SUBMISSIONS_" for R2_SUBMISSIONS_ACCESS_KEY_ID)
         """
-        access_key = os.getenv("R2_ACCESS_KEY_ID", "")
-        secret_key = os.getenv("R2_SECRET_ACCESS_KEY", "")
+        # Build credential env var names with optional prefix
+        if key_prefix:
+            access_key_var = f"R2_{key_prefix}ACCESS_KEY_ID"
+            secret_key_var = f"R2_{key_prefix}SECRET_ACCESS_KEY"
+        else:
+            access_key_var = "R2_ACCESS_KEY_ID"
+            secret_key_var = "R2_SECRET_ACCESS_KEY"
+
+        access_key = os.getenv(access_key_var, "")
+        secret_key = os.getenv(secret_key_var, "")
+
+        # Fall back to default credentials if prefixed ones not set
+        if not access_key and key_prefix:
+            access_key = os.getenv("R2_ACCESS_KEY_ID", "")
+        if not secret_key and key_prefix:
+            secret_key = os.getenv("R2_SECRET_ACCESS_KEY", "")
+
         endpoint = os.getenv("R2_ENDPOINT_URL", "")
         bucket = os.getenv(bucket_env_var, default_bucket)
 
@@ -518,21 +535,29 @@ def get_submissions_storage() -> R2Storage:
     """
     Get storage for the submissions bucket (user-submitted content).
 
-    Environment variable: R2_SUBMISSIONS_BUCKET
+    Environment variables:
+    - R2_SUBMISSIONS_BUCKET_NAME: Bucket name
+    - R2_SUBMISSIONS_ACCESS_KEY_ID: Access key (falls back to R2_ACCESS_KEY_ID)
+    - R2_SUBMISSIONS_SECRET_ACCESS_KEY: Secret key (falls back to R2_SECRET_ACCESS_KEY)
 
     This bucket contains:
     - pending/ - New submissions awaiting review
     - approved/ - Approved submissions (moved to backups bucket)
     - rejected/ - Rejected submissions
 
-    If R2_SUBMISSIONS_BUCKET is not set, falls back to backups bucket
+    If R2_SUBMISSIONS_BUCKET_NAME is not set, falls back to backups bucket
     (single-bucket mode for backward compatibility).
     """
     global _submissions_storage
     if _submissions_storage is None:
-        submissions_bucket = os.getenv("R2_SUBMISSIONS_BUCKET", "")
+        submissions_bucket = os.getenv("R2_SUBMISSIONS_BUCKET_NAME", "")
         if submissions_bucket:
-            config = R2Config.from_env("R2_SUBMISSIONS_BUCKET", "disaster-clippy-submissions")
+            # Use separate credentials for submissions bucket
+            config = R2Config.from_env(
+                bucket_env_var="R2_SUBMISSIONS_BUCKET_NAME",
+                default_bucket="disaster-clippy-submissions",
+                key_prefix="SUBMISSIONS_"
+            )
         else:
             # Fallback to single bucket mode - use same as backups
             config = R2Config.from_env("R2_BUCKET_NAME", "disaster-clippy-backups")
