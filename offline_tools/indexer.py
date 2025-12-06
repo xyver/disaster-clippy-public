@@ -167,6 +167,8 @@ def save_metadata(output_folder: Path, source_id: str,
     Contains per-document metadata for quick scanning without loading content.
     """
     try:
+        print(f"[save_metadata] Saving metadata for {len(documents)} documents to {output_folder}")
+
         doc_metadata = {}
         total_chars = 0
 
@@ -195,14 +197,18 @@ def save_metadata(output_folder: Path, source_id: str,
         }
 
         metadata_file = output_folder / get_metadata_file()
+        print(f"[save_metadata] Writing to: {metadata_file}")
+
         with open(metadata_file, 'w', encoding='utf-8') as f:
             json.dump(metadata, f, indent=2, ensure_ascii=False)
 
-        print(f"Saved metadata: {metadata_file} ({len(doc_metadata)} documents)")
+        print(f"[save_metadata] Saved: {metadata_file} ({len(doc_metadata)} documents)")
         return metadata_file
 
     except Exception as e:
-        print(f"Warning: Failed to save metadata: {e}")
+        print(f"[save_metadata] ERROR: Failed to save metadata: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 
@@ -395,6 +401,175 @@ def get_title_from_html(html_content: str, fallback_url: str = "") -> str:
 
 
 # =============================================================================
+# LANGUAGE DETECTION
+# =============================================================================
+
+# Common language codes and their URL patterns
+# Extended list to catch more languages in multi-language ZIM files
+LANGUAGE_PATTERNS = {
+    'en': ['en', 'eng', 'english'],
+    'es': ['es', 'esp', 'spanish', 'espanol'],
+    'fr': ['fr', 'fra', 'french', 'francais'],
+    'de': ['de', 'deu', 'german', 'deutsch'],
+    'pt': ['pt', 'por', 'portuguese', 'portugues'],
+    'it': ['it', 'ita', 'italian', 'italiano'],
+    'ru': ['ru', 'rus', 'russian'],
+    'zh': ['zh', 'zho', 'chinese', 'mandarin'],
+    'ja': ['ja', 'jpn', 'japanese'],
+    'ko': ['ko', 'kor', 'korean'],
+    'ar': ['ar', 'ara', 'arabic'],
+    'hi': ['hi', 'hin', 'hindi'],
+    # Additional languages commonly found in humanitarian/DIY ZIMs
+    'vi': ['vi', 'vie', 'vietnamese'],
+    'th': ['th', 'tha', 'thai'],
+    'id': ['id', 'ind', 'indonesian'],
+    'ms': ['ms', 'msa', 'malay'],
+    'tl': ['tl', 'fil', 'tagalog', 'filipino'],
+    'sw': ['sw', 'swa', 'swahili'],
+    'ht': ['ht', 'hat', 'haitian', 'creole', 'kreyol'],
+    'bn': ['bn', 'ben', 'bengali', 'bangla'],
+    'ne': ['ne', 'nep', 'nepali'],
+    'ur': ['ur', 'urd', 'urdu'],
+    'fa': ['fa', 'fas', 'persian', 'farsi'],
+    'tr': ['tr', 'tur', 'turkish'],
+    'pl': ['pl', 'pol', 'polish'],
+    'nl': ['nl', 'nld', 'dutch'],
+    'uk': ['uk', 'ukr', 'ukrainian'],
+    'ro': ['ro', 'ron', 'romanian'],
+    'el': ['el', 'ell', 'greek'],
+    'he': ['he', 'heb', 'hebrew'],
+    'am': ['am', 'amh', 'amharic'],
+    'si': ['si', 'sin', 'sinhala', 'sinhalese'],
+    'ta': ['ta', 'tam', 'tamil'],
+    'te': ['te', 'tel', 'telugu'],
+    'my': ['my', 'mya', 'burmese', 'myanmar'],
+    'km': ['km', 'khm', 'khmer', 'cambodian'],
+    'lo': ['lo', 'lao', 'laotian'],
+}
+
+# Title suffixes that indicate language
+# Extended to match common patterns in ZIM files
+LANGUAGE_TITLE_SUFFIXES = {
+    'en': ['(English)', '(EN)'],
+    'es': ['(Spanish)', '(ES)', '(Espanol)'],
+    'fr': ['(French)', '(FR)', '(Francais)'],
+    'de': ['(German)', '(DE)', '(Deutsch)'],
+    'pt': ['(Portuguese)', '(PT)', '(Portugues)'],
+    'it': ['(Italian)', '(IT)', '(Italiano)'],
+    'ru': ['(Russian)', '(RU)'],
+    'zh': ['(Chinese)', '(ZH)', '(Mandarin)'],
+    'ja': ['(Japanese)', '(JA)'],
+    'ko': ['(Korean)', '(KO)'],
+    'ar': ['(Arabic)', '(AR)'],
+    'hi': ['(Hindi)', '(HI)'],
+    # Additional languages
+    'vi': ['(Vietnamese)', '(VI)'],
+    'th': ['(Thai)', '(TH)'],
+    'id': ['(Indonesian)', '(ID)'],
+    'ms': ['(Malay)', '(MS)'],
+    'tl': ['(Tagalog)', '(TL)', '(Filipino)'],
+    'sw': ['(Swahili)', '(SW)'],
+    'ht': ['(Haitian Creole)', '(HT)', '(Haitian)', '(Creole)', '(Kreyol)'],
+    'bn': ['(Bengali)', '(BN)', '(Bangla)'],
+    'ne': ['(Nepali)', '(NE)'],
+    'ur': ['(Urdu)', '(UR)'],
+    'fa': ['(Persian)', '(FA)', '(Farsi)'],
+    'tr': ['(Turkish)', '(TR)'],
+    'pl': ['(Polish)', '(PL)'],
+    'nl': ['(Dutch)', '(NL)'],
+    'uk': ['(Ukrainian)', '(UK)'],
+    'ro': ['(Romanian)', '(RO)'],
+    'el': ['(Greek)', '(EL)'],
+    'he': ['(Hebrew)', '(HE)'],
+    'am': ['(Amharic)', '(AM)'],
+    'si': ['(Sinhala)', '(SI)', '(Sinhalese)'],
+    'ta': ['(Tamil)', '(TA)'],
+    'te': ['(Telugu)', '(TE)'],
+    'my': ['(Burmese)', '(MY)', '(Myanmar)'],
+    'km': ['(Khmer)', '(KM)', '(Cambodian)'],
+    'lo': ['(Lao)', '(LO)', '(Laotian)'],
+}
+
+
+def detect_article_language(url: str, title: str = "") -> Optional[str]:
+    """
+    Detect language from article URL or title.
+
+    Checks for:
+    - URL path segments like /en/, /es/, /fr/
+    - Title suffixes like (Spanish), (French)
+    - Language keywords anywhere in title (for translations)
+
+    Returns:
+        ISO language code (e.g., 'en', 'es', 'fr') or None if not detected
+    """
+    url_lower = url.lower()
+    title_lower = title.lower()
+
+    # Check URL patterns like /en/, /es/, /english/, etc.
+    for lang_code, patterns in LANGUAGE_PATTERNS.items():
+        for pattern in patterns:
+            # Match path segments like /en/ or /english/
+            if f'/{pattern}/' in url_lower:
+                return lang_code
+            # Match at end of domain like .en or _en
+            if url_lower.endswith(f'/{pattern}') or f'_{pattern}/' in url_lower:
+                return lang_code
+
+    # Check title suffixes in parentheses
+    for lang_code, suffixes in LANGUAGE_TITLE_SUFFIXES.items():
+        for suffix in suffixes:
+            if suffix.lower() in title_lower:
+                return lang_code
+
+    # Also check for language keywords at end of title or after dash/colon
+    # e.g., "Solar cooker - Vietnamese", "Water filter: Thai version"
+    import re
+    for lang_code, patterns in LANGUAGE_PATTERNS.items():
+        for pattern in patterns:
+            # Check for language name at end of title after separator
+            if re.search(rf'[-:/]\s*{pattern}\s*$', title_lower):
+                return lang_code
+            # Check for language name in parentheses anywhere
+            if re.search(rf'\({pattern}\)', title_lower):
+                return lang_code
+
+    return None
+
+
+def should_include_article(url: str, title: str, language_filter: Optional[str],
+                           debug: bool = False) -> bool:
+    """
+    Check if article should be included based on language filter.
+
+    Args:
+        url: Article URL
+        title: Article title
+        language_filter: Target language code (e.g., 'en') or None for all
+        debug: If True, print debug info for filtered articles
+
+    Returns:
+        True if article should be included
+    """
+    if not language_filter:
+        return True  # No filter, include all
+
+    detected = detect_article_language(url, title)
+
+    # If no language detected, include by default (might be main content)
+    if detected is None:
+        return True
+
+    # Check if detected language matches filter
+    matches = detected == language_filter.lower()
+
+    if debug and not matches:
+        print(f"[lang_filter] EXCLUDED: '{title[:50]}' detected={detected}, filter={language_filter}")
+
+    return matches
+
+
+# =============================================================================
 # ZIM INDEXER
 # =============================================================================
 
@@ -454,13 +629,20 @@ class ZIMIndexer:
 
         return metadata
 
-    def index(self, limit: int = 1000, progress_callback: Optional[Callable] = None) -> Dict:
+    def index(self, limit: int = 1000, progress_callback: Optional[Callable] = None,
+              language_filter: Optional[str] = None,
+              clear_existing: bool = False) -> Dict:
         """
         Index content from ZIM file into vector database.
 
         Args:
             limit: Maximum number of articles to index
             progress_callback: Function(current, total, message) for progress updates
+            language_filter: ISO language code to filter by (e.g., 'en', 'es').
+                           Only articles matching this language will be indexed.
+                           None = index all languages.
+            clear_existing: If True, delete all existing documents for this source
+                          from ChromaDB before indexing (for force reindex).
 
         Returns:
             Dict with success status, count, errors
@@ -476,10 +658,40 @@ class ZIMIndexer:
 
         errors = []
         documents = []
+        deleted_count = 0
+
+        # Clear existing documents from ChromaDB if requested (force reindex)
+        if clear_existing:
+            print(f"[ZIMIndexer] Force reindex requested - clearing existing documents for '{self.source_id}'")
+            try:
+                store = VectorStore()
+                deleted_count = store.delete_source(self.source_id)
+                if deleted_count > 0:
+                    print(f"[ZIMIndexer] Cleared {deleted_count} existing documents for {self.source_id}")
+                else:
+                    print(f"[ZIMIndexer] No existing documents found to clear for {self.source_id}")
+            except Exception as e:
+                print(f"[ZIMIndexer] Warning: Could not clear existing documents: {e}")
+                import traceback
+                traceback.print_exc()
+        else:
+            print(f"[ZIMIndexer] Skip existing mode - not clearing documents")
 
         try:
-            if progress_callback:
-                progress_callback(0, limit, "Opening ZIM file...")
+            # Progress is split: 0-50% extraction, 50-100% embeddings
+            def report_extraction_progress(current, total, message):
+                if progress_callback:
+                    # Scale to 0-50%
+                    scaled_progress = int((current / max(total, 1)) * 50)
+                    progress_callback(scaled_progress, 100, message)
+
+            def report_embedding_progress(current, total, message):
+                if progress_callback:
+                    # Scale to 50-100%
+                    scaled_progress = 50 + int((current / max(total, 1)) * 50)
+                    progress_callback(scaled_progress, 100, message)
+
+            report_extraction_progress(0, 100, "Opening ZIM file...")
 
             zim = ZIMFile(str(self.zim_path), 'utf-8')
             article_count = zim.header_fields.get('articleCount', 0)
@@ -488,12 +700,16 @@ class ZIMIndexer:
             # Extract ZIM metadata from header_fields
             zim_metadata = self._extract_zim_metadata(zim.header_fields)
 
-            if progress_callback:
-                progress_callback(0, min(limit, article_count), f"Found {article_count} articles in ZIM")
+            target_count = min(limit, article_count)
+            report_extraction_progress(0, target_count, f"Found {article_count} articles in ZIM")
 
             indexed = 0
             skipped = 0
+            language_filtered = 0
             seen_ids = set()
+
+            if language_filter:
+                print(f"Language filter: {language_filter} (only indexing {language_filter} articles)")
 
             for i in range(article_count):
                 if indexed >= limit:
@@ -521,6 +737,14 @@ class ZIMIndexer:
 
                     url = getattr(article, 'url', '') or f"article_{i}"
                     title = getattr(article, 'title', '') or get_title_from_html(content, url)
+
+                    # Filter by language if specified
+                    # Enable debug for first 10 filtered articles to see what's being excluded
+                    if language_filter and not should_include_article(
+                        url, title, language_filter, debug=(language_filtered < 10)
+                    ):
+                        language_filtered += 1
+                        continue
 
                     # Skip special pages
                     if any(x in url.lower() for x in ['special:', 'file:', 'category:', 'template:', 'mediawiki:', '-/', 'favicon']):
@@ -555,16 +779,17 @@ class ZIMIndexer:
 
                     indexed += 1
 
-                    if progress_callback and indexed % 10 == 0:
-                        progress_callback(indexed, min(limit, article_count),
-                                        f"Extracted: {title[:50]}...")
+                    if indexed % 10 == 0:
+                        report_extraction_progress(indexed, target_count,
+                                        f"Extracting: {title[:50]}...")
 
                 except Exception as e:
                     errors.append(f"Error processing article {i}: {str(e)}")
                     continue
 
             zim.close()
-            print(f"Extracted {len(documents)} articles from ZIM (skipped {skipped})")
+            lang_info = f", {language_filtered} filtered by language" if language_filtered > 0 else ""
+            print(f"Extracted {len(documents)} articles from ZIM (skipped {skipped}{lang_info})")
 
             if not documents:
                 return {
@@ -574,13 +799,13 @@ class ZIMIndexer:
                     "errors": errors
                 }
 
-            # Add to vector store
-            if progress_callback:
-                progress_callback(len(documents), len(documents), "Computing embeddings...")
+            # Add to vector store - embeddings phase (50-100%)
+            report_embedding_progress(0, len(documents), f"Computing embeddings for {len(documents)} documents...")
 
             print("Adding documents to vector store...")
             store = VectorStore()
-            result = store.add_documents(documents, return_index_data=True)
+            result = store.add_documents(documents, return_index_data=True,
+                                        progress_callback=report_embedding_progress)
             count = result["count"]
             index_data = result["index_data"]
 
@@ -608,6 +833,9 @@ class ZIMIndexer:
                 "indexed_count": count,
                 "total_extracted": len(documents),
                 "skipped": skipped,
+                "deleted_existing": deleted_count,
+                "language_filtered": language_filtered,
+                "language_filter": language_filter,
                 "errors": errors,
                 "output_folder": str(self.output_folder)
             }
@@ -1032,10 +1260,27 @@ class PDFIndexer:
 
 def index_zim_file(zim_path: str, source_id: str, limit: int = 1000,
                    progress_callback: Optional[Callable] = None,
-                   backup_folder: str = None) -> Dict:
-    """Index a ZIM file."""
+                   backup_folder: str = None,
+                   language_filter: Optional[str] = None,
+                   clear_existing: bool = False) -> Dict:
+    """
+    Index a ZIM file.
+
+    Args:
+        zim_path: Path to the ZIM file
+        source_id: Source identifier
+        limit: Maximum articles to index
+        progress_callback: Progress function(current, total, message)
+        backup_folder: Output folder for index files
+        language_filter: ISO language code to filter (e.g., 'en', 'es').
+                        Only articles in this language will be indexed.
+        clear_existing: If True, delete existing documents for this source
+                       from ChromaDB before indexing (for force reindex).
+    """
     indexer = ZIMIndexer(zim_path, source_id, backup_folder=backup_folder)
-    return indexer.index(limit=limit, progress_callback=progress_callback)
+    return indexer.index(limit=limit, progress_callback=progress_callback,
+                        language_filter=language_filter,
+                        clear_existing=clear_existing)
 
 
 def index_html_backup(backup_path: str, source_id: str, limit: int = 1000,

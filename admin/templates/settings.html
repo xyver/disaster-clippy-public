@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Local Admin - Disaster Clippy</title>
+    <link rel="icon" type="image/png" href="/static/paperclip.png">
     <style>
         * {
             box-sizing: border-box;
@@ -137,7 +138,8 @@
         }
 
         .form-group input[type="text"],
-        .form-group select {
+        .form-group select,
+        .form-group textarea {
             width: 100%;
             padding: 0.75rem;
             border: 1px solid #0f3460;
@@ -147,10 +149,28 @@
             font-size: 0.95rem;
         }
 
+        .form-group textarea {
+            min-height: 150px;
+            font-family: monospace;
+            resize: vertical;
+        }
+
         .form-group input:focus,
-        .form-group select:focus {
+        .form-group select:focus,
+        .form-group textarea:focus {
             outline: none;
             border-color: #4ecca3;
+        }
+
+        .prompt-actions {
+            display: flex;
+            gap: 0.5rem;
+            margin-top: 0.75rem;
+        }
+
+        .btn-small {
+            padding: 0.5rem 1rem;
+            font-size: 0.85rem;
         }
 
         .path-input-group {
@@ -421,8 +441,8 @@
         <!-- Status Bar -->
         <div class="status-bar">
             <div class="status-item">
-                <span class="status-dot" id="internetDot"></span>
-                <span id="internetStatus">Checking...</span>
+                <span class="status-dot" id="connectionDot"></span>
+                <span id="connectionStateText">Checking...</span>
             </div>
             <div class="status-item">
                 <span class="status-dot hybrid" id="modeDot"></span>
@@ -467,6 +487,23 @@
                     <input type="checkbox" id="autoFallback" checked>
                     <span>Auto-fallback to offline when internet unavailable</span>
                 </label>
+            </div>
+        </div>
+
+        <!-- System Prompts (tied to connection mode) -->
+        <div class="section">
+            <h2>System Prompt</h2>
+            <p class="description" id="promptDescription">
+                Customize the AI assistant's behavior. This prompt is used when connected to cloud AI (Claude/OpenAI).
+            </p>
+
+            <div class="form-group">
+                <textarea id="promptEditor" rows="10" placeholder="Enter system prompt..."></textarea>
+            </div>
+
+            <div class="prompt-actions">
+                <button class="btn btn-secondary btn-small" onclick="resetCurrentPrompt()">Reset to Default</button>
+                <button class="btn btn-primary btn-small" onclick="savePrompts()">Save Prompt</button>
             </div>
         </div>
 
@@ -554,7 +591,7 @@
 
         <!-- Actions -->
         <div class="actions">
-            <button class="btn btn-primary" onclick="saveSettings()">Save Settings</button>
+            <button class="btn btn-primary" onclick="saveSettings()">Save All Settings</button>
         </div>
     </div>
 
@@ -562,6 +599,9 @@
 
     <script>
         let currentSettings = {};
+        let currentPrompts = { online: '', offline: '' };
+        let defaultPrompts = { online: '', offline: '' };
+        let currentPromptMode = 'online';
 
         // Load settings on page load
         async function loadSettings() {
@@ -594,22 +634,169 @@
                     scanAllBackups();
                 }
 
+                // Load prompts from settings
+                if (currentSettings.prompts) {
+                    currentPrompts = { ...currentSettings.prompts };
+                }
+
+                // Also fetch default prompts
+                await loadDefaultPrompts();
+
+                // If no prompts in settings, use defaults
+                if (!currentPrompts.online) {
+                    currentPrompts.online = defaultPrompts.online;
+                }
+                if (!currentPrompts.offline) {
+                    currentPrompts.offline = defaultPrompts.offline;
+                }
+
+                // Set prompt mode based on connection mode
+                const connectionMode = currentSettings.offline_mode || 'hybrid';
+                currentPromptMode = getPromptModeFromConnectionMode(connectionMode);
+                updatePromptEditor();
+
             } catch (e) {
                 console.error('Failed to load settings:', e);
                 showToast('Failed to load settings', true);
             }
         }
 
+        async function loadDefaultPrompts() {
+            try {
+                const response = await fetch('/useradmin/api/prompts');
+                const data = await response.json();
+                if (data.defaults) {
+                    defaultPrompts = data.defaults;
+                }
+                // Also update current prompts if we got them
+                if (data.prompts) {
+                    currentPrompts = { ...data.prompts };
+                }
+            } catch (e) {
+                console.error('Failed to load default prompts:', e);
+            }
+        }
+
+        // Prompt editing functions - tied to connection mode
+        function getPromptModeFromConnectionMode(connectionMode) {
+            // offline_only uses offline prompt, everything else uses online prompt
+            return connectionMode === 'offline_only' ? 'offline' : 'online';
+        }
+
+        function updatePromptForConnectionMode(connectionMode) {
+            // Save current prompt before switching
+            currentPrompts[currentPromptMode] = document.getElementById('promptEditor').value;
+
+            // Switch to appropriate prompt mode
+            currentPromptMode = getPromptModeFromConnectionMode(connectionMode);
+            updatePromptEditor();
+        }
+
+        function updatePromptEditor() {
+            document.getElementById('promptEditor').value = currentPrompts[currentPromptMode] || '';
+
+            const descriptions = {
+                online: 'Customize the AI assistant behavior. This prompt is used with cloud AI (Claude/OpenAI) in Online and Hybrid modes.',
+                offline: 'Customize the AI assistant behavior. This prompt is used with local Ollama in Offline Only mode. Keep it concise for better performance.'
+            };
+            document.getElementById('promptDescription').textContent = descriptions[currentPromptMode];
+        }
+
+        async function savePrompts() {
+            // Update current prompt from editor
+            currentPrompts[currentPromptMode] = document.getElementById('promptEditor').value;
+
+            try {
+                const response = await fetch('/useradmin/api/settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ prompts: currentPrompts })
+                });
+
+                const data = await response.json();
+                if (data.status === 'success') {
+                    showToast('Prompt saved successfully');
+                } else {
+                    showToast('Failed to save prompt', true);
+                }
+            } catch (e) {
+                showToast('Error saving prompt', true);
+            }
+        }
+
+        async function resetCurrentPrompt() {
+            if (!confirm('Reset this prompt to the default? Your changes will be lost.')) {
+                return;
+            }
+
+            // Use locally cached default prompt
+            const defaultPrompt = defaultPrompts[currentPromptMode];
+            if (defaultPrompt) {
+                currentPrompts[currentPromptMode] = defaultPrompt;
+                document.getElementById('promptEditor').value = defaultPrompt;
+
+                // Save to backend
+                try {
+                    const response = await fetch('/useradmin/api/settings', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ prompts: currentPrompts })
+                    });
+
+                    const data = await response.json();
+                    if (data.status === 'success') {
+                        showToast('Prompt reset to default');
+                    } else {
+                        showToast('Prompt reset locally, but failed to save to server', true);
+                    }
+                } catch (e) {
+                    showToast('Prompt reset locally, but failed to save to server', true);
+                }
+            } else {
+                showToast('Default prompt not available', true);
+            }
+        }
+
+        // Connection state colors mapping
+        const connectionStateColors = {
+            'green': 'online',
+            'blue': 'hybrid',   // reuse hybrid style for blue
+            'yellow': 'hybrid',
+            'orange': 'hybrid',
+            'red': 'offline',
+            'gray': 'offline'
+        };
+
+        async function loadConnectionState() {
+            try {
+                const response = await fetch('/api/v1/connection-status');
+                const data = await response.json();
+
+                const dot = document.getElementById('connectionDot');
+                const text = document.getElementById('connectionStateText');
+
+                // Map state_color to CSS class
+                const dotClass = connectionStateColors[data.state_color] || 'hybrid';
+                dot.className = 'status-dot ' + dotClass;
+                text.textContent = data.state_label + ': ' + (data.message || '');
+            } catch (e) {
+                console.error('Error loading connection state:', e);
+                document.getElementById('connectionStateText').textContent = 'Status: Error';
+            }
+        }
+
         function updateInternetStatus(available) {
-            const dot = document.getElementById('internetDot');
-            const status = document.getElementById('internetStatus');
+            // This is now handled by loadConnectionState() using the unified endpoint
+            // Keep for backward compatibility but it will be overwritten by loadConnectionState
+            const dot = document.getElementById('connectionDot');
+            const status = document.getElementById('connectionStateText');
 
             if (available) {
                 dot.className = 'status-dot online';
-                status.textContent = 'Internet: Connected';
+                status.textContent = 'Connected';
             } else {
                 dot.className = 'status-dot offline';
-                status.textContent = 'Internet: Disconnected';
+                status.textContent = 'Disconnected';
             }
         }
 
@@ -632,12 +819,34 @@
 
             modeDot.className = 'status-dot ' + mode.replace('_only', '');
             modeStatus.textContent = 'Mode: ' + modeLabels[mode];
+
+            // Update prompt editor to show the relevant prompt for this mode
+            updatePromptForConnectionMode(mode);
         }
 
-        // Handle radio button changes
+        // Handle radio button changes - auto-save when mode changes
         document.querySelectorAll('input[name="offline_mode"]').forEach(radio => {
-            radio.addEventListener('change', (e) => {
-                updateModeSelection(e.target.value);
+            radio.addEventListener('change', async (e) => {
+                const newMode = e.target.value;
+                updateModeSelection(newMode);
+
+                // Auto-save the mode change
+                try {
+                    const response = await fetch('/useradmin/api/settings', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ offline_mode: newMode })
+                    });
+
+                    const data = await response.json();
+                    if (data.status === 'success') {
+                        showToast('Connection mode saved');
+                    } else {
+                        showToast('Failed to save connection mode', true);
+                    }
+                } catch (err) {
+                    showToast('Error saving connection mode', true);
+                }
             });
         });
 
@@ -783,6 +992,7 @@
 
         // Initialize
         loadSettings();
+        loadConnectionState();  // Load live connection state from unified endpoint
 
         // Hide Pinecone link if not admin
         function updatePineconeVisibility() {

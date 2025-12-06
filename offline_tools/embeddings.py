@@ -90,22 +90,30 @@ class EmbeddingService:
             )
             return response.data[0].embedding
 
-    def embed_batch(self, texts: List[str], batch_size: int = 50) -> List[List[float]]:
+    def embed_batch(self, texts: List[str], batch_size: int = 50,
+                    progress_callback=None) -> List[List[float]]:
         """
         Generate embeddings for multiple texts efficiently.
 
         Args:
             texts: List of texts to embed
             batch_size: Number of texts per API call
+            progress_callback: Optional function(current, total, message) for progress
 
         Returns:
             List of embedding vectors
         """
+        total = len(texts)
+
         if self.mode == "local" and self._local_model:
             # Local model - can process larger batches, no API costs
             MAX_CHARS = 50000
             truncated = [t[:MAX_CHARS] for t in texts]
+            if progress_callback:
+                progress_callback(0, total, "Computing embeddings (local model)...")
             embeddings = self._local_model.encode(truncated, convert_to_numpy=True, show_progress_bar=True)
+            if progress_callback:
+                progress_callback(total, total, "Embeddings complete")
             return [e.tolist() for e in embeddings]
 
         # OpenAI API path
@@ -115,6 +123,9 @@ class EmbeddingService:
         for i in range(0, len(texts), batch_size):
             batch = texts[i:i + batch_size]
             batch = [t[:MAX_CHARS] for t in batch]
+
+            if progress_callback:
+                progress_callback(i, total, f"Computing embeddings ({i}/{total})...")
 
             try:
                 response = self.client.embeddings.create(
@@ -137,6 +148,9 @@ class EmbeddingService:
                         print(f"Failed to embed text: {e2}")
                         dim = 1536 if "small" in self.model or "ada" in self.model else 3072
                         all_embeddings.append([0.0] * dim)
+
+        if progress_callback:
+            progress_callback(total, total, "Embeddings complete")
 
         return all_embeddings
 

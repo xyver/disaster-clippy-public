@@ -20,7 +20,7 @@ from dataclasses import dataclass, asdict
 
 from .schemas import (
     get_manifest_file, get_metadata_file, get_index_file,
-    get_vectors_file, get_backup_manifest_file
+    get_vectors_file, get_backup_manifest_file, validate_source_files
 )
 
 
@@ -48,6 +48,7 @@ class IndexResult:
     indexed_count: int = 0
     skipped_count: int = 0
     total_chars: int = 0
+    language_filtered: int = 0  # Count of articles filtered by language
     error: str = ""
     errors: List[str] = None
 
@@ -74,17 +75,13 @@ class ValidationResult:
     detected_license: str = ""
     suggested_tags: List[str] = None
 
-    # Schema v3 fields
-    schema_version: int = 1  # 1=legacy, 2=old layered, 3=new v3 format
+    # Schema v3 fields (current format - underscore-prefixed JSON files)
+    schema_version: int = 3
     has_manifest: bool = False  # _manifest.json
     has_metadata_file: bool = False  # _metadata.json
     has_index_file: bool = False  # _index.json
     has_vectors_file: bool = False  # _vectors.json
-    has_backup_manifest: bool = False  # backup_manifest.json
-    legacy_files: List[str] = None  # Old format files that need migration
-    redundant_files: List[str] = None  # Files that can be safely deleted
-    needs_migration: bool = False  # True if legacy files present
-    has_cleanup_needed: bool = False  # True if redundant files can be deleted
+    has_backup_manifest: bool = False  # _backup_manifest.json
 
     def __post_init__(self):
         if self.issues is None:
@@ -93,10 +90,6 @@ class ValidationResult:
             self.warnings = []
         if self.suggested_tags is None:
             self.suggested_tags = []
-        if self.legacy_files is None:
-            self.legacy_files = []
-        if self.redundant_files is None:
-            self.redundant_files = []
 
 
 class SourceManager:
@@ -1156,12 +1149,232 @@ class SourceManager:
         )
 
     # =========================================================================
+    # METADATA GENERATION
+    # =========================================================================
+
+    def generate_metadata(self, source_id: str, progress_callback: Callable = None) -> Dict[str, Any]:
+        """
+        Generate metadata for a source from its backup files.
+
+        For HTML sources: Scans HTML files and extracts titles, snippets
+        For ZIM sources: Extracts article metadata from ZIM file
+        For PDF sources: Uses _collection.json document info
+
+        Args:
+            source_id: Source identifier
+            progress_callback: Function(current, total, message) for progress
+
+        Returns:
+            Dict with success status and document count
+        """
+        source_type = self._detect_source_type(source_id)
+
+        if not source_type:
+            return {
+                "success": False,
+                "error": "Could not detect source type",
+                "document_count": 0
+            }
+
+        source_path = self.get_source_path(source_id)
+
+        if source_type == "zim":
+            return self._generate_zim_metadata(source_id, source_path, progress_callback)
+        elif source_type == "html":
+            return self._generate_html_metadata(source_id, source_path, progress_callback)
+        elif source_type == "pdf":
+            return self._generate_pdf_metadata(source_id, source_path, progress_callback)
+        else:
+            return {
+                "success": False,
+                "error": f"Unknown source type: {source_type}",
+                "document_count": 0
+            }
+
+    def _generate_zim_metadata(self, source_id: str, source_path: Path,
+                               progress_callback: Callable = None) -> Dict[str, Any]:
+        """Generate metadata from ZIM file."""
+        from .schemas import get_metadata_file
+
+        zim_files = list(source_path.glob("*.zim"))
+        if not zim_files:
+            return {"success": False, "error": "No ZIM file found", "document_count": 0}
+
+        try:
+            from zimply_core.zim_core import ZIMFile
+        except ImportError:
+            return {"success": False, "error": "zimply-core not installed", "document_count": 0}
+
+        zim_path = zim_files[0]
+        try:
+            zim = ZIMFile(str(zim_path), 'utf-8')
+        except Exception as e:
+            return {"success": False, "error": f"Failed to open ZIM: {e}", "document_count": 0}
+
+        documents = {}
+        article_count = zim.header_fields.get('articleCount', 0)
+        processed = 0
+
+        if progress_callback:
+            progress_callback(0, article_count, "Extracting ZIM metadata...")
+
+        # Extract text from HTML helper
+        def extract_text(html):
+            import re
+            text = re.sub(r'<script[^>]*>.*?</script>', '', html, flags=re.DOTALL | re.IGNORECASE)
+            text = re.sub(r'<style[^>]*>.*?</style>', '', text, flags=re.DOTALL | re.IGNORECASE)
+            text = re.sub(r'<[^>]+>', ' ', text)
+            text = re.sub(r'\s+', ' ', text)
+            return text.strip()
+
+        for i in range(article_count):
+            try:
+                article = zim.get_article_by_id(i)
+                if article is None:
+                    continue
+
+                url = getattr(article, 'url', '') or ''
+                title = getattr(article, 'title', '') or ''
+                mimetype = str(getattr(article, 'mimetype', ''))
+
+                # Only process HTML articles
+                if 'text/html' not in mimetype:
+                    continue
+
+                # Skip navigation/namespace pages
+                if url.startswith(('-/', 'X/', 'M/')):
+                    continue
+
+                content = article.data
+                if isinstance(content, bytes):
+                    content = content.decode('utf-8', errors='ignore')
+
+                text = extract_text(content)
+                if len(text) < 50:  # Skip very short articles
+                    continue
+
+                doc_id = f"zim_{i}"
+                documents[doc_id] = {
+                    "title": title[:200] if title else url[:200],
+                    "url": f"/zim/{source_id}/{url}",
+                    "snippet": text[:500],
+                    "char_count": len(text),
+                    "source_id": source_id,
+                    "zim_index": i,
+                    "zim_url": url
+                }
+                processed += 1
+
+                if progress_callback and processed % 100 == 0:
+                    progress_callback(processed, article_count, f"Processed {processed} articles...")
+
+            except Exception:
+                continue
+
+        try:
+            zim.close()
+        except Exception:
+            pass
+
+        # Save metadata
+        metadata_file = source_path / get_metadata_file()
+        metadata = {
+            "source_id": source_id,
+            "document_count": len(documents),
+            "documents": documents
+        }
+
+        with open(metadata_file, 'w', encoding='utf-8') as f:
+            json.dump(metadata, f, indent=2)
+
+        if progress_callback:
+            progress_callback(article_count, article_count, "Metadata generation complete")
+
+        return {
+            "success": True,
+            "document_count": len(documents),
+            "metadata_file": str(metadata_file)
+        }
+
+    def _generate_html_metadata(self, source_id: str, source_path: Path,
+                                progress_callback: Callable = None) -> Dict[str, Any]:
+        """Generate metadata from HTML files using packager."""
+        from .schemas import get_metadata_file, get_backup_manifest_file
+        from .packager import generate_metadata_from_html, save_metadata
+
+        pages_folder = source_path / "pages"
+        if not pages_folder.exists():
+            return {"success": False, "error": "No pages/ folder found", "document_count": 0}
+
+        try:
+            metadata = generate_metadata_from_html(str(pages_folder))
+
+            if not metadata or not metadata.get("documents"):
+                return {"success": False, "error": "No documents found in pages/", "document_count": 0}
+
+            # Save to _metadata.json
+            metadata_file = source_path / get_metadata_file()
+            save_metadata(metadata, str(metadata_file))
+
+            return {
+                "success": True,
+                "document_count": len(metadata.get("documents", {})),
+                "metadata_file": str(metadata_file)
+            }
+        except Exception as e:
+            return {"success": False, "error": str(e), "document_count": 0}
+
+    def _generate_pdf_metadata(self, source_id: str, source_path: Path,
+                               progress_callback: Callable = None) -> Dict[str, Any]:
+        """Generate metadata from PDF collection."""
+        from .schemas import get_metadata_file
+
+        collection_file = source_path / "_collection.json"
+        if not collection_file.exists():
+            return {"success": False, "error": "No _collection.json found", "document_count": 0}
+
+        try:
+            with open(collection_file, 'r', encoding='utf-8') as f:
+                collection = json.load(f)
+
+            documents = {}
+            source_docs = collection.get("documents", {})
+
+            for doc_id, doc_info in source_docs.items():
+                documents[doc_id] = {
+                    "title": doc_info.get("title", doc_id),
+                    "url": doc_info.get("url", ""),
+                    "snippet": doc_info.get("description", "")[:500],
+                    "source_id": source_id,
+                    "pdf_path": doc_info.get("path", "")
+                }
+
+            metadata_file = source_path / get_metadata_file()
+            metadata = {
+                "source_id": source_id,
+                "document_count": len(documents),
+                "documents": documents
+            }
+
+            with open(metadata_file, 'w', encoding='utf-8') as f:
+                json.dump(metadata, f, indent=2)
+
+            return {
+                "success": True,
+                "document_count": len(documents),
+                "metadata_file": str(metadata_file)
+            }
+        except Exception as e:
+            return {"success": False, "error": str(e), "document_count": 0}
+
+    # =========================================================================
     # INDEX OPERATIONS
     # =========================================================================
 
     def create_index(self, source_id: str, source_type: str = None,
                      limit: int = 1000, skip_existing: bool = True,
-                     progress_callback: Callable = None) -> IndexResult:
+                     progress_callback: Callable = None,
+                     language_filter: str = None) -> IndexResult:
         """
         Create an index for a source.
 
@@ -1171,6 +1384,8 @@ class SourceManager:
             limit: Maximum items to index
             skip_existing: Skip already-indexed items
             progress_callback: Function(current, total, message)
+            language_filter: ISO language code to filter (e.g., 'en', 'es').
+                           Only applies to ZIM files. None = index all languages.
 
         Returns:
             IndexResult with success status and counts
@@ -1191,10 +1406,13 @@ class SourceManager:
 
         source_type = source_type.lower()
 
+        # For ZIM, skip_existing=False means clear_existing=True (force reindex)
+        clear_existing = not skip_existing
+
         if source_type == "html":
             return self._index_html(source_id, limit, skip_existing, progress_callback)
         elif source_type == "zim":
-            return self._index_zim(source_id, limit, progress_callback)
+            return self._index_zim(source_id, limit, progress_callback, language_filter, clear_existing)
         elif source_type == "pdf":
             return self._index_pdf(source_id, limit, skip_existing, progress_callback)
         else:
@@ -1281,7 +1499,9 @@ class SourceManager:
             )
 
     def _index_zim(self, source_id: str, limit: int,
-                   progress_callback: Callable) -> IndexResult:
+                   progress_callback: Callable,
+                   language_filter: str = None,
+                   clear_existing: bool = False) -> IndexResult:
         """Index a ZIM file"""
         try:
             from offline_tools.indexer import index_zim_file
@@ -1305,7 +1525,9 @@ class SourceManager:
                 source_id=source_id,
                 limit=limit,
                 progress_callback=progress_callback,
-                backup_folder=str(self.get_source_path(source_id))
+                backup_folder=str(self.get_source_path(source_id)),
+                language_filter=language_filter,
+                clear_existing=clear_existing
             )
 
             return IndexResult(
@@ -1313,6 +1535,7 @@ class SourceManager:
                 source_id=source_id,
                 indexed_count=result.get("indexed_count", 0),
                 total_chars=result.get("total_chars", 0),
+                language_filtered=result.get("language_filtered", 0),
                 error=result.get("error", ""),
                 errors=result.get("errors", [])
             )
@@ -1366,10 +1589,13 @@ class SourceManager:
         """
         Validate a source is ready for distribution.
 
+        Uses validate_source_files() from schemas.py for core file checks,
+        then adds additional validation for license, tags, and content.
+
         Checks:
-        - Has backup files
-        - Has index/metadata
-        - Has embeddings file (for offline use)
+        - Has backup files (HTML/ZIM/PDF)
+        - Has required schema files (manifest, metadata/index, vectors)
+        - Has embeddings with content
         - Has license (tries auto-detection if missing)
         - Has proper tags
 
@@ -1386,7 +1612,18 @@ class SourceManager:
         )
 
         source_path = self.get_source_path(source_id)
-        source_config = source_config or {}
+
+        # Load manifest file if source_config not provided
+        manifest_path = source_path / get_manifest_file()
+        if source_config is None and manifest_path.exists():
+            try:
+                with open(manifest_path, 'r', encoding='utf-8') as f:
+                    source_config = json.load(f)
+            except Exception as e:
+                print(f"Warning: Could not load manifest for validation: {e}")
+                source_config = {}
+        else:
+            source_config = source_config or {}
 
         # Normalize file names first (e.g., rename ZIM files to standard format)
         # This runs early so validation sees the correct file names
@@ -1395,49 +1632,57 @@ class SourceManager:
             for r in normalize_result["renamed"]:
                 print(f"Normalized: {r['old']} -> {r['new']}")
 
-        # Check backup exists
-        source_type = self._detect_source_type(source_id)
-        if source_type:
-            result.has_backup = True
-        else:
-            result.has_backup = False
-            result.issues.append("No backup found (no HTML, ZIM, or PDF files)")
+        # Use validate_source_files() from schemas.py for core file checks
+        schema_validation = validate_source_files(str(source_path), source_id)
+
+        # Map schema validation results to our ValidationResult
+        result.has_manifest = schema_validation["has_manifest"]
+        result.has_metadata_file = schema_validation["has_metadata"]
+        result.has_index_file = schema_validation["has_index"]
+        result.has_vectors_file = schema_validation["has_vectors"]
+        result.has_backup_manifest = schema_validation["has_backup_manifest"]
+        result.has_backup = schema_validation["has_backup"]
+
+        # Add schema validation issues
+        for issue in schema_validation.get("issues", []):
+            result.issues.append(issue)
             result.is_valid = False
 
-        # Schema file paths
-        manifest_file = source_path / get_manifest_file()
-        metadata_file = source_path / get_metadata_file()
-        index_file = source_path / get_index_file()
-        vectors_file = source_path / get_vectors_file()
-        backup_manifest_file = source_path / get_backup_manifest_file()
+        # Set legacy fields for compatibility
+        result.has_metadata = result.has_metadata_file or result.has_index_file
+        result.has_index = result.has_index_file
 
-        # Check metadata
+        # Check backup exists (additional check using our detection)
+        source_type = self._detect_source_type(source_id)
+        if not source_type and not result.has_backup:
+            if "No backup found" not in str(result.issues):
+                result.issues.append("No backup found (no HTML, ZIM, or PDF files)")
+            result.is_valid = False
+        elif source_type:
+            result.has_backup = True
+
+        # Verify metadata file has content (not just exists)
+        metadata_file = source_path / get_metadata_file()
         if metadata_file.exists():
-            result.has_metadata = True
-            result.has_index = True
-            # Verify document count
             try:
                 with open(metadata_file, 'r', encoding='utf-8') as f:
                     docs_data = json.load(f)
                 doc_count = len(docs_data.get("documents", {}))
                 if doc_count == 0:
                     result.has_metadata = False
+                    result.has_metadata_file = False
                     result.issues.append("Metadata file exists but is empty - run 'Create Index'")
                     result.is_valid = False
             except Exception:
                 result.has_metadata = False
+                result.has_metadata_file = False
                 result.issues.append("Metadata file exists but could not be read - run 'Create Index'")
                 result.is_valid = False
-        else:
-            result.has_metadata = False
-            result.has_index = False
-            result.issues.append("No metadata - run 'Create Index' to create")
-            result.is_valid = False
 
-        # Check vectors - prefer v3, fall back to legacy
+        # Check vectors file has content
+        vectors_file = source_path / get_vectors_file()
         if vectors_file.exists():
             result.has_embeddings = True
-            # Verify it has actual content
             try:
                 with open(vectors_file, 'r', encoding='utf-8') as f:
                     embed_data = json.load(f)
@@ -1446,23 +1691,16 @@ class SourceManager:
                     embed_count = embed_data.get("document_count", 0)
                 if embed_count == 0:
                     result.has_embeddings = False
+                    result.has_vectors_file = False
                     result.issues.append("Vectors file exists but is empty - run 'Create Index'")
                     result.is_valid = False
             except Exception:
                 result.has_embeddings = False
+                result.has_vectors_file = False
                 result.issues.append("Vectors file exists but could not be read - run 'Create Index'")
                 result.is_valid = False
-        elif legacy_embeddings.exists():
-            # Has legacy format only
-            result.has_embeddings = True
-            result.warnings.append("Using legacy embeddings format - run 'Create Index' to upgrade")
-        elif legacy_index.exists():
-            result.has_embeddings = True
-            result.warnings.append("Using very old index format - run 'Create Index' to upgrade")
         else:
             result.has_embeddings = False
-            result.issues.append("No embeddings - run 'Create Index' to create")
-            result.is_valid = False
 
         # Check license
         license_val = source_config.get("license", "")
@@ -1508,55 +1746,16 @@ class SourceManager:
                 result.suggested_tags = suggested
                 result.warnings.append(f"Suggested tags: {', '.join(suggested)}")
 
-        # Check v3 format files
-        result.has_manifest = manifest_file.exists()
-        result.has_metadata_file = metadata_file.exists()
-        result.has_index_file = index_file.exists()
-        result.has_vectors_file = vectors_file.exists()
-        result.has_backup_manifest = backup_manifest_file.exists()
-
-        # Check for legacy files that can be cleaned up
-        legacy_files_to_check = [
-            f"{source_id}_source.json",
-            f"{source_id}_documents.json",
-            f"{source_id}_embeddings.json",
-            f"{source_id}_index.json",
-            f"{source_id}_manifest.json",
-            f"{source_id}_backup_manifest.json",
-        ]
-
-        if source_path.exists():
-            for legacy_file in legacy_files_to_check:
-                legacy_path = source_path / legacy_file
-                if legacy_path.exists():
-                    result.legacy_files.append(legacy_file)
-                    # Mark as redundant if v3 equivalent exists
-                    if vectors_file.exists() or metadata_file.exists():
-                        result.redundant_files.append(legacy_file)
-
-        # Determine schema version
-        if result.has_manifest and result.has_metadata_file and result.has_vectors_file:
-            result.schema_version = 3
-        elif legacy_source.exists() and legacy_documents.exists() and legacy_embeddings.exists():
-            result.schema_version = 2
-        else:
-            result.schema_version = 1
-
-        result.needs_migration = len(result.legacy_files) > 0
-        result.has_cleanup_needed = len(result.redundant_files) > 0
-
-        # Add warnings
-        if result.needs_migration:
-            result.warnings.append(f"Legacy files need migration: {', '.join(result.legacy_files)}")
-        if result.has_cleanup_needed:
-            result.warnings.append(f"Unexpected files found (not in v2 schema): {', '.join(result.redundant_files)}")
+        # Current schema version (v3 uses underscore-prefixed files)
+        result.schema_version = 3
 
         # Determine if production ready (all critical checks pass)
-        # For now, accept both schema v1 and v2, but prefer v2
+        # Using schema validation: manifest + (metadata or index) + vectors
         result.production_ready = (
             result.has_backup and
-            result.has_metadata and
-            result.has_embeddings and
+            result.has_manifest and
+            (result.has_metadata_file or result.has_index_file) and
+            result.has_vectors_file and
             result.has_license
         )
 
@@ -1577,7 +1776,7 @@ class SourceManager:
         - Has embeddings file with content
         - Has license specified (not "Unknown")
 
-        SCHEMA v3 (when require_v2=True):
+        SCHEMA v3 FILES:
         - _manifest.json (source-level metadata)
         - _metadata.json (document metadata)
         - _vectors.json (vectors only, no content duplication)
@@ -1589,7 +1788,7 @@ class SourceManager:
         Args:
             source_id: Source identifier
             source_config: Source configuration from _manifest.json
-            require_v2: If True, require schema v3 format
+            require_v2: Deprecated parameter, kept for compatibility
 
         Returns:
             ValidationResult with production_ready flag
@@ -1742,44 +1941,73 @@ class SourceManager:
         from .schemas import get_metadata_file
 
         source_path = self.get_source_path(source_id)
+        print(f"[suggest_tags] Looking for metadata in: {source_path}")
         suggested = set()
 
         # For PDF sources, check _collection.json topics first
         collection_file = source_path / "_collection.json"
         if collection_file.exists():
+            print(f"[suggest_tags] Found _collection.json")
             try:
                 with open(collection_file, 'r', encoding='utf-8') as f:
                     collection_data = json.load(f)
                 topics = collection_data.get("collection", {}).get("topics", [])
                 for topic in topics:
                     suggested.add(topic)
-            except Exception:
-                pass
+                print(f"[suggest_tags] Got {len(topics)} topics from collection")
+            except Exception as e:
+                print(f"[suggest_tags] Error reading collection: {e}")
 
         # Check metadata for titles (v3 or legacy)
         metadata_file = source_path / get_metadata_file()
+        print(f"[suggest_tags] Checking for: {metadata_file}")
         if not metadata_file.exists():
             metadata_file = source_path / f"{source_id}_metadata.json"
+            print(f"[suggest_tags] v3 not found, trying legacy: {metadata_file}")
+
         if metadata_file.exists():
+            print(f"[suggest_tags] Found metadata file: {metadata_file}")
             try:
                 with open(metadata_file, 'r', encoding='utf-8') as f:
                     metadata = json.load(f)
 
-                # Scan titles
-                all_text = ""
-                for doc_id, doc_info in metadata.get("documents", {}).items():
-                    title = doc_info.get("title", "")
-                    all_text += " " + title.lower()
+                documents = metadata.get("documents", {})
+                doc_count = len(documents) if isinstance(documents, dict) else 0
+                print(f"[suggest_tags] Metadata has {doc_count} documents")
 
-                # Match topic keywords
-                for tag, keywords in self.TOPIC_KEYWORDS.items():
-                    for keyword in keywords:
-                        if keyword in all_text:
-                            suggested.add(tag)
-                            break
+                if not documents:
+                    print(f"[suggest_tags] Metadata file exists but has no documents: {metadata_file}")
+                else:
+                    # Scan titles
+                    all_text = ""
+                    sample_titles = []
+                    for doc_id, doc_info in documents.items():
+                        title = doc_info.get("title", "")
+                        all_text += " " + title.lower()
+                        if len(sample_titles) < 5:
+                            sample_titles.append(title[:50])
 
-            except Exception:
-                pass
+                    print(f"[suggest_tags] Sample titles: {sample_titles}")
+
+                    # Match topic keywords
+                    for tag, keywords in self.TOPIC_KEYWORDS.items():
+                        for keyword in keywords:
+                            if keyword in all_text:
+                                suggested.add(tag)
+                                break
+
+                    print(f"[suggest_tags] Found {len(suggested)} suggested tags from content")
+
+            except Exception as e:
+                print(f"[suggest_tags] Error reading metadata: {e}")
+                import traceback
+                traceback.print_exc()
+        else:
+            print(f"[suggest_tags] Metadata file not found at {metadata_file}")
+            # List what files ARE in the source path
+            if source_path.exists():
+                files = [f.name for f in source_path.iterdir() if f.is_file()]
+                print(f"[suggest_tags] Files in {source_path}: {files[:10]}")
 
         # Also check source_id itself
         source_lower = source_id.lower()

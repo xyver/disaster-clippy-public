@@ -95,7 +95,10 @@ class VectorStore:
         # Compute embeddings if not provided
         if embeddings is None:
             print(f"Computing embeddings for {len(contents)} documents...")
-            embeddings = self.embedding_service.embed_batch(contents)
+            embeddings = self.embedding_service.embed_batch(
+                contents,
+                progress_callback=progress_callback
+            )
 
         # Add to collection
         self.collection.add(
@@ -279,6 +282,44 @@ class VectorStore:
         all_ids = self.collection.get()["ids"]
         if all_ids:
             self.collection.delete(ids=all_ids)
+
+    def delete_source(self, source_id: str) -> int:
+        """
+        Delete all documents from a specific source.
+
+        Args:
+            source_id: The source identifier to delete
+
+        Returns:
+            Number of documents deleted
+        """
+        try:
+            # Debug: Show what sources exist
+            stats = self.get_stats()
+            print(f"[delete_source] Current sources in DB: {list(stats.get('sources', {}).keys())}")
+            print(f"[delete_source] Looking for source: '{source_id}'")
+
+            # Get all document IDs for this source
+            result = self.collection.get(
+                where={"source": source_id},
+                include=[]
+            )
+            ids_to_delete = result.get("ids", [])
+            print(f"[delete_source] Found {len(ids_to_delete)} documents to delete")
+
+            if ids_to_delete:
+                self.collection.delete(ids=ids_to_delete)
+                print(f"[delete_source] Deleted {len(ids_to_delete)} documents from source '{source_id}'")
+                return len(ids_to_delete)
+            else:
+                print(f"[delete_source] No documents found for source '{source_id}'")
+
+            return 0
+        except Exception as e:
+            print(f"[delete_source] Error deleting source {source_id}: {e}")
+            import traceback
+            traceback.print_exc()
+            return 0
 
     def get_metadata_stats(self) -> Dict[str, Any]:
         """Get stats - now just calls get_stats()"""

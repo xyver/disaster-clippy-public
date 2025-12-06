@@ -36,6 +36,31 @@ class LocalConfig:
             "model": "mistral",        # Model to use
             "auto_start": True,        # Auto-start portable Ollama when in offline mode
             "portable_path": ""        # Path to portable Ollama (empty = use BACKUP_PATH/ollama)
+        },
+        "prompts": {
+            # Online mode prompt (used with cloud LLM like Claude/OpenAI)
+            "online": """You are Disaster Clippy, a helpful assistant that helps people find DIY guides and humanitarian resources.
+
+Your role is to:
+1. Understand what the user needs help with
+2. Suggest relevant articles from the knowledge base
+3. Help them refine their search through conversation
+4. Answer follow-up questions about the articles
+
+When presenting search results:
+- Summarize what each article is about in 1-2 sentences
+- Explain why it might be relevant to their situation
+- Offer to find more similar articles or narrow down the search
+
+Be conversational, helpful, and practical. Focus on actionable solutions.
+
+IMPORTANT: You can ONLY recommend articles that are provided to you in the context. Do not make up or hallucinate articles that don't exist in the search results.""",
+
+            # Offline mode prompt (used with local Ollama - shorter for efficiency)
+            "offline": """You are Disaster Clippy, a helpful assistant for DIY and humanitarian resources.
+Your role is to help users find relevant articles and answer questions based on the provided context.
+Be concise, practical, and helpful. Focus on actionable information.
+Only recommend articles that are in the provided context - do not make up articles."""
         }
     }
 
@@ -231,6 +256,28 @@ class LocalConfig:
         if backup_folder:
             return os.path.join(backup_folder, "ollama")
         return ""
+
+    # Prompt settings
+    def get_prompt(self, mode: str = "online") -> str:
+        """Get system prompt for chat (online or offline mode)"""
+        prompts = self.config.get("prompts", self.DEFAULT_CONFIG["prompts"])
+        return prompts.get(mode, prompts.get("online", ""))
+
+    def set_prompt(self, mode: str, prompt: str) -> None:
+        """Set system prompt for a mode (online or offline)"""
+        if "prompts" not in self.config:
+            self.config["prompts"] = self.DEFAULT_CONFIG["prompts"].copy()
+        self.config["prompts"][mode] = prompt
+
+    def get_prompts(self) -> Dict[str, str]:
+        """Get all prompts"""
+        return self.config.get("prompts", self.DEFAULT_CONFIG["prompts"])
+
+    def reset_prompt(self, mode: str) -> str:
+        """Reset a prompt to default and return the default value"""
+        default_prompt = self.DEFAULT_CONFIG["prompts"].get(mode, "")
+        self.set_prompt(mode, default_prompt)
+        return default_prompt
 
 
 def scan_backup_folder(folder_path: str, file_type: str = "zim") -> List[Dict[str, Any]]:

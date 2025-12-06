@@ -11,7 +11,7 @@ from datetime import datetime
 
 from fastapi import FastAPI, Request, Header, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, HTMLResponse
+from fastapi.responses import JSONResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from dotenv import load_dotenv
@@ -35,6 +35,13 @@ from admin import router as admin_router
 
 # Import source packs API
 from admin.routes import sourcepacks_router
+
+# Import ZIM server for offline browsing
+from admin.zim_server import router as zim_router
+
+# Import unified AI service and connection manager
+from admin.ai_service import get_ai_service, SearchMethod, ResponseMethod
+from admin.connection_manager import get_connection_manager, sync_mode_from_config, ConnectionState
 
 # Load environment
 load_dotenv()
@@ -91,6 +98,23 @@ app.include_router(admin_router)
 # Include source packs API
 app.include_router(sourcepacks_router)
 
+# Include ZIM server for offline browsing
+app.include_router(zim_router)
+
+
+@app.on_event("startup")
+async def startup_event():
+    """Sync master metadata on app startup"""
+    try:
+        from offline_tools.packager import sync_master_metadata
+        result = sync_master_metadata()
+        if result.get("added") or result.get("removed") or result.get("updated"):
+            print(f"Master sync: {result['added']} added, {result['removed']} removed, {result['updated']} updated")
+        print(f"Sources: {result.get('total', 0)} sources, {result.get('total_documents', 0)} documents")
+    except Exception as e:
+        print(f"Warning: Could not sync master metadata: {e}")
+
+
 # Lazy initialization for faster startup
 vector_store = None
 llm = None
@@ -138,8 +162,8 @@ def get_llm():
             )
     return llm
 
-# Conversation prompt
-system_prompt = """You are Disaster Clippy, a helpful assistant that helps people find DIY guides and humanitarian resources.
+# Default prompts (fallback if config not available)
+DEFAULT_ONLINE_PROMPT = """You are Disaster Clippy, a helpful assistant that helps people find DIY guides and humanitarian resources.
 
 Your role is to:
 1. Understand what the user needs help with
@@ -156,16 +180,39 @@ Be conversational, helpful, and practical. Focus on actionable solutions.
 
 IMPORTANT: You can ONLY recommend articles that are provided to you in the context. Do not make up or hallucinate articles that don't exist in the search results."""
 
-chat_prompt = ChatPromptTemplate.from_messages([
-    ("system", system_prompt),
-    MessagesPlaceholder(variable_name="history"),
-    ("human", """User query: {query}
+DEFAULT_OFFLINE_PROMPT = """You are Disaster Clippy, a helpful assistant for DIY and humanitarian resources.
+Your role is to help users find relevant articles and answer questions based on the provided context.
+Be concise, practical, and helpful. Focus on actionable information.
+Only recommend articles that are in the provided context - do not make up articles."""
+
+
+def get_system_prompt(mode: str = "online") -> str:
+    """Get system prompt from config or use default"""
+    try:
+        from admin.local_config import get_local_config
+        config = get_local_config()
+        prompt = config.get_prompt(mode)
+        if prompt:
+            return prompt
+    except Exception as e:
+        print(f"Could not load prompt from config: {e}")
+
+    # Fallback to defaults
+    return DEFAULT_ONLINE_PROMPT if mode == "online" else DEFAULT_OFFLINE_PROMPT
+
+
+def get_chat_prompt(mode: str = "online"):
+    """Build chat prompt template with current system prompt"""
+    return ChatPromptTemplate.from_messages([
+        ("system", get_system_prompt(mode)),
+        MessagesPlaceholder(variable_name="history"),
+        ("human", """User query: {query}
 
 Relevant articles from knowledge base:
 {context}
 
 Based on these search results, help the user find what they need. If the results don't seem relevant, acknowledge that and suggest how they might refine their search.""")
-])
+    ])
 
 # In-memory session storage (for MVP - use Redis/DB in production)
 sessions = {}
@@ -194,6 +241,7 @@ class SimpleQueryRequest(BaseModel):
     """Simple request for external websites - just send a message"""
     message: str
     session_id: Optional[str] = None
+    sources: Optional[List[str]] = None  # List of source IDs to filter by
 
 
 class SimpleQueryResponse(BaseModel):
@@ -223,18 +271,49 @@ async def health_check():
 @app.get("/welcome")
 async def get_welcome():
     """
-    Get a dynamic welcome message based on what's actually in the database.
-    Uses the vector store's stats (works for both local and Pinecone).
+    Get a dynamic welcome message based on indexed content.
+    Uses _master.json for fast cached stats instead of querying ChromaDB.
     """
-    store = get_vector_store()
-    stats = store.get_stats()
+    from admin.local_config import get_local_config
 
-    total_docs = stats.get("total_documents", 0)
-    sources = stats.get("sources", {})
+    # Try to load from _master.json first (fast, cached)
+    local_config = get_local_config()
+    backup_folder = local_config.get_backup_folder()
+
+    total_docs = 0
+    sources = {}
+    topics_set = set()
+    last_updated = None
+
+    if backup_folder:
+        master_file = Path(backup_folder) / "_master.json"
+        if master_file.exists():
+            try:
+                with open(master_file, 'r', encoding='utf-8') as f:
+                    master = json.load(f)
+                total_docs = master.get("total_documents", 0)
+                sources = master.get("sources", {})
+                last_updated = master.get("last_updated")
+
+                # Collect topics from all sources
+                for source_id, source_info in sources.items():
+                    if isinstance(source_info, dict):
+                        source_topics = source_info.get("topics", [])
+                        if source_topics:
+                            topics_set.update(source_topics)
+            except Exception as e:
+                print(f"Warning: Could not load _master.json: {e}")
+
+    # Fall back to ChromaDB if _master.json empty or missing
+    if total_docs == 0:
+        store = get_vector_store()
+        stats = store.get_stats()
+        total_docs = stats.get("total_documents", 0)
+        sources = stats.get("sources", {})
 
     if total_docs == 0:
         return {
-            "message": "Hello! I'm Disaster Clippy. My knowledge base is currently empty - an admin needs to run the sync command to populate it with DIY guides and resources.",
+            "message": "Hello! I'm Disaster Clippy. My knowledge base is currently empty - an admin needs to index some content first.",
             "stats": {
                 "total_documents": 0,
                 "topics": [],
@@ -242,57 +321,46 @@ async def get_welcome():
             }
         }
 
-    # Try to get titles for topic extraction
-    titles = []
-    try:
-        # First try local metadata (fast)
-        if hasattr(store, 'get_existing_titles'):
-            titles = list(store.get_existing_titles())
+    # If no topics from _master.json, extract from source manifests
+    if not topics_set and backup_folder:
+        backup_path = Path(backup_folder)
+        for source_id in sources.keys():
+            manifest_file = backup_path / source_id / get_manifest_file()
+            if manifest_file.exists():
+                try:
+                    with open(manifest_file, 'r', encoding='utf-8') as f:
+                        manifest = json.load(f)
+                    tags = manifest.get("tags", [])
+                    if tags:
+                        topics_set.update(tags)
+                except Exception:
+                    pass
 
-        # If empty, try searching for sample docs from each topic category
-        if not titles and hasattr(store, 'search'):
-            topic_queries = ["solar", "water", "shelter", "food", "sanitation", "emergency"]
-            for query in topic_queries:
-                results = store.search(query, n_results=5)
-                for r in results:
-                    title = r.get("metadata", {}).get("title", "")
-                    if title and title not in titles:
-                        titles.append(title)
-    except Exception:
-        pass
-
-    # Extract topic keywords from titles
-    topic_keywords = set()
-    keyword_mappings = {
-        "hexayurt": "Shelter", "shelter": "Shelter", "housing": "Shelter",
-        "water": "Water", "filter": "Water Filtration",
-        "solar": "Solar Energy", "energy": "Energy", "power": "Power", "biogas": "Biogas",
-        "food": "Food", "cooking": "Cooking", "garden": "Gardening", "compost": "Composting",
-        "sanitation": "Sanitation", "health": "Health", "latrine": "Sanitation",
-        "cooling": "Cooling", "heating": "Heating",
-        "emergency": "Emergency", "disaster": "Disaster Prep",
+    # Map tags to display-friendly topic names
+    topic_display = {
+        "water": "Water", "solar": "Solar Energy", "energy": "Energy",
+        "food": "Food", "cooking": "Cooking", "shelter": "Shelter",
+        "sanitation": "Sanitation", "medical": "Health", "emergency": "Emergency",
+        "agriculture": "Agriculture", "construction": "Construction",
+        "compost": "Composting", "cooling": "Cooling", "heating": "Heating",
     }
 
-    for title in titles:
-        title_lower = title.lower()
-        for keyword, topic in keyword_mappings.items():
-            if keyword in title_lower:
-                topic_keywords.add(topic)
+    topics_list = []
+    for tag in sorted(topics_set):
+        display = topic_display.get(tag.lower(), tag.replace("-", " ").replace("_", " ").title())
+        if display not in topics_list:
+            topics_list.append(display)
+    topics_list = topics_list[:6]  # Limit to 6
 
     # Build dynamic welcome message
-    topics_list = sorted(list(topic_keywords))[:6]
-
     if topics_list:
-        topics_str = ", ".join(topics_list[:-1])
         if len(topics_list) > 1:
-            topics_str += f", and {topics_list[-1]}"
+            topics_str = ", ".join(topics_list[:-1]) + f", and {topics_list[-1]}"
         else:
             topics_str = topics_list[0]
         message = f"Hello! I'm Disaster Clippy. I have {total_docs} guides available covering topics like {topics_str}.\n\nWhat situation do you need help with?"
     else:
         message = f"Hello! I'm Disaster Clippy. I have {total_docs} DIY guides and resources ready to help you.\n\nWhat situation do you need help with?"
-
-    sample_titles = titles[:5] if len(titles) > 5 else titles
 
     return {
         "message": message,
@@ -300,8 +368,7 @@ async def get_welcome():
             "total_documents": total_docs,
             "topics": topics_list,
             "sources": list(sources.keys()),
-            "sample_titles": sample_titles,
-            "last_updated": stats.get("last_updated")
+            "last_updated": last_updated
         }
     }
 
@@ -310,14 +377,19 @@ async def get_welcome():
 async def get_sources():
     """
     Get list of available sources with document counts.
-    Used by frontend to populate source selection checkboxes.
+
+    IMPORTANT: Uses ChromaDB as source of truth (what's actually searchable),
+    with _manifest.json files for display names only.
     """
+    from admin.local_config import get_local_config
+
+    # ChromaDB is the source of truth for searchable sources
     store = get_vector_store()
     stats = store.get_stats()
     sources_counts = stats.get("sources", {})
+    total_docs = stats.get("total_documents", 0)
 
-    # Load source names from _manifest.json files in backup folder
-    from admin.local_config import get_local_config
+    # Load source names from _manifest.json files (for display only)
     local_config = get_local_config()
     backup_folder = local_config.get_backup_folder()
 
@@ -325,17 +397,16 @@ async def get_sources():
     if backup_folder:
         backup_path = Path(backup_folder)
         if backup_path.exists():
-            for source_folder in backup_path.iterdir():
-                if source_folder.is_dir():
-                    source_id = source_folder.name
-                    manifest_file = source_folder / get_manifest_file()
-                    if manifest_file.exists():
-                        try:
-                            with open(manifest_file) as f:
-                                source_data = json.load(f)
-                                source_names[source_id] = source_data.get("name", source_id)
-                        except Exception:
-                            pass
+            for source_id in sources_counts.keys():
+                source_folder = backup_path / source_id
+                manifest_file = source_folder / get_manifest_file()
+                if manifest_file.exists():
+                    try:
+                        with open(manifest_file) as f:
+                            source_data = json.load(f)
+                            source_names[source_id] = source_data.get("name", source_id)
+                    except Exception:
+                        pass
 
     # Build sources dict with names and counts
     sources = {}
@@ -347,7 +418,7 @@ async def get_sources():
 
     return {
         "sources": sources,
-        "total": stats.get("total_documents", 0)
+        "total": total_docs
     }
 
 
@@ -364,159 +435,92 @@ def get_connection_mode() -> str:
 def search_articles(query: str, n_results: int = 10,
                    source_filter: dict = None, mode: str = None) -> list:
     """
-    Search for articles using the appropriate method based on connection mode.
+    Search for articles using the unified AI service.
+
+    Uses the appropriate method based on connection mode:
+    - online_only: Semantic search with embedding API
+    - hybrid: Semantic search with keyword fallback
+    - offline_only: Keyword search only
 
     Args:
         query: Search query
         n_results: Number of results
         source_filter: ChromaDB filter dict
-        mode: Connection mode (online_only, offline_only, hybrid)
+        mode: Connection mode override (optional)
 
     Returns:
         List of matching articles
     """
-    if mode is None:
-        mode = get_connection_mode()
+    # Sync mode if provided
+    if mode:
+        conn = get_connection_manager()
+        conn.set_mode(mode)
+    else:
+        sync_mode_from_config()
 
-    store = get_vector_store()
+    # Use unified AI service
+    ai_service = get_ai_service()
+    result = ai_service.search(query, n_results=n_results, source_filter=source_filter)
 
-    if mode == "offline_only":
-        # Use keyword search - no API calls
-        return store.search_offline(query, n_results=n_results, filter=source_filter)
-
-    elif mode == "hybrid":
-        # Try online first, fall back to offline on error
-        try:
-            return store.search(query, n_results=n_results, filter=source_filter)
-        except Exception as e:
-            print(f"Online search failed, falling back to offline: {e}")
-            return store.search_offline(query, n_results=n_results, filter=source_filter)
-
-    else:  # online_only
-        # Use semantic search with embeddings API
-        return store.search(query, n_results=n_results, filter=source_filter)
+    return result.articles
 
 
 def generate_response(query: str, context: str, history: list, mode: str = None) -> str:
     """
-    Generate a response using the appropriate method based on connection mode.
+    Generate a response using the unified AI service.
+
+    Uses the appropriate method based on connection mode:
+    - online_only: Cloud LLM (OpenAI/Anthropic)
+    - hybrid: Cloud LLM with local fallback
+    - offline_only: Local Ollama or simple response
 
     Args:
         query: User's question
         context: Formatted article context
         history: Conversation history
-        mode: Connection mode
+        mode: Connection mode override (optional)
 
     Returns:
         Response text
     """
-    if mode is None:
-        mode = get_connection_mode()
+    # Sync mode if provided
+    if mode:
+        conn = get_connection_manager()
+        conn.set_mode(mode)
+    else:
+        sync_mode_from_config()
 
-    if mode == "offline_only":
-        # Try Ollama first if enabled, fall back to simple response
-        return generate_offline_response(query, context, history)
+    # Use unified AI service
+    ai_service = get_ai_service()
+    result = ai_service.generate_response(query, context, history)
 
-    elif mode == "hybrid":
-        # Try online LLM first
-        try:
-            chain = chat_prompt | get_llm()
-            response = chain.invoke({
-                "query": query,
-                "context": context,
-                "history": history
-            })
-            return response.content
-        except Exception as e:
-            print(f"LLM call failed, trying offline: {e}")
-            # Fall back to offline (Ollama or simple response)
-            return generate_offline_response(query, context, history)
+    return result.text
 
-    else:  # online_only
-        chain = chat_prompt | get_llm()
-        response = chain.invoke({
-            "query": query,
-            "context": context,
-            "history": history
-        })
-        return response.content
 
+# Legacy functions for backward compatibility
+# These now delegate to the unified AI service
 
 def generate_offline_response(query: str, context: str, history: list) -> str:
     """
     Generate response using local Ollama if available, otherwise simple format.
+    Delegates to unified AI service.
     """
-    # Check if Ollama is enabled
-    try:
-        from admin.local_config import get_local_config
-        config = get_local_config()
-
-        if config.is_ollama_enabled():
-            from admin.ollama_manager import get_ollama_manager
-            ollama = get_ollama_manager()
-
-            # Build system prompt
-            system = """You are Disaster Clippy, a helpful assistant for DIY and humanitarian resources.
-Your role is to help users find relevant articles and answer questions based on the provided context.
-Be concise, practical, and helpful. Focus on actionable information.
-Only recommend articles that are in the provided context - do not make up articles."""
-
-            # Build conversation messages
-            messages = []
-            for msg in history[-10:]:  # Last 5 exchanges
-                if hasattr(msg, 'content'):
-                    role = "user" if msg.__class__.__name__ == "HumanMessage" else "assistant"
-                    messages.append({"role": role, "content": msg.content})
-
-            # Add current query with context
-            user_message = f"""User query: {query}
-
-Relevant articles from knowledge base:
-{context}
-
-Based on these search results, help the user find what they need."""
-            messages.append({"role": "user", "content": user_message})
-
-            # Generate with Ollama
-            response = ollama.chat(messages, system=system)
-            if response:
-                return response
-
-            # Ollama failed, fall through to simple response
-            print("Ollama response failed, using simple format")
-
-    except Exception as e:
-        print(f"Ollama error: {e}")
-
-    # Fall back to simple formatted response
-    return format_offline_response(query, context)
+    ai_service = get_ai_service()
+    result = ai_service.generate_response(
+        query, context, history,
+        force_method=ResponseMethod.LOCAL_LLM
+    )
+    return result.text
 
 
 def format_offline_response(query: str, context: str) -> str:
     """
     Generate a simple response without LLM for offline mode.
-    Returns article summaries directly.
+    Delegates to unified AI service.
     """
-    if "No relevant articles found" in context:
-        return "I couldn't find any matching articles in my offline database. Try different search terms or check that you have source packs installed."
-
-    # Extract article titles and snippets from context
-    lines = context.split("\n")
-    articles = []
-    current_title = None
-
-    for line in lines:
-        if line.startswith("Article #"):
-            current_title = line.split(": ", 1)[-1] if ": " in line else line
-        elif line.startswith("Content Preview:") and current_title:
-            articles.append(current_title)
-            current_title = None
-
-    if articles:
-        article_list = "\n".join(f"- {a}" for a in articles[:5])
-        return f"Based on your search for \"{query}\", I found these relevant articles:\n\n{article_list}\n\nCheck the articles panel for more details and links. (Running in offline mode - install a local LLM for conversational responses)"
-
-    return "I found some articles that might help. Check the articles panel on the right for details. (Running in offline mode)"
+    ai_service = get_ai_service()
+    result = ai_service._generate_simple_response(query, context)
+    return result.text
 
 
 @app.post("/chat", response_model=ChatResponse)
@@ -590,18 +594,21 @@ async def chat(request: ChatRequest):
     session["history"].append(HumanMessage(content=message))
     session["history"].append(AIMessage(content=response_text))
 
-    # Format articles for response
-    formatted_articles = [
-        {
+    # Format articles for response (convert ZIM URLs to local browsable URLs)
+    formatted_articles = []
+    for a in articles:
+        url = a["metadata"].get("url", "")
+        # Convert zim:// URLs to local /zim/ URLs for offline browsing
+        if url.startswith("zim://"):
+            url = _convert_zim_url(url, a["metadata"].get("source", "")) or url
+        formatted_articles.append({
             "title": a["metadata"].get("title", "Unknown"),
-            "url": a["metadata"].get("url", ""),
+            "url": url,
             "source": a["metadata"].get("source", "unknown"),
             "doc_type": a.get("doc_type", "article"),
             "score": round(a.get("original_score", a["score"]), 3),
             "snippet": a["content"][:300] + "..." if len(a["content"]) > 300 else a["content"]
-        }
-        for a in articles
-    ]
+        })
 
     return ChatResponse(
         response=response_text,
@@ -621,6 +628,7 @@ async def simple_chat(request: SimpleQueryRequest):
 
     Just send a message, get a response. No articles sidebar, no complex data.
     Perfect for embedding a simple chat widget on other sites.
+    Uses unified AI service for consistent behavior.
 
     Example:
         POST /api/v1/chat
@@ -638,6 +646,9 @@ async def simple_chat(request: SimpleQueryRequest):
             session_id=session_id
         )
 
+    # Sync connection mode from config
+    sync_mode_from_config()
+
     # Get or create session
     if session_id not in sessions:
         sessions[session_id] = {
@@ -647,13 +658,26 @@ async def simple_chat(request: SimpleQueryRequest):
 
     session = sessions[session_id]
 
-    # Detect doc type preference and search
+    # Detect doc type preference and search using unified service
     preferred_doc_type = detect_doc_type_preference(message)
+
+    # Build source filter
+    source_filter = None
+    if request.sources is not None:
+        if len(request.sources) == 0:
+            articles = []
+        else:
+            source_filter = {"source": {"$in": request.sources}}
 
     if any(phrase in message.lower() for phrase in ["more like", "similar to", "like #", "like number"]):
         articles = handle_similarity_query(message, session["last_results"])
+        # Post-filter for similarity queries
+        if request.sources is not None and len(request.sources) > 0:
+            articles = [a for a in articles if a.get("metadata", {}).get("source") in request.sources]
+    elif request.sources is not None and len(request.sources) == 0:
+        articles = []  # No sources selected
     else:
-        articles = get_vector_store().search(message, n_results=10)
+        articles = search_articles(message, n_results=10, source_filter=source_filter)
 
     # Prioritize and limit results
     articles = prioritize_results_by_doc_type(articles, preferred_doc_type)
@@ -666,23 +690,156 @@ async def simple_chat(request: SimpleQueryRequest):
     # Build conversation history
     history = session["history"][-20:]
 
-    # Generate response
-    chain = chat_prompt | get_llm()
-
-    response = chain.invoke({
-        "query": message,
-        "context": context,
-        "history": history
-    })
+    # Generate response using unified service
+    response_text = generate_response(message, context, history)
 
     # Update history
     session["history"].append(HumanMessage(content=message))
-    session["history"].append(AIMessage(content=response.content))
+    session["history"].append(AIMessage(content=response_text))
 
     return SimpleQueryResponse(
-        response=response.content,
+        response=response_text,
         session_id=session_id
     )
+
+
+@app.post("/api/v1/chat/stream")
+async def stream_chat(request: SimpleQueryRequest):
+    """
+    Streaming chat API - returns Server-Sent Events (SSE) for real-time response.
+
+    Use this endpoint for a "typing" effect where tokens appear as they're generated.
+    Connect using EventSource in JavaScript.
+
+    Example JavaScript:
+        const eventSource = new EventSource('/api/v1/chat/stream?message=...');
+        eventSource.onmessage = (e) => {
+            if (e.data === '[DONE]') {
+                eventSource.close();
+            } else {
+                appendToChat(e.data);
+            }
+        };
+    """
+    session_id = request.session_id or datetime.utcnow().isoformat()
+    message = request.message.strip()
+
+    if not message:
+        async def empty_response():
+            yield "data: Please enter a question.\n\n"
+            yield "data: [DONE]\n\n"
+        return StreamingResponse(empty_response(), media_type="text/event-stream")
+
+    # Sync connection mode from config
+    sync_mode_from_config()
+
+    # Get or create session
+    if session_id not in sessions:
+        sessions[session_id] = {
+            "history": [],
+            "last_results": []
+        }
+
+    session = sessions[session_id]
+
+    # Search for articles with source filter
+    preferred_doc_type = detect_doc_type_preference(message)
+
+    # Build source filter
+    source_filter = None
+    if request.sources is not None:
+        if len(request.sources) == 0:
+            # Empty list = no sources selected
+            articles = []
+        else:
+            source_filter = {"source": {"$in": request.sources}}
+
+    if any(phrase in message.lower() for phrase in ["more like", "similar to", "like #", "like number"]):
+        articles = handle_similarity_query(message, session["last_results"])
+        # Post-filter for similarity queries
+        if request.sources is not None and len(request.sources) > 0:
+            articles = [a for a in articles if a.get("metadata", {}).get("source") in request.sources]
+    elif request.sources is not None and len(request.sources) == 0:
+        articles = []  # No sources selected
+    else:
+        articles = search_articles(message, n_results=10, source_filter=source_filter)
+
+    articles = prioritize_results_by_doc_type(articles, preferred_doc_type)
+    articles = articles[:5]
+    session["last_results"] = articles
+
+    context = format_articles_for_context(articles)
+    history = session["history"][-20:]
+
+    # Get AI service for streaming
+    ai_service = get_ai_service()
+
+    async def generate():
+        # Send articles first as JSON (prefixed with [ARTICLES])
+        # Convert ZIM URLs to local browsable URLs
+        def get_browsable_url(a):
+            url = a.get("metadata", {}).get("url", "")
+            if url.startswith("zim://"):
+                return _convert_zim_url(url, a.get("metadata", {}).get("source", "")) or url
+            return url
+
+        articles_json = json.dumps([{
+            "title": a.get("metadata", {}).get("title", "Unknown"),
+            "url": get_browsable_url(a),
+            "source": a.get("metadata", {}).get("source", "unknown"),
+            "snippet": a.get("content", "")[:200] + "..." if a.get("content", "") else "",
+            "score": a.get("score", 0)
+        } for a in articles])
+        yield f"data: [ARTICLES]{articles_json}\n\n"
+
+        full_response = []
+        try:
+            for chunk in ai_service.generate_response_stream(message, context, history):
+                full_response.append(chunk)
+                # Escape any newlines in the chunk for SSE format
+                safe_chunk = chunk.replace("\n", "\\n")
+                yield f"data: {safe_chunk}\n\n"
+
+            # Signal completion
+            yield "data: [DONE]\n\n"
+
+            # Update history with full response
+            response_text = "".join(full_response)
+            session["history"].append(HumanMessage(content=message))
+            session["history"].append(AIMessage(content=response_text))
+
+        except Exception as e:
+            yield f"data: [ERROR]{str(e)}\n\n"
+            yield "data: [DONE]\n\n"
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+@app.get("/api/v1/connection-status")
+async def get_connection_status():
+    """
+    Get current connection status for frontend display.
+
+    Returns:
+        - mode: User's selected mode (online_only, hybrid, offline_only)
+        - is_online: Whether we're currently connected
+        - effective_mode: What mode is actually being used
+    """
+    conn = get_connection_manager()
+    sync_mode_from_config()
+    return conn.get_status()
+
+
+@app.post("/api/v1/ping")
+async def ping_connectivity():
+    """
+    Trigger a connectivity check and return status.
+    Called by frontend to verify connection.
+    """
+    conn = get_connection_manager()
+    sync_mode_from_config()
+    conn.perform_scheduled_ping()
+    return conn.get_status()
 
 
 @app.get("/api/v1/embed")
@@ -1206,16 +1363,20 @@ def _get_source_base_url(source_id: str) -> Optional[str]:
     return None
 
 
-def _convert_zim_url(zim_url: str, source_id: str) -> Optional[str]:
+def _convert_zim_url(zim_url: str, source_id: str, prefer_offline: bool = True) -> Optional[str]:
     """
-    Convert a zim:// URL to a real web URL.
+    Convert a zim:// URL to a browsable URL.
+
+    In offline/hybrid mode (default): Returns local ZIM server URL for offline browsing
+    In online mode with prefer_offline=False: Returns original web URL if base_url is known
 
     Args:
         zim_url: URL in format zim://{source_id}/{article_path}
         source_id: The source identifier
+        prefer_offline: If True, always return local ZIM server URL (default)
 
     Returns:
-        Real URL or None if can't convert
+        Local /zim/ URL for offline browsing, or web URL, or None if can't convert
     """
     if not zim_url.startswith('zim://'):
         return zim_url
@@ -1229,18 +1390,21 @@ def _convert_zim_url(zim_url: str, source_id: str) -> Optional[str]:
     zim_source = parts[0]
     article_path = parts[1]
 
-    # Get base URL for this source
+    # Always return local ZIM server URL for offline browsing
+    # This enables seamless offline experience
+    if prefer_offline:
+        return f"/zim/{zim_source}/{article_path}"
+
+    # Online fallback: try to get original web URL
     base_url = _get_source_base_url(zim_source) or _get_source_base_url(source_id)
-    if not base_url:
-        return None
+    if base_url:
+        if not base_url.endswith('/'):
+            base_url += '/'
+        article_path = article_path.lstrip('/')
+        return base_url + article_path
 
-    # Combine base URL with article path
-    # Make sure base_url ends with / and article_path doesn't start with /
-    if not base_url.endswith('/'):
-        base_url += '/'
-    article_path = article_path.lstrip('/')
-
-    return base_url + article_path
+    # Fall back to local ZIM server
+    return f"/zim/{zim_source}/{article_path}"
 
 
 def prioritize_results_by_doc_type(articles: List[dict],

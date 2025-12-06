@@ -76,6 +76,32 @@ Test indexing from an existing ZIM file.
 
 ---
 
+## Test 2b: ZIM Language Filtering
+
+Test language filtering for multi-language ZIM files.
+
+- [ ] Use a multi-language ZIM (e.g., Appropedia with articles like "Solar cooker (Chinese)")
+- [ ] Go to Source Tools Step 3 (Create Index)
+- [ ] Select "English" from the Language Filter dropdown
+- [ ] Check "Force Re-index" checkbox
+- [ ] Click "Create Index"
+- [ ] Watch console for debug output:
+  - `[delete_source]` should show documents being deleted
+  - `[lang_filter] EXCLUDED:` should show non-English articles filtered
+- [ ] After indexing, test chat search
+- [ ] Verify only English articles appear (no Chinese, Spanish, etc.)
+- [ ] Check `_metadata.json` document count is less than full ZIM
+
+**Debug Output to Look For:**
+```
+[ZIMIndexer] Force reindex requested - clearing existing documents for 'source_id'
+[delete_source] Current sources in DB: ['source_id']
+[delete_source] Found 150 documents to delete
+[lang_filter] EXCLUDED: 'Solar cooker (Chinese)' detected=zh, filter=en
+```
+
+---
+
 ## Test 3: PDF Collection
 
 Test the PDF collection workflow.
@@ -225,6 +251,61 @@ For any created source, verify file contents match schema:
   "total_pages": 0
 }
 ```
+
+---
+
+## Test 7: Source Filtering in Chat
+
+Test filtering search results by source.
+
+- [ ] Go to main chat interface
+- [ ] Click "Select Sources" dropdown
+- [ ] Verify all indexed sources are listed with document counts
+- [ ] Uncheck all sources except one
+- [ ] Search for content that exists in multiple sources
+- [ ] Verify only results from the selected source appear
+- [ ] Click "Select None"
+- [ ] Verify search returns no results
+- [ ] Click "Select All"
+- [ ] Verify all sources are searched again
+- [ ] Refresh page
+- [ ] Verify source selection is preserved (localStorage)
+
+---
+
+## Test 8: Chat Link Behavior
+
+Test that links open in new tabs.
+
+- [ ] Search for content that has ZIM source articles
+- [ ] Click on an article link in the sidebar
+- [ ] Verify link opens in new tab (not same window)
+- [ ] Verify chat history is preserved in original tab
+- [ ] If AI response contains markdown links, verify they also open in new tabs
+- [ ] External URLs should have `target="_blank"` and `rel="noopener noreferrer"`
+
+---
+
+## Test 9: Tag Suggestions
+
+Test automatic tag suggestions after indexing.
+
+- [ ] Index a source with diverse content
+- [ ] Go to Source Tools Step 4 (Edit Tags)
+- [ ] Click "Get Suggestions"
+- [ ] Watch console for debug output:
+  - `[suggest_tags] Looking for metadata in: path`
+  - `[suggest_tags] Found metadata file: path`
+  - `[suggest_tags] Metadata has N documents`
+  - `[suggest_tags] Sample titles: [...]`
+- [ ] Verify suggested tags appear based on content
+- [ ] Click "Apply Suggested Tags"
+- [ ] Verify tags are added to the input field
+
+**If "needs indexing first" appears:**
+- Check console for `[suggest_tags] Metadata file not found`
+- Verify `_metadata.json` exists in source folder
+- Verify it has a non-empty `documents` object
 
 ---
 

@@ -154,10 +154,26 @@ class JobManager:
 
         try:
             # Create a progress callback for the function to use
-            def update_progress(progress: int, message: str = None):
-                job.progress = min(100, max(0, progress))
-                if message:
-                    job.message = message
+            # Supports both formats:
+            #   (current, total, message) - used by indexers
+            #   (progress_percent, message) - simple percentage
+            def update_progress(*args):
+                if len(args) >= 3:
+                    # Format: (current, total, message)
+                    current, total, message = args[0], args[1], args[2]
+                    if total > 0:
+                        job.progress = min(100, max(0, int((current / total) * 100)))
+                    if message:
+                        job.message = str(message)
+                elif len(args) >= 2:
+                    # Format: (progress_percent, message)
+                    progress, message = args[0], args[1]
+                    job.progress = min(100, max(0, int(progress)))
+                    if message:
+                        job.message = str(message)
+                elif len(args) == 1:
+                    # Just progress percentage
+                    job.progress = min(100, max(0, int(args[0])))
 
             # Add progress callback to kwargs if function accepts it
             kwargs['progress_callback'] = update_progress
@@ -165,10 +181,17 @@ class JobManager:
             # Run the function
             result = func(*args, **kwargs)
 
-            job.status = JobStatus.COMPLETED
-            job.progress = 100
-            job.result = result if isinstance(result, dict) else {"result": result}
-            job.message = "Completed successfully"
+            # Check if result indicates failure (some functions return success: False)
+            if isinstance(result, dict) and result.get("success") is False:
+                job.status = JobStatus.FAILED
+                job.error = result.get("error", "Operation failed")
+                job.message = f"Failed: {result.get('error', 'Unknown error')}"
+                job.result = result
+            else:
+                job.status = JobStatus.COMPLETED
+                job.progress = 100
+                job.result = result if isinstance(result, dict) else {"result": result}
+                job.message = "Completed successfully"
 
         except Exception as e:
             job.status = JobStatus.FAILED

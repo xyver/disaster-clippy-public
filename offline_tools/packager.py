@@ -561,12 +561,24 @@ def update_master_metadata(source_id: str, metadata: Dict[str, Any]) -> None:
     else:
         master = {"version": 2, "sources": {}}
 
+    # Get tags from manifest if available
+    source_dir = backup_dir / source_id
+    tags = []
+    manifest_path = source_dir / get_manifest_file()
+    if manifest_path.exists():
+        try:
+            with open(manifest_path, 'r', encoding='utf-8') as f:
+                manifest_data = json.load(f)
+            tags = manifest_data.get("tags", [])
+        except Exception:
+            pass
+
     master["sources"][source_id] = {
         "count": metadata.get("total_documents", metadata.get("document_count", 0)),
         "chars": metadata.get("total_chars", 0),
         "last_sync": datetime.now().isoformat(),
         "file": f"{source_id}.json",
-        "topics": []
+        "topics": tags
     }
 
     # Recalculate totals (use .get() for backwards compatibility with old entries)
@@ -576,6 +588,180 @@ def update_master_metadata(source_id: str, metadata: Dict[str, Any]) -> None:
 
     with open(master_file, 'w', encoding='utf-8') as f:
         json.dump(master, f, indent=2)
+
+
+def sync_master_metadata() -> Dict[str, Any]:
+    """
+    Sync _master.json by scanning the backup folder.
+
+    This rebuilds the master index based on what's actually on disk:
+    - Adds new sources that exist but aren't in master
+    - Removes sources that are in master but no longer exist
+    - Updates counts and tags from source files
+
+    Call this:
+    - On app startup
+    - After source creation/deletion
+    - After indexing completes
+    - When tags are updated
+
+    Returns:
+        Dict with sync results (added, removed, updated counts)
+    """
+    backup_dir = get_backup_path()
+    if not backup_dir.exists():
+        return {"added": 0, "removed": 0, "updated": 0, "total": 0}
+
+    master_file = backup_dir / "_master.json"
+
+    # Load existing master or create new
+    if master_file.exists():
+        try:
+            with open(master_file, 'r', encoding='utf-8') as f:
+                master = json.load(f)
+        except Exception:
+            master = {"version": 2, "sources": {}}
+    else:
+        master = {"version": 2, "sources": {}}
+
+    old_sources = set(master.get("sources", {}).keys())
+    new_sources = {}
+
+    added = 0
+    removed = 0
+    updated = 0
+
+    # Scan all directories in backup folder
+    for item in backup_dir.iterdir():
+        if not item.is_dir():
+            continue
+        if item.name.startswith("_") or item.name.startswith("."):
+            continue  # Skip special dirs like _master.json folder (if any)
+
+        source_id = item.name
+        source_dir = item
+
+        # Check if this is a valid source (has manifest or metadata)
+        manifest_path = source_dir / get_manifest_file()
+        metadata_path = source_dir / get_metadata_file()
+        vectors_path = source_dir / get_vectors_file()
+
+        # Must have at least a manifest to be considered a source
+        if not manifest_path.exists():
+            # Check for legacy files or ZIM file as fallback
+            zim_files = list(source_dir.glob("*.zim"))
+            if not zim_files and not metadata_path.exists():
+                continue  # Not a valid source
+
+        # Get document count
+        doc_count = 0
+        total_chars = 0
+
+        if metadata_path.exists():
+            try:
+                with open(metadata_path, 'r', encoding='utf-8') as f:
+                    meta = json.load(f)
+                doc_count = meta.get("document_count", len(meta.get("documents", {})))
+                total_chars = meta.get("total_chars", 0)
+            except Exception:
+                pass
+
+        # Fallback: check vectors file for count
+        if doc_count == 0 and vectors_path.exists():
+            try:
+                with open(vectors_path, 'r', encoding='utf-8') as f:
+                    vec = json.load(f)
+                doc_count = vec.get("document_count", len(vec.get("vectors", {})))
+            except Exception:
+                pass
+
+        # Get tags from manifest
+        tags = []
+        if manifest_path.exists():
+            try:
+                with open(manifest_path, 'r', encoding='utf-8') as f:
+                    manifest_data = json.load(f)
+                tags = manifest_data.get("tags", [])
+            except Exception:
+                pass
+
+        # Build source entry
+        existing = master.get("sources", {}).get(source_id, {})
+        new_sources[source_id] = {
+            "count": doc_count,
+            "chars": total_chars,
+            "last_sync": datetime.now().isoformat(),
+            "file": f"{source_id}.json",
+            "topics": tags
+        }
+
+        # Track changes
+        if source_id not in old_sources:
+            added += 1
+        elif (existing.get("count", 0) != doc_count or
+              existing.get("topics", []) != tags):
+            updated += 1
+
+    # Count removed sources
+    current_sources = set(new_sources.keys())
+    removed = len(old_sources - current_sources)
+
+    # Build new master
+    master["version"] = 2
+    master["sources"] = new_sources
+    master["total_documents"] = sum(s.get("count", 0) for s in new_sources.values())
+    master["total_chars"] = sum(s.get("chars", 0) for s in new_sources.values())
+    master["last_updated"] = datetime.now().isoformat()
+
+    # Save
+    with open(master_file, 'w', encoding='utf-8') as f:
+        json.dump(master, f, indent=2)
+
+    return {
+        "added": added,
+        "removed": removed,
+        "updated": updated,
+        "total": len(new_sources),
+        "total_documents": master["total_documents"]
+    }
+
+
+def remove_from_master(source_id: str) -> bool:
+    """
+    Remove a source from _master.json.
+
+    Call this when deleting a source.
+
+    Returns:
+        True if source was removed, False if not found
+    """
+    backup_dir = get_backup_path()
+    master_file = backup_dir / "_master.json"
+
+    if not master_file.exists():
+        return False
+
+    try:
+        with open(master_file, 'r', encoding='utf-8') as f:
+            master = json.load(f)
+
+        if source_id not in master.get("sources", {}):
+            return False
+
+        del master["sources"][source_id]
+
+        # Recalculate totals
+        master["total_documents"] = sum(s.get("count", 0) for s in master["sources"].values())
+        master["total_chars"] = sum(s.get("chars", 0) for s in master["sources"].values())
+        master["last_updated"] = datetime.now().isoformat()
+
+        with open(master_file, 'w', encoding='utf-8') as f:
+            json.dump(master, f, indent=2)
+
+        return True
+    except Exception as e:
+        print(f"Error removing {source_id} from master: {e}")
+        return False
 
 
 def load_metadata(source_id: str) -> Optional[Dict[str, Any]]:

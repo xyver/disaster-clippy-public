@@ -20,16 +20,20 @@ disaster-clippy/
 |   |-- local.py              # Local admin CLI (metadata, indexing, export)
 |   |-- ingest.py             # Scraping and ingestion CLI
 |   |-- sync.py               # Vector DB sync CLI
+|   |-- zim_inspect.py        # ZIM file diagnostic tool
 |
 |-- admin/                    # Admin panel (/useradmin/)
 |   |-- app.py                # FastAPI routes + page routes
 |   |-- local_config.py       # User settings management
+|   |-- ai_service.py         # Unified AI search/response service
+|   |-- connection_manager.py # Smart connectivity detection
 |   |-- job_manager.py        # Background job queue
 |   |-- ollama_manager.py     # Portable Ollama management
 |   |-- cloud_upload.py       # R2 upload endpoints
+|   |-- zim_server.py         # ZIM content server for offline browsing
 |   |-- routes/               # API route modules
 |   |   |-- sources.py        # Source listing API
-|   |   |-- source_tools.py   # Source management API
+|   |   |-- source_tools.py   # Source management API (includes ZIM tools)
 |   |   |-- packs.py          # Pack management API
 |   |   |-- jobs.py           # Job status API
 |   |-- templates/            # Admin UI templates
@@ -40,6 +44,7 @@ disaster-clippy/
 |   |-- schemas.py            # Data structures
 |   |-- embeddings.py         # Embedding service
 |   |-- indexer.py            # HTML/ZIM/PDF indexing
+|   |-- zim_utils.py          # ZIM inspection and metadata utilities
 |   |-- source_manager.py     # Source CRUD operations
 |   |-- packager.py           # Pack tools and metadata
 |   |-- registry.py           # Source pack registry
@@ -145,13 +150,154 @@ Open your browser:
 
 | Module | Purpose |
 |--------|---------|
+| `admin/ai_service.py` | Unified AI search and response service |
+| `admin/connection_manager.py` | Smart connectivity detection and mode switching |
+| `admin/zim_server.py` | ZIM content server for offline browsing |
 | `offline_tools/source_manager.py` | Unified source creation interface |
 | `offline_tools/packager.py` | Metadata and index generation |
 | `offline_tools/indexer.py` | Indexers for HTML, ZIM, PDF |
+| `offline_tools/zim_utils.py` | ZIM inspection and metadata utilities |
 | `offline_tools/backup/` | HTML and Substack backup tools |
 | `offline_tools/scraper/` | Web scrapers (MediaWiki, Fandom, static sites) |
 | `offline_tools/vectordb/` | Vector store implementations |
 | `offline_tools/cloud/r2.py` | Cloudflare R2 client |
+
+---
+
+## AI Service Architecture
+
+The AI service (`admin/ai_service.py`) provides a unified interface for search and response generation across all connection modes.
+
+### Connection Modes
+
+| Mode | Search | Response | Pinging |
+|------|--------|----------|---------|
+| `online_only` | Semantic (embedding API) | Cloud LLM | Yes (warn on disconnect) |
+| `hybrid` | Semantic with keyword fallback | Cloud LLM with Ollama fallback | Yes (detect recovery) |
+| `offline_only` | Keyword only | Ollama or simple response | No |
+
+### Using the AI Service
+
+```python
+from admin.ai_service import get_ai_service
+
+# Get the singleton service
+ai = get_ai_service()
+
+# Search (automatically uses correct method based on mode)
+result = ai.search("how to filter water", n_results=10)
+print(f"Found {len(result.articles)} articles via {result.method}")
+
+# Generate response
+response = ai.generate_response(query, context, history)
+print(f"Response via {response.method}: {response.text}")
+
+# Streaming response
+for chunk in ai.generate_response_stream(query, context, history):
+    print(chunk, end="", flush=True)
+```
+
+### Connection Manager
+
+The connection manager (`admin/connection_manager.py`) handles smart connectivity detection:
+
+```python
+from admin.connection_manager import get_connection_manager
+
+conn = get_connection_manager()
+
+# Check if online
+if conn.should_try_online():
+    # Try online API
+
+# Report success/failure
+conn.on_api_success()  # Resets ping timer
+conn.on_api_failure()  # Triggers immediate ping check
+
+# Get status for frontend
+status = conn.get_status()
+# Returns: {mode, is_online, temporarily_offline, effective_mode, ...}
+```
+
+### API Endpoints
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/api/v1/chat` | POST | Standard chat (waits for full response) |
+| `/api/v1/chat/stream` | POST | Streaming chat (SSE) |
+| `/api/v1/connection-status` | GET | Get current connection status |
+| `/api/v1/ping` | POST | Trigger connectivity check |
+| `/sources` | GET | List available sources with document counts |
+| `/welcome` | GET | Get welcome message and stats |
+
+### Source Filtering in Chat
+
+Users can filter search results by source using the "Select Sources" dropdown in the chat interface:
+
+- **Select All**: Search all indexed sources (default)
+- **Select None**: Disable search (useful for testing)
+- **Individual sources**: Check/uncheck specific sources to include
+
+The selection is persisted to localStorage (`clippy_selected_sources`) so it survives page refreshes.
+
+**API Usage:**
+```javascript
+// Filter to specific sources
+fetch('/api/v1/chat/stream', {
+    method: 'POST',
+    body: JSON.stringify({
+        message: "how to filter water",
+        sources: ["appropedia", "wikihow"]  // Only search these sources
+    })
+});
+```
+
+### Chat Link Behavior
+
+Links in chat responses and the articles sidebar open in new tabs to preserve chat history:
+
+- **ZIM article links**: Open in new tab with `target="_blank"`
+- **External URLs**: Open in new tab with `rel="noopener noreferrer"`
+- **Markdown links**: Parsed and converted to clickable links that open in new tabs
+
+This prevents users from losing their conversation when clicking to read an article.
+
+### Connection Status Display
+
+The `/api/v1/connection-status` endpoint returns unified status data used by all UI pages:
+
+```json
+{
+  "mode": "hybrid",
+  "state": "online",
+  "state_label": "Online",
+  "state_color": "green",
+  "state_icon": "check",
+  "message": "Connected to cloud services",
+  "is_online": true,
+  "temporarily_offline": false,
+  "effective_mode": "hybrid_online"
+}
+```
+
+**Connection States:**
+
+| State | Color | Description |
+|-------|-------|-------------|
+| `online` | green | Securely connected, recent successful API call |
+| `checking` | blue | Currently verifying connection |
+| `unstable` | yellow | Hybrid mode with intermittent issues |
+| `disconnected` | red | Online mode but connection lost |
+| `offline` | gray | User intentionally in offline mode |
+| `recovering` | blue | Was offline, now detecting recovery |
+
+**UI Implementations:**
+
+- **Dashboard** (`admin/templates/dashboard.html`): Shows "Connection State" card with label, color, and message
+- **Settings** (`admin/templates/settings.html`): Status bar with colored dot and state text
+- **Chat** (`templates/index.html` + `static/chat.js`): Header indicator with colored dot, auto-refreshes every 30 seconds
+
+All three pages fetch from the same `/api/v1/connection-status` endpoint for consistency.
 
 ---
 
@@ -227,6 +373,99 @@ When indexing ZIM files, metadata is automatically extracted from the ZIM header
 | Date | zim_date | Creation date |
 
 User-edited values in `_manifest.json` are preserved on re-index.
+
+### Language Filtering for Multi-Language ZIMs
+
+Multi-language ZIM files (like Appropedia) contain articles in many languages. Use the language filter during indexing to index only articles in your preferred language:
+
+**In Source Tools (Step 3):**
+- Select a language from the "Language Filter" dropdown
+- Only articles detected as that language will be indexed
+- Use "Force Re-index" to clear existing documents and re-index with the new filter
+
+**Supported Languages (30+):**
+- Common: English, Spanish, French, German, Portuguese, Italian, Russian, Chinese, Japanese, Korean, Arabic, Hindi
+- Additional: Vietnamese, Thai, Indonesian, Malay, Tagalog, Swahili, Haitian Creole, Bengali, Nepali, Urdu, Persian, Turkish, Polish, Dutch, Ukrainian, Romanian, Greek, Hebrew, Amharic, Sinhala, Tamil, Telugu, Burmese, Khmer, Lao
+
+**Detection Methods:**
+- URL path segments (e.g., `/en/`, `/es/`, `/french/`)
+- Title suffixes (e.g., `(Spanish)`, `(Chinese)`, `(Haitian Creole)`)
+- Language keywords after separators (e.g., `Solar cooker - Vietnamese`)
+
+Note: Articles with no detectable language marker are included by default (they may be in the target language without explicit marking).
+
+### ZIM Offline Browsing
+
+The ZIM server (`admin/zim_server.py`) enables seamless offline browsing of ZIM archive content. When users click on a search result from a ZIM source, they browse the archived content locally.
+
+**Routes:**
+
+| Endpoint | Purpose |
+|----------|---------|
+| `/zim/{source_id}/{path}` | Serve article content from ZIM |
+| `/zim/{source_id}` | Serve ZIM main page or index |
+| `/zim/api/sources` | List all available ZIM sources |
+
+**Features:**
+
+- **URL Index Caching**: Builds an in-memory index on first access for O(1) article lookups
+- **Internal Link Rewriting**: Converts relative and absolute links to `/zim/` URLs
+- **Dead Site Handling**: Rewrites absolute URLs matching `base_url` to local ZIM URLs
+- **Navigation Button**: Minimal floating "Back to Search" button in bottom-right corner
+- **MIME Type Detection**: Serves HTML, images, CSS, and other content with correct types
+
+**Link Rewriting Examples:**
+
+```
+href="/wiki/Page"              -> href="/zim/{source_id}/wiki/Page"
+href="../Page"                 -> href="/zim/{source_id}/Page"
+src="/images/foo.png"          -> src="/zim/{source_id}/images/foo.png"
+href="https://deadsite.com/p"  -> href="/zim/{source_id}/p" (if base_url matches)
+```
+
+**Dead Site Handling:**
+
+When a ZIM is a backup of a site that no longer exists, the server rewrites absolute URLs that match the `base_url` in the source's `_manifest.json`. This handles variations:
+- http vs https
+- www vs non-www
+
+**KNOWN ISSUE - Dead Site Detection:**
+
+Dead site detection is NOT automatic. The system relies on `base_url` being set in the source's `_manifest.json`. There is currently no intelligent detection of whether a site is dead.
+
+Future enhancement options:
+- Add `prefer_local` toggle in source config to force local URLs
+- Automatic dead site detection via HTTP checks
+- User prompt when external links fail
+
+### ZIM Inspection Tools
+
+ZIM files vary in content type (websites, videos, PDFs) and text density. Use the inspection tools before indexing:
+
+**CLI Tool:**
+```bash
+python cli/zim_inspect.py /path/to/file.zim
+python cli/zim_inspect.py /path/to/file.zim --scan-limit 10000 --min-text 30 -v
+python cli/zim_inspect.py /path/to/file.zim --json
+```
+
+**Admin API Endpoints (`/useradmin/api/zim/...`):**
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/zim/list` | GET | Find all ZIM files in backup folder |
+| `/zim/inspect` | POST | Run full diagnostic analysis |
+| `/zim/metadata/{source_id}` | GET | Quick metadata extraction |
+| `/zim/index` | POST | Index ZIM to ChromaDB |
+
+**Inspection Output:**
+
+- Header metadata (title, description, creator, license, etc.)
+- Content type detection (website, video, pdf, mixed)
+- Mimetype and namespace distribution
+- Text length analysis (indexable vs skipped articles)
+- Sample articles with text previews
+- Recommendations for indexing parameters
 
 ### Tag System
 
@@ -329,6 +568,10 @@ python cli/ingest.py scrape mediawiki --url https://wiki.example.org --limit 100
 
 # Sync to Pinecone (global admin only)
 python cli/sync.py push --source-id mysite
+
+# Inspect a ZIM file before indexing
+python cli/zim_inspect.py /path/to/file.zim
+python cli/zim_inspect.py /path/to/file.zim --scan-limit 10000 -v --json
 ```
 
 Run `python cli/local.py --help` for full usage.
@@ -394,6 +637,8 @@ python cli/ingest.py scrape mediawiki --url https://wiki.example.org --output ./
 | Index local backups | `python cli/local.py index-html ...` |
 | Scrape content | `python cli/ingest.py scrape ...` |
 | Sync to Pinecone | `python cli/sync.py push` |
+| Inspect ZIM file | `python cli/zim_inspect.py /path/to/file.zim` |
+| Browse ZIM content | localhost:8000/zim/{source_id}/ |
 
 ---
 

@@ -108,6 +108,51 @@ Expanded topic keywords for better automatic tag suggestions.
 
 ---
 
+### Language Filtering for Multi-Language ZIMs
+
+Filter articles by language during ZIM indexing.
+
+**Status:** COMPLETED (Dec 2025)
+
+**Implemented:**
+- Language filter dropdown in Source Tools Step 3 (Create Index)
+- 30+ languages supported including: English, Spanish, French, German, Portuguese, Italian, Russian, Chinese, Japanese, Korean, Arabic, Hindi, Vietnamese, Thai, Indonesian, Malay, Tagalog, Swahili, Haitian Creole, Bengali, Nepali, Urdu, Persian, Turkish, Polish, Dutch, Ukrainian, Romanian, Greek, Hebrew, Amharic, Sinhala, Tamil, Telugu, Burmese, Khmer, Lao
+- Detection via URL patterns (/en/, /es/), title suffixes ((Spanish), (Chinese)), and separators (Title - Vietnamese)
+- Force reindex clears existing ChromaDB documents before re-indexing with new filter
+- Debug logging added for troubleshooting filter and delete issues
+
+---
+
+### Source Filtering in Chat
+
+Allow users to filter search by specific sources.
+
+**Status:** COMPLETED (Dec 2025)
+
+**Implemented:**
+- "Select Sources" dropdown in chat interface header
+- Checkboxes for each indexed source with document counts
+- "Select All" and "Select None" quick actions
+- Selection persisted to localStorage (`clippy_selected_sources`)
+- API support via `sources` parameter in chat requests
+- ChromaDB filter using `{"source": {"$in": [...]}}`
+
+---
+
+### Chat UX Improvements
+
+Better user experience for chat interactions.
+
+**Status:** COMPLETED (Dec 2025)
+
+**Implemented:**
+- Links in chat responses and article sidebar now open in new tabs (preserves chat history)
+- ZIM article links: `target="_blank"` with zim-link class
+- External URLs: `target="_blank"` with `rel="noopener noreferrer"`
+- Markdown link parsing for AI responses
+
+---
+
 ### Pipeline Testing
 
 Validate the 5-step wizard and file creation tools work correctly.
@@ -346,6 +391,61 @@ Provide AI capabilities without internet.
 - Standard (700 MB): + cached AI answers
 - Full (3 GB): + local LLM model
 - Power User (5 GB): + larger model, dev tools
+
+---
+
+### Unified AI Pipeline (IMPLEMENTED Dec 2025)
+
+Unified search and response generation across online/offline modes.
+
+**Status:** IMPLEMENTED
+
+**Architecture:**
+- `admin/ai_service.py` - Unified AIService class
+- `admin/connection_manager.py` - Smart connectivity detection
+- Streaming support via SSE endpoints
+
+**Search Pipeline:**
+
+| Mode | Method | Fallback |
+|------|--------|----------|
+| Online | Semantic (embedding API) | Error |
+| Hybrid | Semantic | Keyword search |
+| Offline | Keyword search | N/A |
+
+**Response Pipeline:**
+
+| Mode | Method | Fallback |
+|------|--------|----------|
+| Online | Cloud LLM (OpenAI/Claude) | Error with message |
+| Hybrid | Cloud LLM | Local Ollama | Simple response |
+| Offline | Local Ollama | Simple response |
+
+**Smart Ping Logic:**
+- 5-minute ping interval (configurable)
+- Reset timer on successful API call
+- Immediate ping on API failure
+- No pinging in offline_only mode (user chose offline)
+- Ping on page focus after being away
+
+**Mode Behaviors:**
+
+| Mode | Tries Online | Fallback | Pings | Use Case |
+|------|-------------|----------|-------|----------|
+| Online | Always | Error message | Yes (warn on loss) | Normal use |
+| Hybrid | First | Yes, to local | Yes (detect recovery) | Unreliable internet |
+| Offline | Never | N/A | No | Known offline |
+
+**Streaming Endpoints:**
+- `POST /api/v1/chat/stream` - SSE streaming for real-time response
+- `GET /api/v1/connection-status` - Get current connection status
+- `POST /api/v1/ping` - Trigger connectivity check
+
+**Future Improvements (Offline AI Update):**
+- Local embedding models (sentence-transformers) for offline semantic search
+- Portable Ollama bundled with app
+- Response caching for common questions
+- Better offline keyword search (synonyms, stemming)
 
 ---
 

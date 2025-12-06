@@ -7,12 +7,13 @@ Supports both:
 """
 
 import os
+import json
 import subprocess
 import time
 import platform
 import requests
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Generator
 
 
 class OllamaManager:
@@ -257,6 +258,65 @@ class OllamaManager:
         except Exception as e:
             print(f"Ollama chat error: {e}")
             return None
+
+    def chat_stream(self, messages: list, system: str = None) -> Generator[str, None, None]:
+        """
+        Stream chat responses from Ollama.
+
+        Args:
+            messages: List of {"role": "user"|"assistant", "content": "..."}
+            system: System prompt
+
+        Yields:
+            Text chunks as they are generated
+        """
+        if not self.is_running():
+            if self.is_installed():
+                if not self.start():
+                    return
+            else:
+                return
+
+        try:
+            # Build messages list for Ollama chat API
+            ollama_messages = []
+            if system:
+                ollama_messages.append({"role": "system", "content": system})
+            ollama_messages.extend(messages)
+
+            response = requests.post(
+                f"{self.url}/api/chat",
+                json={
+                    "model": self.model,
+                    "messages": ollama_messages,
+                    "stream": True,
+                    "options": {
+                        "temperature": 0.7,
+                        "num_predict": 1024
+                    }
+                },
+                timeout=120,
+                stream=True
+            )
+
+            if response.status_code == 200:
+                for line in response.iter_lines():
+                    if line:
+                        try:
+                            data = json.loads(line)
+                            content = data.get("message", {}).get("content", "")
+                            if content:
+                                yield content
+                            # Check if done
+                            if data.get("done", False):
+                                break
+                        except json.JSONDecodeError:
+                            continue
+            else:
+                print(f"Ollama chat stream API error: {response.status_code}")
+
+        except Exception as e:
+            print(f"Ollama chat stream error: {e}")
 
 
 # Singleton instance

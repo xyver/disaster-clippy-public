@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Source Tools - Disaster Clippy</title>
+    <link rel="icon" type="image/png" href="/static/paperclip.png">
     <style>
         * {
             box-sizing: border-box;
@@ -652,6 +653,17 @@
                         <label>Path to Import (relative to backup folder)</label>
                         <input type="text" id="importPath" placeholder="my-folder or path/to/folder">
                     </div>
+                    <div class="form-group" id="zimSelectorGroup" style="display: none;">
+                        <label>Select ZIM File</label>
+                        <select id="zimFileSelect" onchange="onZimFileSelected()">
+                            <option value="">-- Loading ZIM files... --</option>
+                        </select>
+                        <p style="font-size: 0.8rem; color: #888; margin-top: 0.25rem;">
+                            ZIM files found in your backup folder. The file will be moved into the source folder.
+                        </p>
+                        <div id="zimFileInfo" style="display: none; margin-top: 0.75rem; padding: 0.75rem; background: #0f3460; border-radius: 4px; font-size: 0.85rem;">
+                        </div>
+                    </div>
                     <div class="tool-actions">
                         <button class="btn btn-primary" onclick="createNewSource()">Create Source</button>
                         <button class="btn btn-secondary" onclick="cancelNewSource()">Cancel</button>
@@ -709,7 +721,7 @@
                         <label>Base URL</label>
                         <input type="text" id="editBaseUrl" placeholder="https://example.com">
                         <p style="font-size: 0.8rem; color: #888; margin-top: 0.25rem;">
-                            The original website URL for this source
+                            The original website URL - For improved offline browsing (rewrites internal links to local archive)
                         </p>
                     </div>
                     <div class="form-group">
@@ -745,6 +757,21 @@
                             <button class="btn btn-warning" onclick="renameSource()">Rename Source</button>
                         </div>
                     </div>
+
+                    <!-- ZIM Diagnostics Section (ZIM sources only) -->
+                    <div id="zimDiagnosticsSection" style="display: none; margin-top: 1.5rem; padding-top: 1.5rem; border-top: 1px solid #0f3460;">
+                        <h3 style="color: #4ecca3; margin-bottom: 0.75rem;">ZIM File Diagnostics</h3>
+                        <p style="font-size: 0.85rem; color: #888; margin-bottom: 1rem;">
+                            Analyze the ZIM file content before indexing. Helps identify content type and optimal indexing settings.
+                        </p>
+                        <div class="tool-actions" style="margin-bottom: 1rem;">
+                            <button class="btn btn-secondary" id="btnRunZimInspect" onclick="runZimInspection()">Run Diagnostics</button>
+                        </div>
+                        <div id="zimDiagnosticsResult" style="display: none;">
+                            <div class="info-grid" id="zimInfoGrid"></div>
+                            <div id="zimRecommendations" style="margin-top: 1rem;"></div>
+                        </div>
+                    </div>
                 </div>
             </div>
 
@@ -758,13 +785,29 @@
         <div class="step-content" data-step="3">
             <div class="section">
                 <h2>Indexing Tools</h2>
-                <p class="description">Generate metadata and embeddings for offline search</p>
+                <p class="description">Generate metadata and index for offline search</p>
 
                 <div id="noSourceSelected3" class="empty-state">
                     Please select or create a source in Step 1 first.
                 </div>
 
                 <div id="indexTools" style="display: none;">
+                    <!-- Source Indicator Banner -->
+                    <div id="indexSourceBanner" class="source-banner" style="background: #0f3460; border: 1px solid #4ecca3; border-radius: 6px; padding: 1rem; margin-bottom: 1.5rem; display: flex; align-items: center; gap: 1rem;">
+                        <div style="flex: 1;">
+                            <div style="color: #888; font-size: 0.75rem; text-transform: uppercase; margin-bottom: 0.25rem;">Working on source:</div>
+                            <div style="color: #4ecca3; font-size: 1.1rem; font-weight: 600;" id="indexSourceName">-</div>
+                        </div>
+                        <div style="text-align: right;">
+                            <div style="color: #888; font-size: 0.75rem;">Type</div>
+                            <div style="color: #e94560; font-weight: 500;" id="indexSourceType">-</div>
+                        </div>
+                        <div style="text-align: right;">
+                            <div style="color: #888; font-size: 0.75rem;">Documents</div>
+                            <div style="color: #fff; font-weight: 500;" id="indexSourceDocs">-</div>
+                        </div>
+                    </div>
+
                     <div class="tool-section">
                         <h3>1. Scan Backup</h3>
                         <p>Scan the backup folder and create a manifest of all files. Required for HTML sources.</p>
@@ -782,19 +825,44 @@
                     </div>
 
                     <div class="tool-section">
-                        <h3>3. Create Embeddings</h3>
+                        <h3>3. Create Index</h3>
                         <p>Generate vector embeddings for semantic search. This runs as a background job.</p>
-                        <div style="display: flex; gap: 1rem; align-items: flex-end; margin-bottom: 1rem;">
+
+                        <!-- Document count display (shown after metadata generation) -->
+                        <div id="documentCountDisplay" style="display: none; background: #0f3460; border: 1px solid #4ecca3; border-radius: 6px; padding: 0.75rem 1rem; margin-bottom: 1rem; color: #4ecca3; font-weight: 500;">
+                            Source contains 0 documents
+                        </div>
+
+                        <div style="display: flex; gap: 1rem; align-items: flex-end; margin-bottom: 1rem; flex-wrap: wrap;">
                             <div class="form-group" style="margin-bottom: 0; flex: 0 0 150px;">
                                 <label>Document Limit</label>
                                 <input type="number" id="indexLimit" value="1000" min="1" max="50000" placeholder="1000">
                             </div>
-                            <p style="font-size: 0.8rem; color: #888; margin: 0;">
-                                Limits how many documents to index. Higher values take longer but cover more content.
+                            <div class="form-group" style="margin-bottom: 0; flex: 0 0 180px;">
+                                <label>Language Filter (ZIM)</label>
+                                <select id="languageFilter">
+                                    <option value="">All Languages</option>
+                                    <option value="en">English</option>
+                                    <option value="es">Spanish</option>
+                                    <option value="fr">French</option>
+                                    <option value="de">German</option>
+                                    <option value="pt">Portuguese</option>
+                                    <option value="it">Italian</option>
+                                    <option value="ru">Russian</option>
+                                    <option value="zh">Chinese</option>
+                                    <option value="ja">Japanese</option>
+                                    <option value="ko">Korean</option>
+                                    <option value="ar">Arabic</option>
+                                    <option value="hi">Hindi</option>
+                                </select>
+                            </div>
+                            <p style="font-size: 0.8rem; color: #888; margin: 0; flex: 1 1 200px;">
+                                Filter multi-language ZIM files to index only articles in the selected language. Use translation packs to maintain multilingual queries after searching.
                             </p>
                         </div>
                         <div class="tool-actions">
-                            <button class="btn btn-primary" id="btnCreateIndex" onclick="createIndex()">Create Embeddings</button>
+                            <button class="btn btn-primary" id="btnCreateIndex" onclick="createIndex()">Create Index</button>
+                            <button class="btn btn-secondary" id="btnIndexAll" style="display: none;" onclick="indexAll()">Index All</button>
                             <button class="btn btn-secondary" onclick="createIndex(true)">Force Re-index</button>
                         </div>
                     </div>
@@ -811,7 +879,7 @@
         <div class="step-content" data-step="4">
             <div class="section">
                 <h2>Review Source</h2>
-                <p class="description">Check source completeness and verify all components are ready</p>
+                <p class="description">Check source completeness and adjust tags based on indexed content</p>
 
                 <div id="noSourceSelected4" class="empty-state">
                     Please select or create a source in Step 1 first.
@@ -820,6 +888,32 @@
                 <div id="reviewContent" style="display: none;">
                     <div id="sourceInfo" class="source-info">
                         <div class="loading">Loading...</div>
+                    </div>
+
+                    <!-- Tags Section -->
+                    <div class="tool-section" style="margin-top: 1.5rem;">
+                        <h3>Source Tags</h3>
+                        <p>Tags help categorize and filter sources. Suggested tags are based on indexed content.</p>
+
+                        <div class="form-group">
+                            <label>Current Tags</label>
+                            <input type="text" id="editTags" placeholder="emergency, water, shelter, medical">
+                            <p style="font-size: 0.8rem; color: #888; margin-top: 0.25rem;">
+                                Comma-separated tags for categorization
+                            </p>
+                        </div>
+
+                        <div id="suggestedTagsHint" style="display: none; margin-top: 0.5rem; padding: 0.75rem; background: #0a2a1a; border: 1px solid #1a5a3e; border-radius: 4px;">
+                            <div style="font-size: 0.8rem; color: #4ecca3; margin-bottom: 0.5rem;">
+                                <strong>Suggested Tags:</strong> <span id="suggestedTagsList"></span>
+                            </div>
+                            <button class="btn btn-secondary" style="padding: 0.3rem 0.75rem; font-size: 0.8rem;" onclick="applySuggestedTags()">Apply Suggested Tags</button>
+                        </div>
+
+                        <div class="tool-actions" style="margin-top: 1rem;">
+                            <button class="btn btn-primary" onclick="saveTags()">Save Tags</button>
+                            <button class="btn btn-secondary" onclick="getSuggestedTags()">Get Suggestions</button>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -841,6 +935,22 @@
                 </div>
 
                 <div id="validateTools" style="display: none;">
+                    <!-- Source Indicator Banner -->
+                    <div id="validateSourceBanner" class="source-banner" style="background: #0f3460; border: 1px solid #4ecca3; border-radius: 6px; padding: 1rem; margin-bottom: 1.5rem; display: flex; align-items: center; gap: 1rem;">
+                        <div style="flex: 1;">
+                            <div style="color: #888; font-size: 0.75rem; text-transform: uppercase; margin-bottom: 0.25rem;">Validating source:</div>
+                            <div style="color: #4ecca3; font-size: 1.1rem; font-weight: 600;" id="validateSourceName">-</div>
+                        </div>
+                        <div style="text-align: right;">
+                            <div style="color: #888; font-size: 0.75rem;">Type</div>
+                            <div style="color: #e94560; font-weight: 500;" id="validateSourceType">-</div>
+                        </div>
+                        <div style="text-align: right;">
+                            <div style="color: #888; font-size: 0.75rem;">Status</div>
+                            <div id="validateSourceStatus">-</div>
+                        </div>
+                    </div>
+
                     <div class="tool-section">
                         <h3>Validate Source</h3>
                         <p>Check if the source meets all requirements for distribution.</p>
@@ -960,11 +1070,18 @@
             // Enable/disable step 1 next button
             document.getElementById('step1Next').disabled = !hasSource;
 
+            // Populate step-specific forms when entering that step
+            if (hasSource && currentStep === 4) {
+                populateTagsForm();
+            }
+
             // Update admin visibility
             updateAdminVisibility();
         }
 
         // Source Type Selection
+        let availableZimFiles = [];
+
         function selectSourceType(type) {
             selectedSourceType = type;
 
@@ -980,7 +1097,104 @@
 
             // Show/hide type-specific fields
             document.getElementById('scrapeUrlGroup').style.display = type === 'scrape' ? 'block' : 'none';
-            document.getElementById('importPathGroup').style.display = (type === 'html' || type === 'pdf' || type === 'zim') ? 'block' : 'none';
+            document.getElementById('importPathGroup').style.display = (type === 'html' || type === 'pdf') ? 'block' : 'none';
+            document.getElementById('zimSelectorGroup').style.display = type === 'zim' ? 'block' : 'none';
+
+            // Load ZIM files when ZIM type is selected
+            if (type === 'zim') {
+                loadAvailableZimFiles();
+            }
+        }
+
+        async function loadAvailableZimFiles() {
+            const select = document.getElementById('zimFileSelect');
+            const infoDiv = document.getElementById('zimFileInfo');
+            select.innerHTML = '<option value="">-- Loading... --</option>';
+
+            try {
+                const response = await fetch('/useradmin/api/zim/list');
+                const data = await response.json();
+
+                // Log debug info
+                console.log('ZIM list response:', data);
+
+                // Show error if present
+                if (data.error) {
+                    select.innerHTML = '<option value="">-- Error: ' + data.error + ' --</option>';
+                    logOutput(`ZIM list error: ${data.error}`, 'error');
+                    return;
+                }
+
+                availableZimFiles = data.zim_files || [];
+
+                if (availableZimFiles.length === 0) {
+                    const folder = data.backup_folder || 'not configured';
+                    const debug = data.debug || {};
+                    select.innerHTML = '<option value="">-- No ZIM files found --</option>';
+
+                    // Show helpful info
+                    let msg = `No ZIM files found in backup folder: ${folder}`;
+                    if (debug.folder_exists === false) {
+                        msg += ' (folder does not exist)';
+                    } else if (debug.folder_is_dir === false) {
+                        msg += ' (path is not a directory)';
+                    }
+                    logOutput(msg, 'warning');
+                    if (infoDiv) {
+                        infoDiv.innerHTML = '<span style="color: #ff9800;">Backup folder: ' + folder + '</span>';
+                        infoDiv.style.display = 'block';
+                    }
+                    return;
+                }
+
+                select.innerHTML = '<option value="">-- Select a ZIM file --</option>';
+                availableZimFiles.forEach(zim => {
+                    const option = document.createElement('option');
+                    option.value = zim.path;
+                    option.textContent = `${zim.name} (${zim.size_mb} MB)${zim.in_subfolder ? ' [in subfolder]' : ''}`;
+                    select.appendChild(option);
+                });
+
+                logOutput(`Found ${availableZimFiles.length} ZIM file(s) in ${data.backup_folder}`, 'info');
+
+            } catch (e) {
+                select.innerHTML = '<option value="">-- Error loading ZIM files --</option>';
+                logOutput(`Error loading ZIM files: ${e.message}`, 'error');
+                console.error('ZIM list error:', e);
+            }
+        }
+
+        function onZimFileSelected() {
+            const select = document.getElementById('zimFileSelect');
+            const infoDiv = document.getElementById('zimFileInfo');
+            const selectedPath = select.value;
+
+            if (!selectedPath) {
+                infoDiv.style.display = 'none';
+                return;
+            }
+
+            const zimFile = availableZimFiles.find(z => z.path === selectedPath);
+            if (zimFile) {
+                // Auto-suggest source ID from filename
+                const sourceIdInput = document.getElementById('newSourceId');
+                if (!sourceIdInput.value) {
+                    // Convert filename to valid source_id
+                    let suggestedId = zimFile.name.replace('.zim', '')
+                        .toLowerCase()
+                        .replace(/[^a-z0-9]+/g, '-')
+                        .replace(/^-+|-+$/g, '');
+                    sourceIdInput.value = suggestedId;
+                }
+
+                // Show file info
+                infoDiv.innerHTML = `
+                    <div style="color: #4ecca3;"><strong>Selected:</strong> ${zimFile.name}</div>
+                    <div style="color: #888; margin-top: 0.25rem;">Size: ${zimFile.size_mb} MB</div>
+                    <div style="color: #888;">Path: ${zimFile.path}</div>
+                `;
+                infoDiv.style.display = 'block';
+            }
         }
 
         function cancelNewSource() {
@@ -992,6 +1206,9 @@
             document.getElementById('newSourceId').value = '';
             document.getElementById('scrapeUrl').value = '';
             document.getElementById('importPath').value = '';
+            document.getElementById('zimFileSelect').value = '';
+            document.getElementById('zimFileInfo').style.display = 'none';
+            document.getElementById('zimSelectorGroup').style.display = 'none';
         }
 
         async function createNewSource() {
@@ -1007,7 +1224,21 @@
                 return;
             }
 
-            logOutput(`Creating new source: ${sourceId} (${selectedSourceType})...`);
+            // Determine import path based on source type
+            let importPath = null;
+            if (selectedSourceType === 'zim') {
+                const zimSelect = document.getElementById('zimFileSelect');
+                importPath = zimSelect.value || null;
+                if (!importPath) {
+                    showToast('Please select a ZIM file', true);
+                    return;
+                }
+                logOutput(`Creating new source: ${sourceId} (ZIM)...`);
+                logOutput(`  ZIM file will be moved to source folder`, 'info');
+            } else {
+                importPath = document.getElementById('importPath').value || null;
+                logOutput(`Creating new source: ${sourceId} (${selectedSourceType})...`);
+            }
 
             try {
                 const response = await fetch('/useradmin/api/create-source', {
@@ -1017,7 +1248,7 @@
                         source_id: sourceId,
                         source_type: selectedSourceType,
                         url: document.getElementById('scrapeUrl').value || null,
-                        import_path: document.getElementById('importPath').value || null
+                        import_path: importPath
                     })
                 });
 
@@ -1025,7 +1256,19 @@
 
                 if (response.ok) {
                     logOutput(`Source created: ${sourceId}`, 'success');
-                    showToast('Source created successfully');
+
+                    // Log ZIM-specific import info
+                    if (data.zim_moved && data.import_info) {
+                        logOutput(`  ZIM file moved successfully`, 'success');
+                        if (data.import_info.size_mb) {
+                            logOutput(`  Size: ${data.import_info.size_mb} MB`, 'info');
+                        }
+                        if (data.import_info.metadata_extracted) {
+                            logOutput(`  Metadata auto-extracted from ZIM`, 'success');
+                        }
+                    }
+
+                    showToast(data.message || 'Source created successfully');
                     cancelNewSource();
                     await refreshSources();
                     document.getElementById('sourceSelect').value = sourceId;
@@ -1080,6 +1323,9 @@
             if (!sourceId) {
                 currentSource = null;
                 updateWizardUI();
+                // Hide document count when no source selected
+                document.getElementById('documentCountDisplay').style.display = 'none';
+                document.getElementById('btnIndexAll').style.display = 'none';
                 return;
             }
 
@@ -1088,7 +1334,18 @@
             if (currentSource) {
                 populateEditForm();
                 updateSourceInfo();
+                updateSourceBanners();
                 updateWizardUI();
+
+                // Show document count if source has documents
+                const docCount = currentSource.document_count || 0;
+                if (docCount > 0) {
+                    updateDocumentCount(docCount);
+                } else {
+                    document.getElementById('documentCountDisplay').style.display = 'none';
+                    document.getElementById('btnIndexAll').style.display = 'none';
+                }
+
                 logOutput(`Loaded source: ${currentSource.name || currentSource.source_id}`);
             }
         }
@@ -1143,6 +1400,217 @@
                     </div>
                 ` : ''}
             `;
+
+            // Show/hide ZIM diagnostics section based on source type
+            const zimSection = document.getElementById('zimDiagnosticsSection');
+            if (zimSection) {
+                const isZim = s.backup_type && s.backup_type.toLowerCase() === 'zim';
+                zimSection.style.display = isZim ? 'block' : 'none';
+                // Reset diagnostics result when switching sources
+                document.getElementById('zimDiagnosticsResult').style.display = 'none';
+            }
+        }
+
+        async function runZimInspection() {
+            if (!currentSource) return;
+
+            const btn = document.getElementById('btnRunZimInspect');
+            btn.disabled = true;
+            btn.textContent = 'Starting...';
+
+            logOutput(`Running ZIM diagnostics for ${currentSource.source_id}...`);
+
+            try {
+                // First get the ZIM file path
+                const listResponse = await fetch('/useradmin/api/zim/list');
+                const listData = await listResponse.json();
+
+                // Find ZIM file for this source
+                const zimFile = listData.zim_files?.find(z => z.source_id === currentSource.source_id);
+                if (!zimFile) {
+                    logOutput('No ZIM file found for this source', 'error');
+                    showToast('No ZIM file found', true);
+                    btn.disabled = false;
+                    btn.textContent = 'Run Diagnostics';
+                    return;
+                }
+
+                // Submit inspection job
+                const response = await fetch('/useradmin/api/zim/inspect', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        zim_path: zimFile.path,
+                        scan_limit: 5000,
+                        min_text_length: 50
+                    })
+                });
+
+                const data = await response.json();
+
+                if (!response.ok) {
+                    logOutput(`Error: ${data.detail || 'Inspection failed'}`, 'error');
+                    showToast(data.detail || 'Inspection failed', true);
+                    btn.disabled = false;
+                    btn.textContent = 'Run Diagnostics';
+                    return;
+                }
+
+                // Job submitted - poll for completion
+                const jobId = data.job_id;
+                logOutput(`Job submitted: ${jobId}`, 'info');
+                logOutput('Scanning articles... (this may take a few minutes for large files)', 'info');
+                btn.textContent = 'Analyzing...';
+
+                // Poll for job completion
+                const pollInterval = 2000; // 2 seconds
+                const maxAttempts = 180; // 6 minutes max
+                let attempts = 0;
+
+                const pollForCompletion = async () => {
+                    attempts++;
+                    try {
+                        const statusResp = await fetch(`/useradmin/api/jobs/${jobId}`);
+                        const status = await statusResp.json();
+
+                        if (status.status === 'completed') {
+                            // Job completed - display results
+                            if (status.result && status.result.status === 'success') {
+                                displayZimDiagnostics(status.result);
+                                logOutput('ZIM diagnostics complete', 'success');
+                                showToast('Diagnostics complete');
+                            } else {
+                                const errMsg = status.result?.error || 'Inspection failed';
+                                logOutput(`Error: ${errMsg}`, 'error');
+                                showToast(errMsg, true);
+                            }
+                            btn.disabled = false;
+                            btn.textContent = 'Run Diagnostics';
+                            return;
+                        } else if (status.status === 'failed') {
+                            logOutput(`Error: ${status.error || 'Job failed'}`, 'error');
+                            showToast('Diagnostics failed', true);
+                            btn.disabled = false;
+                            btn.textContent = 'Run Diagnostics';
+                            return;
+                        } else if (attempts >= maxAttempts) {
+                            logOutput('Timeout waiting for job to complete', 'error');
+                            showToast('Job timeout', true);
+                            btn.disabled = false;
+                            btn.textContent = 'Run Diagnostics';
+                            return;
+                        }
+
+                        // Update progress if available
+                        if (status.progress) {
+                            btn.textContent = `Analyzing... ${status.progress}%`;
+                        }
+
+                        // Continue polling
+                        setTimeout(pollForCompletion, pollInterval);
+                    } catch (pollErr) {
+                        logOutput(`Error polling job status: ${pollErr.message}`, 'error');
+                        btn.disabled = false;
+                        btn.textContent = 'Run Diagnostics';
+                    }
+                };
+
+                // Start polling
+                setTimeout(pollForCompletion, pollInterval);
+
+            } catch (e) {
+                logOutput(`Error: ${e.message}`, 'error');
+                showToast('Error: ' + e.message, true);
+                btn.disabled = false;
+                btn.textContent = 'Run Diagnostics';
+            }
+        }
+
+        function displayZimDiagnostics(data) {
+            const resultDiv = document.getElementById('zimDiagnosticsResult');
+            const infoGrid = document.getElementById('zimInfoGrid');
+            const recsDiv = document.getElementById('zimRecommendations');
+
+            // Build info grid
+            const meta = data.metadata || {};
+            const content = data.content_analysis || {};
+
+            infoGrid.innerHTML = `
+                <div class="info-item">
+                    <label>Content Type</label>
+                    <span style="text-transform: uppercase;">${data.content_type || 'Unknown'}</span>
+                </div>
+                <div class="info-item">
+                    <label>Total Articles</label>
+                    <span>${(data.article_count || 0).toLocaleString()}</span>
+                </div>
+                <div class="info-item">
+                    <label>Indexable</label>
+                    <span style="color: #4ecca3;">${(content.indexable_count || 0).toLocaleString()}</span>
+                </div>
+                <div class="info-item">
+                    <label>Would Skip</label>
+                    <span style="color: ${content.skip_rate_percent > 50 ? '#f9a825' : '#888'};">
+                        ${(content.skipped_count || 0).toLocaleString()} (${content.skip_rate_percent || 0}%)
+                    </span>
+                </div>
+                <div class="info-item">
+                    <label>File Size</label>
+                    <span>${data.file_size_mb || 0} MB</span>
+                </div>
+                <div class="info-item">
+                    <label>Avg Text Length</label>
+                    <span>${Math.round(content.avg_text_length || 0)} chars</span>
+                </div>
+            `;
+
+            // Build recommendations
+            const recs = data.recommendations || [];
+            if (recs.length > 0) {
+                recsDiv.innerHTML = `
+                    <h4 style="color: #f9a825; margin-bottom: 0.5rem;">Recommendations:</h4>
+                    <ul style="margin: 0; padding-left: 1.5rem; color: #888; font-size: 0.85rem;">
+                        ${recs.map(r => `<li style="margin-bottom: 0.25rem;">${escapeHtml(r)}</li>`).join('')}
+                    </ul>
+                `;
+            } else {
+                recsDiv.innerHTML = '';
+            }
+
+            // Log detailed info
+            if (meta.title) logOutput(`  Title: ${meta.title}`, 'info');
+            if (meta.creator) logOutput(`  Creator: ${meta.creator}`, 'info');
+            if (data.has_video_content) logOutput(`  Video content detected: ${data.video_article_count} articles`, 'warning');
+            if (data.has_pdf_content) logOutput(`  PDF content detected`, 'info');
+
+            resultDiv.style.display = 'block';
+        }
+
+        function updateSourceBanners() {
+            // Update Step 3 (Index) banner
+            const s = currentSource;
+            if (!s) return;
+
+            const displayName = s.name || s.source_id;
+            const sourceType = (s.backup_type || 'Unknown').toUpperCase();
+            const docCount = (s.document_count || 0).toLocaleString();
+
+            // Index step banner
+            document.getElementById('indexSourceName').textContent = displayName;
+            document.getElementById('indexSourceType').textContent = sourceType;
+            document.getElementById('indexSourceDocs').textContent = docCount;
+
+            // Validate step banner
+            document.getElementById('validateSourceName').textContent = displayName;
+            document.getElementById('validateSourceType').textContent = sourceType;
+
+            // Status indicator for validate step
+            const statusDiv = document.getElementById('validateSourceStatus');
+            if (s.is_complete) {
+                statusDiv.innerHTML = '<span style="color: #4ecca3; font-weight: 500;">Ready</span>';
+            } else {
+                statusDiv.innerHTML = '<span style="color: #f9a825; font-weight: 500;">Incomplete</span>';
+            }
         }
 
         function populateEditForm() {
@@ -1158,7 +1626,17 @@
             document.getElementById('renameNewId').value = '';
         }
 
-        // Save source configuration
+        function populateTagsForm() {
+            const s = currentSource;
+            // Tags - convert array to comma-separated string
+            const tags = Array.isArray(s.tags) ? s.tags.join(', ') : (s.tags || '');
+            document.getElementById('editTags').value = tags;
+
+            // Hide suggested tags hint initially
+            document.getElementById('suggestedTagsHint').style.display = 'none';
+        }
+
+        // Save source configuration (Step 2 - without tags)
         async function saveSourceConfig() {
             if (!currentSource) return;
 
@@ -1200,25 +1678,70 @@
         async function autoDetect() {
             if (!currentSource) return;
 
-            logOutput(`Auto-detecting license and description for ${currentSource.source_id}...`);
+            logOutput(`Auto-detecting metadata for ${currentSource.source_id}...`);
 
             try {
                 const response = await fetch(`/useradmin/api/auto-detect/${currentSource.source_id}`);
                 const data = await response.json();
 
                 if (response.ok) {
+                    let detectedCount = 0;
+
+                    // Detected name
+                    if (data.detected_name) {
+                        document.getElementById('editName').value = data.detected_name;
+                        logOutput(`Detected name: ${data.detected_name}`, 'success');
+                        detectedCount++;
+                    }
+
+                    // Detected description
+                    if (data.detected_description) {
+                        document.getElementById('editDescription').value = data.detected_description;
+                        logOutput(`Detected description: ${data.detected_description.substring(0, 100)}...`, 'success');
+                        detectedCount++;
+                    }
+
+                    // Detected license
                     if (data.detected_license && data.detected_license !== 'Unknown') {
                         document.getElementById('editLicense').value = data.detected_license;
                         logOutput(`Detected license: ${data.detected_license}`, 'success');
+                        detectedCount++;
                     } else {
                         logOutput('Could not auto-detect license', 'warning');
                     }
 
+                    // Detected base URL
+                    if (data.base_url) {
+                        document.getElementById('editBaseUrl').value = data.base_url;
+                        logOutput(`Detected base URL: ${data.base_url}`, 'success');
+                        detectedCount++;
+                    }
+
+                    // Suggested tags
                     if (data.suggested_tags && data.suggested_tags.length > 0) {
                         logOutput(`Suggested tags: ${data.suggested_tags.join(', ')}`, 'info');
                     }
 
-                    showToast('Auto-detection complete');
+                    // Source type info
+                    if (data.source_type) {
+                        logOutput(`Source type: ${data.source_type.toUpperCase()}`, 'info');
+                    }
+
+                    // ZIM-specific metadata
+                    if (data.zim_metadata) {
+                        const zm = data.zim_metadata;
+                        if (zm.creator) logOutput(`  Creator: ${zm.creator}`, 'info');
+                        if (zm.publisher) logOutput(`  Publisher: ${zm.publisher}`, 'info');
+                        if (zm.language) logOutput(`  Language: ${zm.language}`, 'info');
+                        if (zm.date) logOutput(`  Date: ${zm.date}`, 'info');
+                        if (zm.article_count) logOutput(`  Articles: ${zm.article_count.toLocaleString()}`, 'info');
+                    }
+
+                    if (detectedCount > 0) {
+                        showToast(`Auto-detected ${detectedCount} field(s)`);
+                    } else {
+                        showToast('No metadata could be auto-detected', true);
+                    }
                 } else {
                     logOutput(`Error: ${data.detail || 'Auto-detect failed'}`, 'error');
                 }
@@ -1269,7 +1792,7 @@
 
             const btn = document.getElementById('btnGenerateMetadata');
             btn.disabled = true;
-            btn.textContent = 'Generating...';
+            btn.textContent = 'Starting...';
 
             logOutput(`Generating metadata for ${currentSource.source_id}...`);
 
@@ -1282,21 +1805,106 @@
 
                 const data = await response.json();
 
-                if (response.ok) {
-                    logOutput(`Metadata generated: ${data.document_count || 0} documents`, 'success');
-                    showToast('Metadata generated successfully');
-                    await refreshSources();
-                    await loadSourceDetails();
-                } else {
-                    logOutput(`Error: ${data.detail || 'Generation failed'}`, 'error');
-                    showToast(data.detail || 'Generation failed', true);
+                if (!response.ok) {
+                    logOutput(`Error: ${data.detail || 'Failed to start'}`, 'error');
+                    showToast(data.detail || 'Failed to start', true);
+                    btn.disabled = false;
+                    btn.textContent = 'Generate Metadata';
+                    return;
                 }
+
+                // Job submitted - poll for completion
+                const jobId = data.job_id;
+                logOutput(`Job submitted: ${jobId}`, 'info');
+                btn.textContent = 'Processing...';
+
+                const pollInterval = 1500;
+                const maxAttempts = 120; // 3 minutes max
+                let attempts = 0;
+
+                const pollForCompletion = async () => {
+                    attempts++;
+                    try {
+                        const statusResp = await fetch(`/useradmin/api/jobs/${jobId}`);
+                        const status = await statusResp.json();
+
+                        if (status.status === 'completed') {
+                            if (status.result && status.result.status === 'success') {
+                                const docCount = status.result.document_count || 0;
+                                logOutput(`Metadata generated: ${docCount} documents`, 'success');
+                                showToast('Metadata generated successfully');
+                                updateDocumentCount(docCount);
+                                await refreshSources();
+                                await loadSourceDetails();
+                            } else {
+                                const errMsg = status.result?.error || 'Generation failed';
+                                logOutput(`Error: ${errMsg}`, 'error');
+                                showToast(errMsg, true);
+                            }
+                            btn.disabled = false;
+                            btn.textContent = 'Generate Metadata';
+                            return;
+                        } else if (status.status === 'failed') {
+                            logOutput(`Error: ${status.error || 'Job failed'}`, 'error');
+                            showToast('Metadata generation failed', true);
+                            btn.disabled = false;
+                            btn.textContent = 'Generate Metadata';
+                            return;
+                        } else if (attempts >= maxAttempts) {
+                            logOutput('Timeout waiting for job to complete', 'error');
+                            showToast('Job timeout', true);
+                            btn.disabled = false;
+                            btn.textContent = 'Generate Metadata';
+                            return;
+                        }
+
+                        if (status.progress) {
+                            btn.textContent = `Processing... ${status.progress}%`;
+                        }
+
+                        setTimeout(pollForCompletion, pollInterval);
+                    } catch (pollErr) {
+                        logOutput(`Error polling job status: ${pollErr.message}`, 'error');
+                        btn.disabled = false;
+                        btn.textContent = 'Generate Metadata';
+                    }
+                };
+
+                setTimeout(pollForCompletion, pollInterval);
+
             } catch (e) {
                 logOutput(`Error: ${e.message}`, 'error');
                 showToast('Error: ' + e.message, true);
-            } finally {
                 btn.disabled = false;
                 btn.textContent = 'Generate Metadata';
+            }
+        }
+
+        function updateDocumentCount(count) {
+            // Update the document count display in the embeddings section
+            const countDisplay = document.getElementById('documentCountDisplay');
+            if (countDisplay) {
+                countDisplay.textContent = `Source contains ${count.toLocaleString()} documents`;
+                countDisplay.style.display = 'block';
+            }
+            // Also update the "Index All" button
+            const indexAllBtn = document.getElementById('btnIndexAll');
+            if (indexAllBtn && count > 0) {
+                indexAllBtn.textContent = `Index All (${count.toLocaleString()})`;
+                indexAllBtn.style.display = 'inline-block';
+                indexAllBtn.dataset.docCount = count;
+            }
+        }
+
+        function indexAll() {
+            // Get the document count from the button's data attribute
+            const indexAllBtn = document.getElementById('btnIndexAll');
+            const docCount = parseInt(indexAllBtn?.dataset.docCount) || 0;
+            if (docCount > 0) {
+                // Set the limit input to the total count
+                document.getElementById('indexLimit').value = docCount;
+                // Run the index
+                createIndex(false);
             }
         }
 
@@ -1304,22 +1912,29 @@
             if (!currentSource) return;
 
             const limit = parseInt(document.getElementById('indexLimit').value) || 1000;
+            const languageFilter = document.getElementById('languageFilter').value || null;
 
             const btn = document.getElementById('btnCreateIndex');
             btn.disabled = true;
             btn.textContent = 'Starting...';
 
-            logOutput(`Creating embeddings for ${currentSource.source_id} (limit: ${limit}, force: ${forceReindex})...`);
+            const langInfo = languageFilter ? `, language: ${languageFilter}` : '';
+            logOutput(`Creating embeddings for ${currentSource.source_id} (limit: ${limit}${langInfo}, force: ${forceReindex})...`);
 
             try {
+                const requestBody = {
+                    source_id: currentSource.source_id,
+                    limit: limit,
+                    force_reindex: forceReindex
+                };
+                if (languageFilter) {
+                    requestBody.language_filter = languageFilter;
+                }
+
                 const response = await fetch('/useradmin/api/create-index', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        source_id: currentSource.source_id,
-                        limit: limit,
-                        force_reindex: forceReindex
-                    })
+                    body: JSON.stringify(requestBody)
                 });
 
                 const data = await response.json();
@@ -1327,7 +1942,7 @@
                 if (response.ok) {
                     if (data.status === 'submitted' || data.job_id) {
                         logOutput(`Job submitted: ${data.job_id}`, 'success');
-                        logOutput('Index creation running in background. Check Jobs page for progress.', 'info');
+                        logOutput('Index creation running in background. Check the job monitor for progress.', 'info');
                         showToast('Index job started');
                     } else {
                         logOutput(`Index complete: ${data.indexed_count || 0} documents indexed`, 'success');
@@ -1347,7 +1962,7 @@
                 showToast('Error: ' + e.message, true);
             } finally {
                 btn.disabled = false;
-                btn.textContent = 'Create Embeddings';
+                btn.textContent = 'Create Index';
             }
         }
 
@@ -1382,6 +1997,10 @@
 
                     if (data.suggested_tags && data.suggested_tags.length > 0) {
                         logOutput(`Suggested tags: ${data.suggested_tags.join(', ')}`, 'info');
+                        // Store suggested tags and show hint in Configure step
+                        window.suggestedTags = data.suggested_tags;
+                        document.getElementById('suggestedTagsList').textContent = data.suggested_tags.join(', ');
+                        document.getElementById('suggestedTagsHint').style.display = 'block';
                     }
 
                     showToast(data.is_valid ? 'Validation passed' : 'Validation failed', !data.is_valid);
@@ -1392,6 +2011,89 @@
             } catch (e) {
                 logOutput(`Error: ${e.message}`, 'error');
                 showToast('Error: ' + e.message, true);
+            }
+        }
+
+        function applySuggestedTags() {
+            if (window.suggestedTags && window.suggestedTags.length > 0) {
+                document.getElementById('editTags').value = window.suggestedTags.join(', ');
+                logOutput('Applied suggested tags', 'success');
+                showToast('Tags applied - click Save Tags to confirm');
+            }
+        }
+
+        // Save tags (Step 4)
+        async function saveTags() {
+            if (!currentSource) return;
+
+            const tagsStr = document.getElementById('editTags').value;
+            const tags = tagsStr ? tagsStr.split(',').map(t => t.trim()).filter(t => t) : [];
+
+            const config = {
+                source_id: currentSource.source_id,
+                tags: tags
+            };
+
+            logOutput(`Saving tags for ${currentSource.source_id}...`);
+
+            try {
+                const response = await fetch('/useradmin/api/update-source-config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(config)
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    logOutput(`Tags saved: ${tags.join(', ') || '(none)'}`, 'success');
+                    showToast('Tags saved');
+                    await refreshSources();
+                    await loadSourceDetails();
+                } else {
+                    logOutput(`Error: ${data.detail || 'Save failed'}`, 'error');
+                    showToast(data.detail || 'Save failed', true);
+                }
+            } catch (e) {
+                logOutput(`Error: ${e.message}`, 'error');
+                showToast('Error: ' + e.message, true);
+            }
+        }
+
+        // Get suggested tags by running validation
+        async function getSuggestedTags() {
+            if (!currentSource) return;
+
+            logOutput(`Analyzing content for tag suggestions...`);
+
+            try {
+                const response = await fetch('/useradmin/api/validate-source', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ source_id: currentSource.source_id })
+                });
+
+                const data = await response.json();
+
+                if (response.ok && data.suggested_tags && data.suggested_tags.length > 0) {
+                    window.suggestedTags = data.suggested_tags;
+                    document.getElementById('suggestedTagsList').textContent = data.suggested_tags.join(', ');
+                    document.getElementById('suggestedTagsHint').style.display = 'block';
+                    logOutput(`Suggested tags: ${data.suggested_tags.join(', ')}`, 'success');
+                } else if (response.ok) {
+                    // Check for metadata issues
+                    if (!data.has_metadata) {
+                        logOutput('No tag suggestions - source needs to be indexed first (Step 3).', 'warning');
+                    } else {
+                        logOutput('No tag suggestions found. Try adding tags manually based on content type.', 'info');
+                    }
+                    document.getElementById('suggestedTagsHint').style.display = 'none';
+                } else {
+                    logOutput(`Validation error: ${data.detail || 'Unknown error'}`, 'error');
+                    document.getElementById('suggestedTagsHint').style.display = 'none';
+                }
+            } catch (e) {
+                logOutput(`Error: ${e.message}`, 'error');
             }
         }
 

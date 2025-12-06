@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Dashboard - Disaster Clippy Admin</title>
+    <link rel="icon" type="image/png" href="/static/paperclip.png">
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
@@ -165,9 +166,14 @@
                     <div class="stat-value" style="font-size: 1rem;">Checking...</div>
                     <div class="stat-label">Pinecone Vector DB</div>
                 </div>
-                <div class="stat-card" id="offlineStatus">
+                <div class="stat-card" id="connectionModeStatus">
                     <div class="stat-value" style="font-size: 1rem;">Checking...</div>
-                    <div class="stat-label">Offline Mode</div>
+                    <div class="stat-label">Connection Mode</div>
+                </div>
+                <div class="stat-card" id="connectionStateStatus">
+                    <div class="stat-value" style="font-size: 1rem;">Checking...</div>
+                    <div class="stat-label">Connection State</div>
+                    <div class="stat-message" id="connectionMessage" style="font-size: 0.75rem; color: #888; margin-top: 0.25rem;"></div>
                 </div>
             </div>
         </div>
@@ -191,13 +197,56 @@
                 document.getElementById('totalSources').textContent = status.local_sources || 0;
                 document.getElementById('totalDocs').textContent = (status.total_documents || 0).toLocaleString();
                 document.getElementById('storageUsed').textContent = status.storage_mb ? status.storage_mb + ' MB' : '-';
-
-                // Offline status
-                const offlineCard = document.getElementById('offlineStatus');
-                offlineCard.querySelector('.stat-value').textContent = status.offline_mode ? 'Enabled' : 'Disabled';
-                offlineCard.querySelector('.stat-value').style.color = status.offline_mode ? '#f9a825' : '#4ecca3';
             } catch (e) {
                 console.error('Error loading status:', e);
+            }
+
+            // Load connection mode from settings
+            try {
+                const settingsResp = await fetch('/useradmin/api/settings');
+                const settings = await settingsResp.json();
+                const mode = settings.settings?.offline_mode || 'hybrid';
+
+                const modeCard = document.getElementById('connectionModeStatus');
+                const modeLabels = {
+                    'online_only': 'Online',
+                    'hybrid': 'Hybrid',
+                    'offline_only': 'Offline'
+                };
+                const modeColors = {
+                    'online_only': '#4ecca3',  // Green
+                    'hybrid': '#f9a825',       // Yellow
+                    'offline_only': '#e94560'  // Red
+                };
+
+                modeCard.querySelector('.stat-value').textContent = modeLabels[mode] || mode;
+                modeCard.querySelector('.stat-value').style.color = modeColors[mode] || '#888';
+            } catch (e) {
+                console.error('Error loading connection mode:', e);
+                document.getElementById('connectionModeStatus').querySelector('.stat-value').textContent = 'Error';
+            }
+
+            // Load connection state (live status)
+            try {
+                const stateResp = await fetch('/api/v1/connection-status');
+                const stateData = await stateResp.json();
+
+                const stateCard = document.getElementById('connectionStateStatus');
+                const stateColors = {
+                    'green': '#4ecca3',
+                    'blue': '#4a9eff',
+                    'yellow': '#f9a825',
+                    'orange': '#ff9800',
+                    'red': '#e94560',
+                    'gray': '#888'
+                };
+
+                stateCard.querySelector('.stat-value').textContent = stateData.state_label || 'Unknown';
+                stateCard.querySelector('.stat-value').style.color = stateColors[stateData.state_color] || '#888';
+                document.getElementById('connectionMessage').textContent = stateData.message || '';
+            } catch (e) {
+                console.error('Error loading connection state:', e);
+                document.getElementById('connectionStateStatus').querySelector('.stat-value').textContent = 'Error';
             }
 
             // Load R2 status

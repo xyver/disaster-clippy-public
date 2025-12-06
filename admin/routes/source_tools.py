@@ -49,6 +49,7 @@ class CreateIndexRequest(BaseModel):
     source_id: str
     limit: int = 1000
     force_reindex: bool = False
+    language_filter: Optional[str] = None  # ISO code like 'en', 'es' to filter ZIM articles
 
 
 class ValidateSourceRequest(BaseModel):
@@ -315,6 +316,15 @@ async def update_source_config(request: UpdateSourceConfigRequest):
         manifest_file.parent.mkdir(parents=True, exist_ok=True)
         with open(manifest_file, 'w', encoding='utf-8') as f:
             json.dump(source, f, indent=2)
+
+        # Update _master.json if tags changed
+        if request.tags is not None:
+            try:
+                from offline_tools.packager import sync_master_metadata
+                sync_master_metadata()
+            except Exception as e:
+                print(f"Warning: Could not sync master after tag update: {e}")
+
         return {"status": "success", "source_id": request.source_id}
     except Exception as e:
         raise HTTPException(500, f"Failed to save source config: {e}")
@@ -326,24 +336,60 @@ async def auto_detect(source_id: str):
     try:
         from offline_tools.source_manager import SourceManager
 
+        config = get_local_config()
+        backup_folder = config.get_backup_folder()
+
         result = {
             "source_id": source_id,
             "detected_license": None,
+            "detected_name": None,
+            "detected_description": None,
             "suggested_tags": [],
-            "base_url": None
+            "base_url": None,
+            "source_type": None
         }
 
+        # Check if this is a ZIM source
+        if backup_folder:
+            source_path = Path(backup_folder) / source_id
+            zim_files = list(source_path.glob("*.zim")) if source_path.exists() else []
+
+            if zim_files:
+                result["source_type"] = "zim"
+                # Use ZIM metadata extraction
+                try:
+                    from offline_tools.zim_utils import get_zim_metadata
+                    zim_meta = get_zim_metadata(str(zim_files[0]))
+
+                    if "error" not in zim_meta:
+                        if zim_meta.get("title"):
+                            result["detected_name"] = zim_meta["title"]
+                        if zim_meta.get("description"):
+                            result["detected_description"] = zim_meta["description"]
+                        if zim_meta.get("license"):
+                            result["detected_license"] = zim_meta["license"]
+                        if zim_meta.get("source_url"):
+                            result["base_url"] = zim_meta["source_url"]
+                        if zim_meta.get("tags"):
+                            result["suggested_tags"] = zim_meta["tags"]
+
+                        # Include raw ZIM metadata for reference
+                        result["zim_metadata"] = zim_meta
+                except ImportError:
+                    pass  # zimply-core not installed
+
+        # Fallback to SourceManager detection for non-ZIM or if ZIM detection failed
         manager = SourceManager()
 
-        # Detect license
-        detected_license = manager.detect_license(source_id)
-        if detected_license:
-            result["detected_license"] = detected_license
+        if not result["detected_license"]:
+            detected_license = manager.detect_license(source_id)
+            if detected_license:
+                result["detected_license"] = detected_license
 
-        # Suggest tags
-        suggested_tags = manager.suggest_tags(source_id)
-        if suggested_tags:
-            result["suggested_tags"] = suggested_tags
+        if not result["suggested_tags"]:
+            suggested_tags = manager.suggest_tags(source_id)
+            if suggested_tags:
+                result["suggested_tags"] = suggested_tags
 
         return result
 
@@ -401,12 +447,92 @@ async def create_source(request: CreateSourceRequest):
             json.dump(source_config, f, indent=2)
 
         import_info = None
-        if request.import_path:
+        zim_moved = False
+
+        # Handle ZIM file import - move/copy into source folder
+        if request.source_type == "zim" and request.import_path:
+            import shutil
+
+            # Handle both absolute and relative paths
+            import_path = Path(request.import_path)
+            if import_path.is_absolute():
+                import_full_path = import_path
+            else:
+                import_full_path = Path(backup_folder) / request.import_path
+
+            # Find the ZIM file
+            zim_source = None
+            if import_full_path.exists():
+                if import_full_path.suffix.lower() == ".zim":
+                    # Direct path to ZIM file
+                    zim_source = import_full_path
+                elif import_full_path.is_dir():
+                    # Folder containing ZIM file
+                    zim_files = list(import_full_path.glob("*.zim"))
+                    if zim_files:
+                        zim_source = zim_files[0]
+
+            if zim_source and zim_source.exists():
+                # Move ZIM file into source folder
+                zim_dest = source_path / f"{source_id}.zim"
+                try:
+                    shutil.move(str(zim_source), str(zim_dest))
+                    zim_moved = True
+                    import_info = {
+                        "path": str(zim_dest),
+                        "original": str(zim_source),
+                        "moved": True,
+                        "size_mb": round(zim_dest.stat().st_size / (1024*1024), 2)
+                    }
+
+                    # Auto-extract ZIM metadata and update manifest
+                    try:
+                        from offline_tools.zim_utils import get_zim_metadata
+                        zim_meta = get_zim_metadata(str(zim_dest))
+                        if "error" not in zim_meta:
+                            # Update source config with ZIM metadata
+                            if zim_meta.get("title"):
+                                source_config["name"] = zim_meta["title"]
+                            if zim_meta.get("description"):
+                                source_config["description"] = zim_meta["description"]
+                            if zim_meta.get("license"):
+                                source_config["license"] = zim_meta["license"]
+                            if zim_meta.get("source_url"):
+                                source_config["base_url"] = zim_meta["source_url"]
+                            # Save updated manifest
+                            with open(manifest_file, 'w', encoding='utf-8') as f:
+                                json.dump(source_config, f, indent=2)
+                            import_info["metadata_extracted"] = True
+                    except ImportError:
+                        pass  # zimply-core not installed
+
+                except Exception as move_err:
+                    import_info = {
+                        "path": str(zim_source),
+                        "exists": True,
+                        "move_error": str(move_err)
+                    }
+            else:
+                import_info = {
+                    "path": str(import_full_path),
+                    "exists": False,
+                    "error": "ZIM file not found at specified path"
+                }
+
+        elif request.import_path:
+            # Non-ZIM import path handling (existing behavior)
             import_full_path = Path(backup_folder) / request.import_path
             if import_full_path.exists():
                 import_info = {"path": str(import_full_path), "exists": True}
                 if import_full_path != source_path:
                     import_info["note"] = f"Files exist at {request.import_path}. Use Scan Backup to import."
+
+        # Sync master to add new source
+        try:
+            from offline_tools.packager import sync_master_metadata
+            sync_master_metadata()
+        except Exception as e:
+            print(f"Warning: Could not sync master after source creation: {e}")
 
         return {
             "status": "success",
@@ -415,7 +541,8 @@ async def create_source(request: CreateSourceRequest):
             "backup_type": backup_type,
             "path": str(source_path),
             "import_info": import_info,
-            "message": f"Source '{source_id}' created successfully"
+            "zim_moved": zim_moved,
+            "message": f"Source '{source_id}' created successfully" + (" (ZIM file imported)" if zim_moved else "")
         }
 
     except Exception as e:
@@ -457,27 +584,45 @@ async def scan_backup(request: SourceIdRequest):
 
 @router.post("/generate-metadata")
 async def generate_metadata(request: SourceIdRequest):
-    """Generate metadata from backup files"""
-    try:
-        from offline_tools.source_manager import SourceManager
+    """
+    Generate metadata from backup files.
+    Runs as a background job since large sources can take a while.
+    """
+    from admin.job_manager import get_job_manager
 
+    def _run_generate_metadata(source_id: str, progress_callback=None):
+        from offline_tools.source_manager import SourceManager
         manager = SourceManager()
-        result = manager.generate_metadata(request.source_id)
+        result = manager.generate_metadata(source_id, progress_callback=progress_callback)
 
         if not result.get("success", True):
-            raise HTTPException(400, result.get("error", "Metadata generation failed"))
+            return {"status": "error", "error": result.get("error", "Metadata generation failed")}
 
         return {
             "status": "success",
-            "source_id": request.source_id,
+            "source_id": source_id,
             "document_count": result.get("document_count", 0),
             "message": f"Generated metadata for {result.get('document_count', 0)} documents"
         }
 
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(500, f"Metadata generation failed: {e}")
+    manager = get_job_manager()
+
+    try:
+        job_id = manager.submit(
+            "metadata",
+            request.source_id,
+            _run_generate_metadata,
+            request.source_id
+        )
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+
+    return {
+        "status": "submitted",
+        "job_id": job_id,
+        "source_id": request.source_id,
+        "message": "Metadata generation started"
+    }
 
 
 @router.post("/create-index")
@@ -485,14 +630,16 @@ async def create_index(request: CreateIndexRequest):
     """Create vector embeddings for a source (runs as background job)"""
     from admin.job_manager import get_job_manager
 
-    def _run_create_index(source_id: str, limit: int, force: bool, progress_callback=None):
+    def _run_create_index(source_id: str, limit: int, force: bool,
+                          language_filter: str = None, progress_callback=None):
         from offline_tools.source_manager import SourceManager
         manager = SourceManager()
         return manager.create_index(
             source_id,
             limit=limit,
-            force_reindex=force,
-            progress_callback=progress_callback
+            skip_existing=not force,  # force=True means skip_existing=False
+            progress_callback=progress_callback,
+            language_filter=language_filter
         )
 
     manager = get_job_manager()
@@ -504,18 +651,21 @@ async def create_index(request: CreateIndexRequest):
             _run_create_index,
             request.source_id,
             request.limit,
-            request.force_reindex
+            request.force_reindex,
+            request.language_filter
         )
     except ValueError as e:
         raise HTTPException(409, str(e))
 
+    lang_msg = f" (language: {request.language_filter})" if request.language_filter else ""
     return {
         "status": "submitted",
         "job_id": job_id,
         "source_id": request.source_id,
         "limit": request.limit,
         "force_reindex": request.force_reindex,
-        "message": f"Index creation started for {request.source_id}"
+        "language_filter": request.language_filter,
+        "message": f"Index creation started for {request.source_id}{lang_msg}"
     }
 
 
@@ -701,4 +851,226 @@ async def delete_source(request: DeleteSourceRequest):
         "freed_mb": round(freed_mb, 2),
         "errors": errors if errors else None,
         "message": f"Deleted {source_id}: {', '.join(deleted_items)}"
+    }
+
+
+# =============================================================================
+# ZIM FILE TOOLS
+# =============================================================================
+
+class ZIMInspectRequest(BaseModel):
+    """Request model for ZIM inspection"""
+    zim_path: str
+    scan_limit: int = 5000
+    min_text_length: int = 50
+
+
+class ZIMIndexRequest(BaseModel):
+    """Request model for ZIM indexing"""
+    zim_path: str
+    source_id: str
+    limit: int = 1000
+
+
+@router.get("/zim/list")
+async def list_zim_files():
+    """
+    List all ZIM files found in the backup folder.
+    Used to populate the ZIM file selector in the UI.
+    """
+    from pathlib import Path as PathLib
+
+    config = get_local_config()
+    backup_folder = config.get_backup_folder()
+
+    if not backup_folder:
+        return {"zim_files": [], "error": "No backup folder configured"}
+
+    # Debug info
+    folder_path = PathLib(backup_folder)
+    folder_exists = folder_path.exists()
+    folder_is_dir = folder_path.is_dir() if folder_exists else False
+
+    try:
+        from offline_tools.zim_utils import find_zim_files
+        zim_files = find_zim_files(backup_folder)
+        return {
+            "zim_files": zim_files,
+            "backup_folder": backup_folder,
+            "debug": {
+                "folder_exists": folder_exists,
+                "folder_is_dir": folder_is_dir,
+                "folder_path_resolved": str(folder_path.resolve()) if folder_exists else None
+            }
+        }
+    except Exception as e:
+        import traceback
+        return {"zim_files": [], "error": str(e), "traceback": traceback.format_exc()}
+
+
+@router.post("/zim/inspect")
+async def inspect_zim_file(request: ZIMInspectRequest):
+    """
+    Inspect a ZIM file and return detailed analysis.
+    Runs as a background job since large ZIM files can take several minutes.
+
+    Returns immediately with a job_id to poll for results.
+    """
+    from admin.job_manager import get_job_manager
+    from pathlib import Path as PathLib
+
+    # Validate ZIM file exists
+    zim_path = PathLib(request.zim_path)
+    if not zim_path.exists():
+        raise HTTPException(404, f"ZIM file not found: {request.zim_path}")
+
+    # Extract source_id from path for job tracking
+    source_id = zim_path.stem
+
+    def _run_zim_inspect(zim_path: str, scan_limit: int, min_text_length: int, progress_callback=None):
+        """Background job function for ZIM inspection"""
+        from offline_tools.zim_utils import inspect_zim_file as do_inspect
+
+        result = do_inspect(
+            zim_path=zim_path,
+            scan_limit=scan_limit,
+            min_text_length=min_text_length,
+            progress_callback=progress_callback
+        )
+
+        if result.error:
+            return {"status": "error", "error": result.error}
+
+        return {
+            "status": "success",
+            **result.to_dict()
+        }
+
+    manager = get_job_manager()
+
+    try:
+        job_id = manager.submit(
+            "zim_inspect",
+            source_id,
+            _run_zim_inspect,
+            str(zim_path),
+            request.scan_limit,
+            request.min_text_length
+        )
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+
+    return {
+        "status": "submitted",
+        "job_id": job_id,
+        "zim_path": str(zim_path),
+        "scan_limit": request.scan_limit,
+        "message": f"ZIM inspection started (scanning up to {request.scan_limit} articles)"
+    }
+
+
+@router.get("/zim/metadata/{source_id}")
+async def get_zim_metadata(source_id: str):
+    """
+    Get just the metadata from a ZIM file (quick operation).
+    Useful for auto-populating source configuration.
+    """
+    config = get_local_config()
+    backup_folder = config.get_backup_folder()
+
+    if not backup_folder:
+        raise HTTPException(400, "No backup folder configured")
+
+    # Find the ZIM file for this source
+    source_folder = Path(backup_folder) / source_id
+    zim_path = None
+
+    if source_folder.exists():
+        zim_files = list(source_folder.glob("*.zim"))
+        if zim_files:
+            zim_path = zim_files[0]
+
+    if not zim_path:
+        # Try root level
+        zim_path = Path(backup_folder) / f"{source_id}.zim"
+
+    if not zim_path or not zim_path.exists():
+        raise HTTPException(404, f"No ZIM file found for source: {source_id}")
+
+    try:
+        from offline_tools.zim_utils import get_zim_metadata as do_get_metadata
+
+        metadata = do_get_metadata(str(zim_path))
+
+        if "error" in metadata:
+            raise HTTPException(400, metadata["error"])
+
+        return {
+            "status": "success",
+            "source_id": source_id,
+            "zim_path": str(zim_path),
+            **metadata
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"Failed to get metadata: {e}")
+
+
+@router.post("/zim/index")
+async def index_zim_file(request: ZIMIndexRequest):
+    """
+    Index a ZIM file as a new source.
+    Runs as a background job with progress tracking.
+    """
+    from admin.job_manager import get_job_manager
+
+    # Validate source_id format
+    import re
+    source_id = request.source_id.strip().lower()
+    if not re.match(r'^[a-z0-9][a-z0-9_-]*$', source_id):
+        raise HTTPException(400, "Invalid source ID format")
+
+    # Check ZIM file exists
+    zim_path = Path(request.zim_path)
+    if not zim_path.exists():
+        raise HTTPException(404, f"ZIM file not found: {request.zim_path}")
+
+    def _run_zim_index(zim_path: str, source_id: str, limit: int, progress_callback=None):
+        """Background job function for ZIM indexing"""
+        from offline_tools.indexer import ZIMIndexer
+
+        config = get_local_config()
+        backup_folder = config.get_backup_folder()
+
+        indexer = ZIMIndexer(
+            zim_path=zim_path,
+            source_id=source_id,
+            backup_folder=backup_folder
+        )
+
+        return indexer.index(limit=limit, progress_callback=progress_callback)
+
+    manager = get_job_manager()
+
+    try:
+        job_id = manager.submit(
+            "zim_index",
+            source_id,
+            _run_zim_index,
+            str(zim_path),
+            source_id,
+            request.limit
+        )
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+
+    return {
+        "status": "submitted",
+        "job_id": job_id,
+        "source_id": source_id,
+        "zim_path": str(zim_path),
+        "limit": request.limit,
+        "message": f"ZIM indexing started for {source_id}"
     }

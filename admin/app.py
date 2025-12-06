@@ -288,6 +288,7 @@ class SettingsUpdate(BaseModel):
     auto_fallback: Optional[bool] = None
     selected_sources: Optional[List[str]] = None
     cache_responses: Optional[bool] = None
+    prompts: Optional[Dict[str, str]] = None  # {"online": "...", "offline": "..."}
 
 
 # Routes
@@ -342,6 +343,11 @@ async def update_settings(updates: SettingsUpdate):
     if updates.cache_responses is not None:
         config.set("cache_responses", updates.cache_responses)
 
+    if updates.prompts is not None:
+        for mode, prompt in updates.prompts.items():
+            if mode in ["online", "offline"]:
+                config.set_prompt(mode, prompt)
+
     if config.save():
         return {"status": "success", "settings": config.config}
     else:
@@ -371,6 +377,31 @@ async def update_backup_path(update: BackupPathUpdate):
         return {"status": "success", "path_type": update.path_type, "path": update.path}
     else:
         raise HTTPException(status_code=500, detail="Failed to save settings")
+
+
+@router.post("/api/reset-prompt/{mode}")
+async def reset_prompt(mode: str):
+    """Reset a prompt to its default value"""
+    if mode not in ["online", "offline"]:
+        raise HTTPException(status_code=400, detail="Mode must be 'online' or 'offline'")
+
+    config = get_local_config()
+    default_prompt = config.reset_prompt(mode)
+
+    if config.save():
+        return {"status": "success", "mode": mode, "prompt": default_prompt}
+    else:
+        raise HTTPException(status_code=500, detail="Failed to save settings")
+
+
+@router.get("/api/prompts")
+async def get_prompts():
+    """Get current prompts"""
+    config = get_local_config()
+    return {
+        "prompts": config.get_prompts(),
+        "defaults": config.DEFAULT_CONFIG["prompts"]
+    }
 
 
 @router.post("/api/offline-mode")

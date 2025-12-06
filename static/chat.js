@@ -64,12 +64,24 @@ function renderArticles(articles) {
 
     articlesList.innerHTML = articles.map((article, idx) => {
         const url = article.url || '';
-        const isZimUrl = url.startsWith('zim://');
+        const isLocalZim = url.startsWith('/zim/');
+        const isExternalUrl = url.startsWith('http://') || url.startsWith('https://');
 
-        // For ZIM URLs, show title without link; for real URLs, make it clickable
-        const titleHtml = isZimUrl
-            ? `<span class="zim-title">${escapeHtml(article.title)}</span><span class="zim-badge">offline</span>`
-            : `<a href="${escapeHtml(url)}" target="_blank">${escapeHtml(article.title)}</a>`;
+        // Build the title HTML with appropriate link
+        let titleHtml;
+        if (isLocalZim) {
+            // Local ZIM URL - opens in new tab to preserve chat history
+            titleHtml = `<a href="${escapeHtml(url)}" target="_blank" class="zim-link">${escapeHtml(article.title)}</a><span class="zim-badge">local</span>`;
+        } else if (isExternalUrl) {
+            // External URL - opens in new tab
+            titleHtml = `<a href="${escapeHtml(url)}" target="_blank">${escapeHtml(article.title)}</a>`;
+        } else if (url.startsWith('zim://')) {
+            // Fallback for unconverted zim:// URLs (should not happen)
+            titleHtml = `<span class="zim-title">${escapeHtml(article.title)}</span><span class="zim-badge">offline</span>`;
+        } else {
+            // No URL or unknown format
+            titleHtml = `<span>${escapeHtml(article.title)}</span>`;
+        }
 
         return `
             <div class="article-card">
@@ -79,7 +91,7 @@ function renderArticles(articles) {
                     <span class="score-badge">${(article.score * 100).toFixed(0)}% match</span>
                 </h3>
                 <div class="article-meta">
-                    Source: ${escapeHtml(article.source)}
+                    Source: ${escapeHtml(article.source)}${isLocalZim ? ' (offline)' : ''}
                 </div>
                 <div class="article-snippet">${escapeHtml(article.snippet)}</div>
             </div>
@@ -87,7 +99,7 @@ function renderArticles(articles) {
     }).join('');
 }
 
-// Send chat message
+// Send chat message with streaming
 async function sendMessage(message) {
     if (!message.trim()) return;
 
@@ -108,12 +120,12 @@ async function sendMessage(message) {
         };
 
         // Add source filter if not all sources selected
-        // null = all sources, [] = none, [ids] = specific sources
         if (selectedSources !== null) {
             requestBody.sources = selectedSources;
         }
 
-        const response = await fetch('/chat', {
+        // Use streaming endpoint
+        const response = await fetch('/api/v1/chat/stream', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
@@ -121,22 +133,78 @@ async function sendMessage(message) {
             body: JSON.stringify(requestBody)
         });
 
-        const data = await response.json();
+        if (!response.ok) {
+            throw new Error('Network response was not ok');
+        }
 
-        // Store session ID for conversation continuity
-        sessionId = data.session_id;
+        // Create a placeholder for the streaming response
+        const messageDiv = document.createElement('div');
+        messageDiv.className = 'message assistant';
+        messageDiv.innerHTML = '<div class="message-content"></div>';
+        chatMessages.appendChild(messageDiv);
+        const contentDiv = messageDiv.querySelector('.message-content');
 
-        // Add assistant response
-        addMessage(data.response);
+        // Hide loading once we start receiving
+        loading.classList.remove('active');
 
-        // Update articles panel
-        renderArticles(data.articles);
+        // Read the stream
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let fullResponse = '';
+        let buffer = '';  // Buffer to handle partial SSE messages
+
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            // Append new data to buffer
+            buffer += decoder.decode(value, { stream: true });
+
+            // Process complete SSE messages (separated by \n\n)
+            const messages = buffer.split('\n\n');
+
+            // Keep the last part in buffer (may be incomplete)
+            buffer = messages.pop() || '';
+
+            for (const message of messages) {
+                const lines = message.split('\n');
+                for (const line of lines) {
+                    if (line.startsWith('data: ')) {
+                        const data = line.substring(6);
+
+                        if (data === '[DONE]') {
+                            // Stream complete - parse markdown
+                            contentDiv.innerHTML = parseMarkdown(fullResponse);
+                            chatMessages.scrollTop = chatMessages.scrollHeight;
+                        } else if (data.startsWith('[ARTICLES]')) {
+                            // Parse articles JSON
+                            try {
+                                const articlesJson = data.substring(10);
+                                const articles = JSON.parse(articlesJson);
+                                renderArticles(articles);
+                            } catch (e) {
+                                console.error('Failed to parse articles:', e);
+                            }
+                        } else if (data.startsWith('[ERROR]')) {
+                            fullResponse += 'Error: ' + data.substring(7);
+                        } else {
+                            // Regular text chunk - unescape newlines
+                            const text = data.replace(/\\n/g, '\n');
+                            fullResponse += text;
+                            // Update display with escaped HTML (will parse markdown at end)
+                            contentDiv.textContent = fullResponse;
+                            chatMessages.scrollTop = chatMessages.scrollHeight;
+                        }
+                    }
+                }
+            }
+        }
 
     } catch (error) {
         console.error('Error:', error);
         addMessage('Sorry, there was an error processing your request. Please try again.');
-    } finally {
         loading.classList.remove('active');
+    } finally {
         sendBtn.disabled = false;
         userInput.focus();
     }
@@ -163,9 +231,13 @@ function parseMarkdown(text) {
     html = html.replace(/^# (.+)$/gm, '<h2 class="md-header">$1</h2>');
 
     // Convert markdown links [text](url) to clickable links
-    // Only allow http, https URLs for safety
+    // Allow http, https URLs (external - opens in new tab)
     html = html.replace(/\[([^\]]+)\]\((https?:\/\/[^\)]+)\)/g,
         '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+
+    // Also allow local /zim/ URLs (opens in new tab to preserve chat history)
+    html = html.replace(/\[([^\]]+)\]\((\/zim\/[^\)]+)\)/g,
+        '<a href="$2" target="_blank" class="zim-link">$1</a>');
 
     // Convert bold **text** to <strong>
     html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
@@ -281,12 +353,13 @@ function onSourceChange() {
 
 // Update the toggle button text
 function updateToggleButton() {
-    if (selectedSources === null || selectedSources.length === Object.keys(availableSources).length) {
-        toggleSourcesBtn.textContent = 'Select Sources (All)';
+    const totalSources = Object.keys(availableSources).length;
+    if (selectedSources === null || selectedSources.length === totalSources) {
+        toggleSourcesBtn.textContent = `Select Sources (${totalSources}/${totalSources})`;
     } else if (selectedSources.length === 0) {
-        toggleSourcesBtn.textContent = 'Select Sources (None)';
+        toggleSourcesBtn.textContent = `Select Sources (0/${totalSources})`;
     } else {
-        toggleSourcesBtn.textContent = `Select Sources (${selectedSources.length})`;
+        toggleSourcesBtn.textContent = `Select Sources (${selectedSources.length}/${totalSources})`;
     }
 }
 
@@ -318,7 +391,41 @@ toggleSourcesBtn.addEventListener('click', toggleSourcesPanel);
 selectAllBtn.addEventListener('click', selectAllSources);
 selectNoneBtn.addEventListener('click', selectNoSources);
 
+// Connection status - uses unified endpoint
+async function loadConnectionStatus() {
+    try {
+        const response = await fetch('/api/v1/connection-status');
+        const data = await response.json();
+
+        const dot = document.getElementById('connectionDot');
+        const label = document.getElementById('connectionLabel');
+        const container = document.getElementById('connectionStatus');
+
+        if (dot && label) {
+            // Map state to CSS class
+            const stateClass = data.state || 'online';
+            dot.className = 'connection-dot ' + stateClass;
+            label.textContent = data.state_label || 'Unknown';
+
+            // Update tooltip with full message
+            if (container && data.message) {
+                container.title = data.message;
+            }
+        }
+    } catch (e) {
+        console.error('Failed to load connection status:', e);
+        const label = document.getElementById('connectionLabel');
+        if (label) {
+            label.textContent = 'Error';
+        }
+    }
+}
+
+// Refresh connection status periodically (every 30 seconds)
+setInterval(loadConnectionStatus, 30000);
+
 // Initialize
 loadWelcome();
 loadSources();
+loadConnectionStatus();
 userInput.focus();
