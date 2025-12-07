@@ -6,9 +6,17 @@
 // Mode Toggle - Local/Global test mode switching
 // ============================================================================
 
-// Get current test mode (local or global)
+// Server's default mode from VECTOR_DB_MODE env var (fetched on init)
+let serverDefaultMode = 'local';
+
+// Get current effective mode (toggle override or server default)
 function getTestMode() {
-    return localStorage.getItem('testMode') || 'local';
+    const toggleOverride = localStorage.getItem('adminModeOverride');
+    // If toggle has been used, return that; otherwise return server default
+    if (toggleOverride !== null) {
+        return toggleOverride;
+    }
+    return serverDefaultMode;
 }
 
 // Check if in global test mode
@@ -22,12 +30,20 @@ function updateModeUI() {
     const toggle = document.getElementById('modeToggle');
     const label = document.getElementById('modeLabel');
     const checkbox = document.getElementById('modeCheckbox');
+    const badge = document.getElementById('modeBadge');
 
     if (!toggle || !label || !checkbox) return;
 
     checkbox.checked = isGlobal;
     toggle.classList.toggle('global', isGlobal);
     label.textContent = isGlobal ? 'Global' : 'Local';
+
+    // Show TEST badge only when toggle is overriding the server default
+    const toggleOverride = localStorage.getItem('adminModeOverride');
+    if (badge) {
+        const isOverriding = toggleOverride !== null && toggleOverride !== serverDefaultMode;
+        badge.style.display = isOverriding ? 'inline' : 'none';
+    }
 
     // Update global-only features visibility
     updateGlobalFeatures();
@@ -48,17 +64,38 @@ function updateGlobalFeatures() {
     window.dispatchEvent(new CustomEvent('modeUIUpdated', { detail: { isGlobal } }));
 }
 
-// Toggle between local and global mode
+// Toggle between local and global mode (temporary override for testing)
 function toggleMode() {
     const checkbox = document.getElementById('modeCheckbox');
     const newMode = checkbox.checked ? 'global' : 'local';
 
-    localStorage.setItem('testMode', newMode);
+    // Store as override
+    localStorage.setItem('adminModeOverride', newMode);
     updateModeUI();
 
     // Dispatch event for other components to react
     window.dispatchEvent(new CustomEvent('testModeChanged', { detail: { mode: newMode, isGlobal: checkbox.checked } }));
-    console.log('Test mode switched to:', newMode);
+    console.log('Test mode override set to:', newMode, '(server default:', serverDefaultMode, ')');
+}
+
+// Clear the toggle override and use server default
+function resetToServerDefault() {
+    localStorage.removeItem('adminModeOverride');
+    updateModeUI();
+    console.log('Reset to server default mode:', serverDefaultMode);
+}
+
+// Fetch and apply server's default mode from VECTOR_DB_MODE
+async function initServerMode() {
+    try {
+        const resp = await fetch('/useradmin/api/admin-mode');
+        const data = await resp.json();
+        serverDefaultMode = data.mode || 'local';
+        console.log('Server VECTOR_DB_MODE:', serverDefaultMode);
+        updateModeUI();
+    } catch (e) {
+        console.error('Could not fetch admin mode, defaulting to local:', e);
+    }
 }
 
 // ============================================================================
@@ -160,12 +197,17 @@ async function apiFetch(url, options = {}) {
 // Initialization
 // ============================================================================
 
-// Initialize mode from localStorage when DOM is ready
+// Initialize: fetch server mode then update UI
+async function initAdmin() {
+    await initServerMode();
+}
+
+// Initialize when DOM is ready
 document.addEventListener('DOMContentLoaded', function() {
-    updateModeUI();
+    initAdmin();
 });
 
 // Also initialize immediately if DOM is already loaded
 if (document.readyState !== 'loading') {
-    updateModeUI();
+    initAdmin();
 }

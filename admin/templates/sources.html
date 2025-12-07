@@ -414,19 +414,19 @@
                     </div>
                     ${statusBoxesHtml}
                     <div class="actions">
-                        ${source.is_cloud ? `
+                        ${source.is_local ? `
+                            <button class="btn-small btn-edit" onclick="window.location.href='/useradmin/sources/tools?source=${source.source_id}&step=2'">
+                                Edit
+                            </button>
+                            ${source.is_cloud ? `<span style="color: #4ecca3; font-size: 0.7rem; margin-left: 0.5rem;">(from cloud)</span>` : ''}
+                        ` : source.is_cloud ? `
                             <button class="btn-small btn-install" onclick="installSource('${source.source_id}', false)" title="Download vectors only for search">
                                 Index Only
                             </button>
                             <button class="btn-small btn-install" onclick="installSource('${source.source_id}', true)" style="background: #1a5f3c;" title="Download vectors + backup files for offline viewing">
                                 Full Install
                             </button>
-                            ${source.is_local ? `<span style="color: #4ecca3; font-size: 0.7rem; margin-left: 0.5rem;">(installed)</span>` : ''}
-                        ` : `
-                            <button class="btn-small btn-edit" onclick="window.location.href='/useradmin/sources/tools?source=${source.source_id}'">
-                                Edit
-                            </button>
-                        `}
+                        ` : ''}
                     </div>
                 </div>
             `;

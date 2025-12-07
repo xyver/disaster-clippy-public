@@ -35,23 +35,23 @@
     <div class="container">
         <!-- Quick Stats -->
         <div class="section">
-            <h2>Quick Stats</h2>
+            <h2 id="statsHeader">Quick Stats</h2>
             <div class="stats-grid">
                 <div class="stat-card">
                     <div class="stat-value" id="totalSources">-</div>
-                    <div class="stat-label">Total Sources</div>
+                    <div class="stat-label" id="sourcesLabel">Local Sources</div>
                 </div>
                 <div class="stat-card">
                     <div class="stat-value" id="totalDocs">-</div>
-                    <div class="stat-label">Total Documents</div>
+                    <div class="stat-label" id="docsLabel">Total Documents</div>
                 </div>
                 <div class="stat-card">
                     <div class="stat-value" id="storageUsed">-</div>
-                    <div class="stat-label">Storage Used</div>
+                    <div class="stat-label" id="storageLabel">Backup Storage</div>
                 </div>
                 <div class="stat-card">
                     <div class="stat-value" id="vectorCount">-</div>
-                    <div class="stat-label">Vectors in Pinecone</div>
+                    <div class="stat-label" id="vectorLabel">Vectors in ChromaDB</div>
                 </div>
             </div>
         </div>
@@ -60,21 +60,17 @@
         <div class="section">
             <h2>Connection Status</h2>
             <div class="stats-grid">
+                <div class="stat-card" id="vectorDbStatus">
+                    <div class="stat-value" style="font-size: 1rem;">Checking...</div>
+                    <div class="stat-label" id="vectorDbLabel">ChromaDB (Local)</div>
+                </div>
                 <div class="stat-card" id="r2Status">
                     <div class="stat-value" style="font-size: 1rem;">Checking...</div>
                     <div class="stat-label">R2 Cloud Storage</div>
                 </div>
-                <div class="stat-card" id="pineconeStatus">
+                <div class="stat-card" id="connectionStatus">
                     <div class="stat-value" style="font-size: 1rem;">Checking...</div>
-                    <div class="stat-label">Pinecone Vector DB</div>
-                </div>
-                <div class="stat-card" id="connectionModeStatus">
-                    <div class="stat-value" style="font-size: 1rem;">Checking...</div>
-                    <div class="stat-label">Connection Mode</div>
-                </div>
-                <div class="stat-card" id="connectionStateStatus">
-                    <div class="stat-value" style="font-size: 1rem;">Checking...</div>
-                    <div class="stat-label">Connection State</div>
+                    <div class="stat-label" id="connectionLabel">Connection</div>
                     <div class="stat-message" id="connectionMessage" style="font-size: 0.75rem; color: #888; margin-top: 0.25rem;"></div>
                 </div>
             </div>
@@ -91,65 +87,90 @@
 
     <script src="/admin/static/admin-common.js"></script>
     <script>
+        // Use isGlobalTestMode() from admin-common.js for consistency
+        function isGlobalMode() {
+            return isGlobalTestMode();
+        }
+
         async function loadDashboard() {
-            // Load stats
+            // Wait for admin-common.js to initialize server mode
+            // The serverDefaultMode is set by initServerMode() in admin-common.js
+            const globalMode = isGlobalMode();
+
+            // Update labels based on mode
+            if (globalMode) {
+                document.getElementById('statsHeader').textContent = 'Cloud Stats';
+                document.getElementById('sourcesLabel').textContent = 'Source Packages';
+                document.getElementById('docsLabel').textContent = 'Documents in Cloud';
+                document.getElementById('storageLabel').textContent = 'Cloud Storage';
+                document.getElementById('vectorLabel').textContent = 'Vectors in Pinecone';
+                document.getElementById('vectorDbLabel').textContent = 'Pinecone';
+            } else {
+                document.getElementById('statsHeader').textContent = 'Local Stats';
+                document.getElementById('sourcesLabel').textContent = 'Local Sources';
+                document.getElementById('docsLabel').textContent = 'Total Documents';
+                document.getElementById('storageLabel').textContent = 'Backup Storage';
+                document.getElementById('vectorLabel').textContent = 'Vectors in ChromaDB';
+                document.getElementById('vectorDbLabel').textContent = 'ChromaDB (Local)';
+            }
+
+            // Load local stats (always available)
             try {
                 const statusResp = await fetch('/useradmin/api/status');
                 const status = await statusResp.json();
 
-                document.getElementById('totalSources').textContent = status.local_sources || 0;
-                document.getElementById('totalDocs').textContent = (status.total_documents || 0).toLocaleString();
-                document.getElementById('storageUsed').textContent = status.storage_mb ? status.storage_mb + ' MB' : '-';
+                if (!globalMode) {
+                    document.getElementById('totalSources').textContent = status.local_sources || 0;
+                    document.getElementById('totalDocs').textContent = (status.total_documents || 0).toLocaleString();
+                    document.getElementById('storageUsed').textContent = status.storage_mb ? status.storage_mb + ' MB' : '-';
+                }
             } catch (e) {
                 console.error('Error loading status:', e);
             }
 
-            // Load connection mode from settings
-            try {
-                const settingsResp = await fetch('/useradmin/api/settings');
-                const settings = await settingsResp.json();
-                const mode = settings.settings?.offline_mode || 'hybrid';
+            // Load ChromaDB status (for local mode)
+            if (!globalMode) {
+                try {
+                    const chromaResp = await fetch('/useradmin/api/chromadb-status');
+                    const chroma = await chromaResp.json();
+                    const chromaCard = document.getElementById('vectorDbStatus');
 
-                const modeCard = document.getElementById('connectionModeStatus');
-                const modeLabels = {
-                    'online_only': 'Online',
-                    'hybrid': 'Hybrid',
-                    'offline_only': 'Offline'
-                };
-                const modeColors = {
-                    'online_only': '#4ecca3',
-                    'hybrid': '#f9a825',
-                    'offline_only': '#e94560'
-                };
-
-                modeCard.querySelector('.stat-value').textContent = modeLabels[mode] || mode;
-                modeCard.querySelector('.stat-value').style.color = modeColors[mode] || '#888';
-            } catch (e) {
-                console.error('Error loading connection mode:', e);
-                document.getElementById('connectionModeStatus').querySelector('.stat-value').textContent = 'Error';
+                    if (chroma.connected) {
+                        chromaCard.querySelector('.stat-value').textContent = 'Connected';
+                        chromaCard.querySelector('.stat-value').style.color = '#4ecca3';
+                        document.getElementById('vectorCount').textContent = (chroma.total_vectors || 0).toLocaleString();
+                    } else {
+                        chromaCard.querySelector('.stat-value').textContent = 'Not Available';
+                        chromaCard.querySelector('.stat-value').style.color = '#f9a825';
+                    }
+                } catch (e) {
+                    document.getElementById('vectorDbStatus').querySelector('.stat-value').textContent = 'Error';
+                }
             }
 
-            // Load connection state (live status)
+            // Load Pinecone status (for global mode, or just status check)
             try {
-                const stateResp = await fetch('/api/v1/connection-status');
-                const stateData = await stateResp.json();
+                const pcResp = await fetch('/useradmin/api/pinecone-status');
+                const pc = await pcResp.json();
 
-                const stateCard = document.getElementById('connectionStateStatus');
-                const stateColors = {
-                    'green': '#4ecca3',
-                    'blue': '#4a9eff',
-                    'yellow': '#f9a825',
-                    'orange': '#ff9800',
-                    'red': '#e94560',
-                    'gray': '#888'
-                };
-
-                stateCard.querySelector('.stat-value').textContent = stateData.state_label || 'Unknown';
-                stateCard.querySelector('.stat-value').style.color = stateColors[stateData.state_color] || '#888';
-                document.getElementById('connectionMessage').textContent = stateData.message || '';
+                if (globalMode) {
+                    // Global mode: show Pinecone as main vector DB
+                    const pcCard = document.getElementById('vectorDbStatus');
+                    if (pc.connected) {
+                        pcCard.querySelector('.stat-value').textContent = 'Connected';
+                        pcCard.querySelector('.stat-value').style.color = '#4ecca3';
+                        document.getElementById('vectorCount').textContent = (pc.total_vectors || 0).toLocaleString();
+                        // Also update cloud stats
+                        document.getElementById('totalDocs').textContent = (pc.total_vectors || 0).toLocaleString();
+                    } else {
+                        pcCard.querySelector('.stat-value').textContent = pc.configured ? 'Disconnected' : 'Not Configured';
+                        pcCard.querySelector('.stat-value').style.color = pc.configured ? '#e94560' : '#f9a825';
+                    }
+                }
             } catch (e) {
-                console.error('Error loading connection state:', e);
-                document.getElementById('connectionStateStatus').querySelector('.stat-value').textContent = 'Error';
+                if (globalMode) {
+                    document.getElementById('vectorDbStatus').querySelector('.stat-value').textContent = 'Error';
+                }
             }
 
             // Load R2 status
@@ -160,6 +181,13 @@
                 if (r2.connected) {
                     r2Card.querySelector('.stat-value').textContent = 'Connected';
                     r2Card.querySelector('.stat-value').style.color = '#4ecca3';
+                    // For global mode, show cloud storage size
+                    if (globalMode && r2.total_size_mb) {
+                        document.getElementById('storageUsed').textContent = r2.total_size_mb + ' MB';
+                    }
+                    if (globalMode && r2.source_count) {
+                        document.getElementById('totalSources').textContent = r2.source_count;
+                    }
                 } else {
                     r2Card.querySelector('.stat-value').textContent = r2.configured ? 'Disconnected' : 'Not Configured';
                     r2Card.querySelector('.stat-value').style.color = r2.configured ? '#e94560' : '#f9a825';
@@ -168,25 +196,67 @@
                 document.getElementById('r2Status').querySelector('.stat-value').textContent = 'Error';
             }
 
-            // Load Pinecone status
+            // Load connection state (combined mode + state display)
             try {
-                const pcResp = await fetch('/useradmin/api/pinecone-status');
-                const pc = await pcResp.json();
-                const pcCard = document.getElementById('pineconeStatus');
-                if (pc.connected) {
-                    pcCard.querySelector('.stat-value').textContent = 'Connected';
-                    pcCard.querySelector('.stat-value').style.color = '#4ecca3';
-                    document.getElementById('vectorCount').textContent = (pc.total_vectors || 0).toLocaleString();
-                } else {
-                    pcCard.querySelector('.stat-value').textContent = pc.configured ? 'Disconnected' : 'Not Configured';
-                    pcCard.querySelector('.stat-value').style.color = pc.configured ? '#e94560' : '#f9a825';
+                const [settingsResp, stateResp] = await Promise.all([
+                    fetch('/useradmin/api/settings'),
+                    fetch('/api/v1/connection-status')
+                ]);
+                const settings = await settingsResp.json();
+                const stateData = await stateResp.json();
+
+                const mode = settings.settings?.offline_mode || 'hybrid';
+                const modeLabels = { 'online_only': 'Online', 'hybrid': 'Hybrid', 'offline_only': 'Offline' };
+
+                const connCard = document.getElementById('connectionStatus');
+                const stateColors = {
+                    'green': '#4ecca3',
+                    'blue': '#4a9eff',
+                    'yellow': '#f9a825',
+                    'orange': '#ff9800',
+                    'red': '#e94560',
+                    'gray': '#888'
+                };
+
+                // Combined display: "Hybrid - Online" or "Offline Mode"
+                let displayText = stateData.state_label || 'Unknown';
+                if (mode !== 'offline_only' && stateData.is_online) {
+                    displayText = modeLabels[mode] + ' - Online';
+                } else if (mode === 'offline_only') {
+                    displayText = 'Offline Mode';
+                } else if (!stateData.is_online) {
+                    displayText = modeLabels[mode] + ' - Disconnected';
                 }
+
+                document.getElementById('connectionLabel').textContent = 'Mode';
+                connCard.querySelector('.stat-value').textContent = displayText;
+                connCard.querySelector('.stat-value').style.color = stateColors[stateData.state_color] || '#888';
+                document.getElementById('connectionMessage').textContent = stateData.message || '';
             } catch (e) {
-                document.getElementById('pineconeStatus').querySelector('.stat-value').textContent = 'Error';
+                console.error('Error loading connection status:', e);
+                document.getElementById('connectionStatus').querySelector('.stat-value').textContent = 'Error';
             }
         }
 
-        loadDashboard();
+        // Wait for admin-common.js to initialize, then load dashboard
+        // initServerMode() is called by admin-common.js on DOMContentLoaded
+        async function initDashboard() {
+            // Give admin-common.js time to fetch server mode
+            await initServerMode();
+            loadDashboard();
+        }
+
+        // Initialize when DOM is ready
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', initDashboard);
+        } else {
+            initDashboard();
+        }
+
+        // Re-load when mode toggle changes (from admin-common.js)
+        window.addEventListener('testModeChanged', () => {
+            loadDashboard();
+        });
     </script>
 </body>
 </html>

@@ -777,6 +777,34 @@ kill -9 <pid>
 - Reduce `n_results` in searches
 - Index only the sources you need
 
+### Large ZIM Indexing Issues
+
+When indexing large ZIM files (400k+ articles), several issues can occur:
+
+**Issue: Only a small number of documents indexed despite large source**
+
+Symptoms:
+- Metadata generation works (e.g., 490k docs in 35 min)
+- Indexing completes quickly (3 min) with only ~430 docs
+- All JSON files show the reduced count
+
+Root causes identified:
+1. **Limit defaulting to 1000**: The `indexLimit` input field has `max="50000"`. If the "Index All" button's `dataset.docCount` isn't read correctly, limit defaults to 1000.
+2. **Metadata overwrite bug** (FIXED): After indexing, `save_all_outputs()` was overwriting `_metadata.json` with only the indexed documents, destroying the full document list from "Generate Metadata".
+
+Fix applied:
+- Added `skip_metadata_save` parameter to `save_all_outputs()` in [indexer.py](offline_tools/indexer.py)
+- When `use_metadata=True`, the existing metadata is preserved
+
+To recover:
+1. Re-run "Generate Metadata" to restore full document list
+2. Re-run "Index All" - metadata will now be preserved
+
+**Planned improvements:**
+- Job checkpointing for resume after interruption
+- Batch processing with intermediate saves
+- Better debug logging for limit values
+
 ---
 
 ## Legacy Migration Code (DELETE AFTER MIGRATIONS COMPLETE)
@@ -935,6 +963,301 @@ The `_get_display_url()` helper in `app.py` selects the appropriate URL:
 |------------|-----------|----------|--------|
 | Railway (`PUBLIC_MODE=true`) | Pinecone | `url` | Online URLs |
 | Local admin | ChromaDB | `local_url` | Local viewer URLs |
+
+---
+
+## Job Cancellation
+
+The Jobs page includes a "Stop" button to cancel running jobs. This is a **soft cancel** - it marks the job status as cancelled but doesn't forcibly kill the running thread.
+
+**Current behavior:**
+- Job status updates to "cancelled" immediately in the UI
+- The background thread continues until it completes the current operation
+- Most jobs check for cancellation periodically and exit gracefully
+
+**For true immediate cancellation**, long-running functions should check `is_cancelled()` periodically:
+
+```python
+# Inside the indexing loop
+if job_manager.is_cancelled(job_id):
+    return {"success": False, "cancelled": True, "indexed_count": indexed}
+```
+
+**Jobs that support graceful cancellation:**
+- ZIM indexing (planned)
+- HTML scraping (planned)
+- Metadata generation (planned)
+
+---
+
+## Source Processing Pipeline
+
+Sources go through an 8-step processing pipeline before they're ready for distribution. The wizard UI groups these into 5 visible steps.
+
+### Pipeline Steps
+
+| Step | Substep | Action | Output File(s) | Completion Marker |
+|------|---------|--------|----------------|-------------------|
+| 1 | 1.1 | Get backup files (folder/download/scrape) | `pages/` or `.zim` | Files exist |
+| 1 | 1.2 | Scan backup / Generate backup manifest | `backup_manifest.json` | `pages` dict populated |
+| 2 | 2.1 | Configure source (name, description, license) | `_manifest.json` | `source_id`, `name`, `license` set |
+| 3 | 3.1 | Generate metadata (with language filter) | `_metadata.json` | `documents` dict, `document_count > 0` |
+| 3 | 3.2 | Set base URL | `_manifest.json` | `base_url` set |
+| 4 | 4.1 | Run sample URL tests | *(no file)* | Visual check only |
+| 5 | 5.1 | Create full index + embeddings | `_index.json`, `_vectors.json` | `vectors` dict, `document_count > 0` |
+| 6 | 6.1 | Suggest tags from index content | *(in memory)* | Tags suggested |
+| 6 | 6.2 | Save tags | `_manifest.json` | `tags` array populated |
+| 7 | 7.1 | Final URL test | *(no file)* | Visual check |
+| 8 | 8.1 | Final validation | *(reads all files)* | `is_valid = True` |
+
+### File Schema Summary
+
+| File | Created By | Key Fields | Required |
+|------|------------|------------|----------|
+| `pages/` or `.zim` | User/Scraper | Backup content | YES |
+| `backup_manifest.json` | Scan Backup | `pages`, `assets`, `base_url` | No |
+| `_manifest.json` | Configure | `source_id`, `name`, `license`, `tags`, `base_url` | YES |
+| `_metadata.json` | Generate Metadata | `documents`, `document_count`, `language_filter` | YES |
+| `_index.json` | Create Index | `documents` (full content), `source_metadata_hash` | YES |
+| `_vectors.json` | Create Index | `vectors`, `document_count`, `embedding_model`, `dimensions` | YES |
+
+### Metadata vs Index Separation
+
+**Important:** `_metadata.json` and `_index.json` serve different purposes:
+
+- `_metadata.json`: Document listing from backup scan (with language filter). Created by "Generate Metadata".
+- `_index.json`: Full content for indexed documents. Created by "Create Index".
+
+To prevent overwriting issues, `_index.json` includes a `source_metadata_hash` field that references the `_metadata.json` it was built from. Validation compares these to detect mismatches.
+
+```json
+// _index.json header
+{
+  "schema_version": 3,
+  "source_id": "my_source",
+  "source_metadata_hash": "abc123...",  // Hash of _metadata.json used
+  "document_count": 5269,
+  "created_at": "2025-12-07T00:00:00"
+}
+```
+
+### Validation Requirements
+
+```
+is_valid = True requires:
+  - has_backup = True
+  - has_manifest = True
+  - has_metadata_file = True (document_count > 0)
+  - has_vectors_file = True (document_count > 0)
+  - has_license = True (license != "Unknown")
+  - coverage >= 50% (vectors_doc_count / metadata_doc_count)
+
+production_ready = is_valid AND:
+  - has_tags = True
+  - base_url is set
+```
+
+**Note:** `has_tags = False` only blocks `production_ready`, not `is_valid`. Users can work locally without tags.
+
+---
+
+## Job Checkpoint System
+
+**STATUS: IMPLEMENTED** (Generate Metadata) / ANALYZED (Others)
+
+Long-running jobs save periodic checkpoints to allow resuming after interruption.
+
+### Jobs with Checkpoints
+
+| Job Type | Checkpoint Data | Partial File | Status |
+|----------|----------------|--------------|--------|
+| Generate Metadata | `last_article_index` | `_metadata.partial.json` | IMPLEMENTED |
+| Create Index | N/A | N/A | NOT NEEDED - use Incremental Indexing |
+| Upload to Cloud | N/A | N/A | NOT NEEDED - atomic file operations |
+| Download from Cloud | N/A | N/A | ALREADY WORKS - smart skip by size |
+| Scan Backup | N/A | N/A | NO (fast) |
+| Validate | N/A | N/A | NO (fast) |
+
+**Analysis Notes:**
+
+- **Download from Cloud** already has resume built-in: checks if local file exists with matching size before downloading
+- **Upload to Cloud** uses atomic per-file operations (ZIM = 1 file, HTML = zip then upload)
+- **Create Index** uses Incremental Indexing - processes in batches of 100, persists after each batch, skips already-indexed docs on resume
+
+**Incremental Indexing (Create Index):**
+- All indexers (ZIM, HTML, PDF) use `VectorStore.add_documents_incremental()`
+- Queries existing doc IDs, skips already-indexed, processes in batches
+- If interrupted, just re-run - previously indexed docs are skipped automatically
+- No checkpoint files needed - ChromaDB is the checkpoint
+
+### Checkpoint Storage
+
+```
+BACKUP_PATH/_jobs/
+  {source_id}_{job_type}.checkpoint.json    # Checkpoint state
+  {source_id}_{job_type}.partial.json       # Partial work file (full documents)
+```
+
+### Checkpoint File Structure
+
+```json
+{
+  "job_type": "metadata",
+  "source_id": "wikipedia-medical",
+  "progress": 45,
+  "created_at": "2025-12-06T20:00:00",
+  "last_saved": "2025-12-06T20:15:00",
+  "worker_id": 0,
+  "total_workers": 1,
+  "work_range_start": 0,
+  "work_range_end": 450000,
+  "last_article_index": 203847,
+  "partial_file": "wikipedia-medical_metadata.partial.json",
+  "documents_processed": 15234,
+  "errors": [
+    {"article_index": 1234, "error": "Parse error"}
+  ]
+}
+```
+
+### Partial File Structure (Full Document Backup)
+
+```json
+{
+  "source_id": "wikipedia-medical",
+  "documents": {
+    "zim_0": {"title": "...", "url": "...", "snippet": "...", ...},
+    "zim_1": {"title": "...", "url": "...", "snippet": "...", ...}
+  },
+  "language_filtered": 5000,
+  "last_article_index": 203847
+}
+```
+
+### Resume Flow
+
+```
+User clicks "Generate Metadata"
+    |
+    v
+Check: Checkpoint exists for (source_id, metadata)?
+    |
+    +-- YES --> Modal: "Incomplete job found (45%, 2 hrs ago)"
+    |              [Resume] [Start Fresh] [Cancel]
+    |
+    +-- NO --> Start fresh job
+```
+
+**From Jobs page:** Interrupted jobs appear in a separate "Interrupted Jobs" section with Resume/Discard buttons.
+
+### Checkpoint Behavior
+
+- **Save frequency:** Every 60 seconds OR every 2000 articles (whichever first)
+- **On success:** Delete checkpoint file and partial file
+- **On failure/interruption:** Keep files (allows resume)
+- **Stale checkpoints:** Manual cleanup via Jobs page, or auto-delete after 7 days
+- **Atomic writes:** Write to temp file, then rename (prevents corruption)
+
+### Future: Parallel Processing
+
+The checkpoint system is prepared for future parallel processing with:
+- `worker_id`: Identifies which worker (0 = single worker default)
+- `total_workers`: Number of parallel workers
+- `work_range_start/end`: Article range for this worker
+
+Future implementation would:
+1. Divide articles into ranges (worker 0: 0-25000, worker 1: 25001-50000, etc.)
+2. Each worker has its own checkpoint and partial file
+3. A merger step combines all partial files when all workers complete
+
+---
+
+## Global Admin Review Process
+
+When submissions arrive for review, the global admin performs these checks before publishing to Pinecone/R2:
+
+### Review Checklist
+
+| Check | Action | Notes |
+|-------|--------|-------|
+| Embedding dimensions | Re-index with OpenAI 1536-dim if needed | Submissions may use 384-dim local |
+| Tags | Verify/add appropriate tags | Required for discovery |
+| URLs | Verify base_url works | Test sample links |
+| License | Verify license accuracy | Check source site |
+| Content quality | Spot check articles | Look for spam, duplicates |
+
+### Re-indexing Workflow
+
+```
+Submission arrives (384-dim local vectors)
+    |
+    v
+Admin opens in Source Tools
+    |
+    v
+Check _vectors.json dimensions
+    |
+    +-- 384-dim --> Click "Force Re-index" with OpenAI
+    |               (creates new 1536-dim vectors)
+    |
+    +-- 1536-dim --> Skip re-indexing
+    |
+    v
+Review tags, license, URLs
+    |
+    v
+Run final validation
+    |
+    v
+Approve --> Publish to Pinecone + R2
+```
+
+### Admin-Only Checks (Future)
+
+These will be added to a dedicated Admin Review page:
+
+- [ ] Dimension check with one-click re-index
+- [ ] Tag suggestion review
+- [ ] License verification workflow
+- [ ] URL batch testing
+- [ ] Content sampling
+- [ ] Publish approval queue
+
+---
+
+## Known Issues and Fixes
+
+### Metadata/Index Count Mismatch
+
+**Problem:** `_metadata.json` shows 18k docs, `_vectors.json` shows 5k. Validation fails with "coverage 28%".
+
+**Cause:** Different text extraction methods:
+- Metadata generation uses simple regex (extracts more text, more docs pass filter)
+- Indexing uses BeautifulSoup (extracts main content only, fewer docs pass filter)
+
+**Fix:** Unify extraction to use "lenient BeautifulSoup" for both:
+```python
+def extract_text_lenient(html_content: str) -> str:
+    soup = BeautifulSoup(html_content, 'html.parser')
+    # Remove junk tags but don't require main/article container
+    for tag in soup.find_all(['script', 'style', 'nav', 'header', 'footer', 'aside', 'iframe']):
+        tag.decompose()
+    text = soup.get_text(separator=' ', strip=True)
+    return ' '.join(line.strip() for line in text.splitlines() if line.strip())
+```
+
+### Token Limit Errors During Indexing
+
+**Problem:** OpenAI embedding fails with "8581 tokens requested, 8192 max".
+
+**Cause:** Text truncation (20k chars) can still exceed 8192 tokens for dense text.
+
+**Current behavior:** Failed embeddings get zero vectors as placeholders.
+
+**Fix options:**
+1. Truncate by token count, not character count
+2. Chunk long documents into multiple embeddings
+3. Use local embeddings (no token limit)
 
 ---
 

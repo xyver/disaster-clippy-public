@@ -50,6 +50,19 @@
         .tag-validate { background: #5c1a3a; color: #cd4e8c; }
         .job-source { color: #4ecca3; font-weight: 500; }
         .job-message { font-size: 0.8rem; color: #888; margin-top: 0.25rem; }
+        .job-actions { display: flex; gap: 0.5rem; align-items: center; }
+        .btn-cancel {
+            background: #2e1a1a;
+            color: #e94560;
+            border: 1px solid #e94560;
+            padding: 0.3rem 0.75rem;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.8rem;
+            transition: all 0.2s;
+        }
+        .btn-cancel:hover { background: #e94560; color: #fff; }
+        .btn-cancel:disabled { opacity: 0.5; cursor: not-allowed; }
     </style>
 </head>
 <body>
@@ -78,7 +91,7 @@
     </header>
 
     <div class="container">
-        <!-- Active Jobs -->
+        <!-- Active Jobs (first) -->
         <div class="section">
             <h2>Active Jobs</h2>
             <div id="activeJobs" class="job-list">
@@ -86,9 +99,25 @@
             </div>
         </div>
 
-        <!-- Completed Jobs -->
+        <!-- Interrupted Jobs (second, only shown if any exist) -->
+        <div class="section" id="interruptedSection" style="display: none;">
+            <h2 style="color: #f9a825;">Interrupted Jobs</h2>
+            <p style="color: #888; font-size: 0.85rem; margin-bottom: 1rem;">
+                These jobs were interrupted and can be resumed. Checkpoints older than 7 days will be auto-deleted.
+            </p>
+            <div id="interruptedJobs" class="job-list">
+                <div class="empty">Loading...</div>
+            </div>
+            <div style="margin-top: 1rem; text-align: right;">
+                <button class="btn btn-secondary" onclick="cleanupStaleCheckpoints()" style="font-size: 0.8rem;">
+                    Cleanup Old Checkpoints (7+ days)
+                </button>
+            </div>
+        </div>
+
+        <!-- Recent Jobs (last) -->
         <div class="section">
-            <h2>Recent Jobs</h2>
+            <h2>Job History <span style="font-size: 0.8rem; color: #888; font-weight: normal;">(last 7 days)</span></h2>
             <div id="recentJobs" class="job-list">
                 <div class="empty">Loading...</div>
             </div>
@@ -130,14 +159,20 @@
                                     <span class="job-source">${job.source_id}</span>
                                 </div>
                                 <div class="job-message">${job.message || JOB_TYPES[job.job_type]?.desc || ''}</div>
-                                <div class="job-meta">Started: ${new Date(job.started_at).toLocaleString()}</div>
+                                <div class="job-meta">
+                                    Started: ${new Date(job.started_at).toLocaleString()}
+                                    ${job.progress_total > 0 ? ` | ${job.progress_current.toLocaleString()} / ${job.progress_total.toLocaleString()} items` : ''}
+                                </div>
                                 ${job.progress ? `
                                     <div class="progress-bar">
                                         <div class="progress-fill" style="width: ${job.progress}%"></div>
                                     </div>
                                 ` : ''}
                             </div>
-                            <span class="job-status status-${job.status}">${job.progress || 0}%</span>
+                            <div class="job-actions">
+                                <span class="job-status status-${job.status}">${job.progress || 0}%</span>
+                                <button class="btn-cancel" onclick="cancelJob('${job.id}', this)">Stop</button>
+                            </div>
                         </div>
                     `).join('');
                 }
@@ -145,18 +180,38 @@
                 document.getElementById('activeJobs').innerHTML = '<div class="empty">Error loading jobs</div>';
             }
 
-            // Load all jobs
+            // Load job history (from disk + memory)
             try {
-                const allResp = await fetch('/useradmin/api/jobs');
+                // Fetch both in-memory jobs and persisted history
+                const [allResp, historyResp] = await Promise.all([
+                    fetch('/useradmin/api/jobs'),
+                    fetch('/useradmin/api/jobs/history?limit=50')
+                ]);
                 const allData = await allResp.json();
+                const historyData = await historyResp.json();
                 const recentContainer = document.getElementById('recentJobs');
 
-                const completedJobs = (allData.jobs || []).filter(j => j.status !== 'running' && j.status !== 'pending');
+                // Combine in-memory completed jobs with persisted history
+                const memoryJobs = (allData.jobs || []).filter(j => j.status !== 'running' && j.status !== 'pending');
+                const historyJobs = historyData.jobs || [];
+
+                // Merge and deduplicate by job ID
+                const jobMap = new Map();
+                [...memoryJobs, ...historyJobs].forEach(job => {
+                    if (!jobMap.has(job.id)) {
+                        jobMap.set(job.id, job);
+                    }
+                });
+
+                // Sort by completion time (newest first)
+                const completedJobs = Array.from(jobMap.values())
+                    .sort((a, b) => (b.completed_at || '').localeCompare(a.completed_at || ''))
+                    .slice(0, 50);
 
                 if (completedJobs.length === 0) {
-                    recentContainer.innerHTML = '<div class="empty">No recent jobs</div>';
+                    recentContainer.innerHTML = '<div class="empty">No job history yet</div>';
                 } else {
-                    recentContainer.innerHTML = completedJobs.slice(0, 20).map(job => `
+                    recentContainer.innerHTML = completedJobs.map(job => `
                         <div class="job-item">
                             <div class="job-info">
                                 <div class="job-name">
@@ -175,13 +230,216 @@
                     `).join('');
                 }
             } catch (e) {
-                document.getElementById('recentJobs').innerHTML = '<div class="empty">Error loading jobs</div>';
+                console.error('Error loading job history:', e);
+                document.getElementById('recentJobs').innerHTML = '<div class="empty">Error loading job history</div>';
+            }
+        }
+
+        async function cancelJob(jobId, btn) {
+            if (!confirm('Stop this job? Progress will be saved and you can resume later.')) return;
+
+            btn.disabled = true;
+            btn.textContent = 'Stopping...';
+            btn.title = 'Job will stop at next checkpoint (may take a few seconds)';
+
+            try {
+                const response = await fetch(`/useradmin/api/jobs/${jobId}/cancel`, {
+                    method: 'POST'
+                });
+
+                if (response.ok) {
+                    btn.textContent = 'Stopping...';
+                    // Job will update its status when it stops - poll for a few seconds
+                    let checks = 0;
+                    const checkInterval = setInterval(() => {
+                        loadJobs();
+                        checks++;
+                        if (checks > 10) {
+                            clearInterval(checkInterval);
+                        }
+                    }, 1000);
+                } else {
+                    const data = await response.json();
+                    alert('Failed to stop job: ' + (data.detail || 'Unknown error'));
+                    btn.disabled = false;
+                    btn.textContent = 'Stop';
+                }
+            } catch (e) {
+                alert('Error stopping job: ' + e.message);
+                btn.disabled = false;
+                btn.textContent = 'Stop';
+            }
+        }
+
+        // Load interrupted jobs (from checkpoint files)
+        // Excludes jobs that are currently running
+        async function loadInterruptedJobs() {
+            try {
+                // Get both interrupted jobs and active jobs
+                const [interruptedResp, activeResp] = await Promise.all([
+                    fetch('/useradmin/api/interrupted-jobs'),
+                    fetch('/useradmin/api/jobs/active')
+                ]);
+                const interruptedData = await interruptedResp.json();
+                const activeData = await activeResp.json();
+
+                const container = document.getElementById('interruptedJobs');
+                const section = document.getElementById('interruptedSection');
+
+                // Build set of currently running source+job_type combinations
+                const runningJobs = new Set();
+                if (activeData.jobs) {
+                    activeData.jobs.forEach(job => {
+                        runningJobs.add(`${job.source_id}:${job.job_type}`);
+                    });
+                }
+
+                // Filter out interrupted jobs that are currently running
+                const trulyInterrupted = (interruptedData.jobs || []).filter(job => {
+                    return !runningJobs.has(`${job.source_id}:${job.job_type}`);
+                });
+
+                if (trulyInterrupted.length === 0) {
+                    section.style.display = 'none';
+                    return;
+                }
+
+                section.style.display = 'block';
+                container.innerHTML = trulyInterrupted.map(job => `
+                    <div class="job-item" style="border-color: #f9a825;">
+                        <div class="job-info">
+                            <div class="job-name">
+                                ${getJobTypeTag(job.job_type)}
+                                <span class="job-source">${job.source_id}</span>
+                            </div>
+                            <div class="job-message">
+                                Progress: ${job.progress}% | ${job.documents_processed || job.last_article_index || 0} items processed
+                            </div>
+                            <div class="job-meta">
+                                Last saved: ${job.age || 'unknown'}
+                            </div>
+                        </div>
+                        <div class="job-actions">
+                            <span class="job-status status-pending">${job.progress}%</span>
+                            <button class="btn btn-primary" onclick="resumeInterruptedJob('${job.source_id}', '${job.job_type}')" style="font-size: 0.8rem;">Resume</button>
+                            <button class="btn-cancel" onclick="discardInterruptedJob('${job.source_id}', '${job.job_type}', this)">Discard</button>
+                        </div>
+                    </div>
+                `).join('');
+            } catch (e) {
+                console.error('Error loading interrupted jobs:', e);
+            }
+        }
+
+        async function resumeInterruptedJob(sourceId, jobType) {
+            // Resume job directly via API - no page redirect needed
+            if (jobType === 'metadata') {
+                try {
+                    const response = await fetch('/useradmin/api/generate-metadata', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            source_id: sourceId,
+                            resume: true
+                        })
+                    });
+
+                    if (response.ok) {
+                        const data = await response.json();
+                        // Immediately refresh to show the job in Active Jobs
+                        loadJobs();
+                        loadInterruptedJobs();
+                    } else {
+                        const err = await response.json();
+                        alert('Failed to resume: ' + (err.detail || 'Unknown error'));
+                    }
+                } catch (e) {
+                    alert('Error resuming job: ' + e.message);
+                }
+            } else if (jobType === 'index') {
+                try {
+                    const response = await fetch('/useradmin/api/create-index', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            source_id: sourceId,
+                            limit: 50000,  // High limit to index all
+                            force_reindex: false,  // Continue where left off
+                            resume: true  // Resume from checkpoint
+                        })
+                    });
+
+                    if (response.ok) {
+                        const data = await response.json();
+                        loadJobs();
+                        loadInterruptedJobs();
+                    } else {
+                        const err = await response.json();
+                        alert('Failed to resume: ' + (err.detail || 'Unknown error'));
+                    }
+                } catch (e) {
+                    alert('Error resuming job: ' + e.message);
+                }
+            } else {
+                alert('Unknown job type: ' + jobType);
+            }
+        }
+
+        async function discardInterruptedJob(sourceId, jobType, btn) {
+            if (!confirm(`Discard the interrupted ${jobType} job for ${sourceId}? This cannot be undone.`)) return;
+
+            btn.disabled = true;
+            btn.textContent = 'Deleting...';
+
+            try {
+                const response = await fetch(`/useradmin/api/discard-checkpoint/${sourceId}/${jobType}`, {
+                    method: 'POST'
+                });
+
+                if (response.ok) {
+                    loadInterruptedJobs();
+                } else {
+                    alert('Failed to discard checkpoint');
+                    btn.disabled = false;
+                    btn.textContent = 'Discard';
+                }
+            } catch (e) {
+                alert('Error: ' + e.message);
+                btn.disabled = false;
+                btn.textContent = 'Discard';
+            }
+        }
+
+        async function cleanupStaleCheckpoints() {
+            if (!confirm('Delete all checkpoint files older than 7 days?')) return;
+
+            try {
+                const response = await fetch('/useradmin/api/cleanup-stale-checkpoints', {
+                    method: 'POST'
+                });
+                const data = await response.json();
+
+                if (response.ok) {
+                    if (data.deleted && data.deleted.length > 0) {
+                        alert(`Deleted ${data.deleted.length} stale checkpoint file(s)`);
+                    } else {
+                        alert('No stale checkpoints found');
+                    }
+                    loadInterruptedJobs();
+                } else {
+                    alert('Cleanup failed: ' + (data.detail || 'Unknown error'));
+                }
+            } catch (e) {
+                alert('Error: ' + e.message);
             }
         }
 
         loadJobs();
+        loadInterruptedJobs();
         // Refresh every 3 seconds for more responsive updates
         setInterval(loadJobs, 3000);
+        // Refresh interrupted jobs less frequently
+        setInterval(loadInterruptedJobs, 10000);
     </script>
 </body>
 </html>

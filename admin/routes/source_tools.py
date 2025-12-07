@@ -48,6 +48,7 @@ class SourceIdRequest(BaseModel):
 class GenerateMetadataRequest(BaseModel):
     source_id: str
     language_filter: Optional[str] = None  # ISO code like 'en', 'es' to filter ZIM articles
+    resume: bool = False  # If True, resume from checkpoint if available
 
 
 class CreateIndexRequest(BaseModel):
@@ -55,6 +56,7 @@ class CreateIndexRequest(BaseModel):
     limit: int = 1000
     force_reindex: bool = False
     language_filter: Optional[str] = None  # ISO code like 'en', 'es' to filter ZIM articles
+    resume: bool = False  # If True, resume from checkpoint if available
 
 
 class ValidateSourceRequest(BaseModel):
@@ -171,6 +173,20 @@ async def get_local_sources():
                 pass
         else:
             source_status["missing"].append("metadata")
+
+        # For ZIM sources without metadata yet, get article count from ZIM header
+        if source_status["document_count"] == 0 and backup_folder:
+            source_folder = Path(backup_folder) / source_id
+            zim_files = list(source_folder.glob("*.zim")) if source_folder.exists() else []
+            if zim_files:
+                try:
+                    from offline_tools.zim_utils import get_zim_metadata
+                    zim_meta = get_zim_metadata(str(zim_files[0]))
+                    if "error" not in zim_meta and zim_meta.get("article_count"):
+                        source_status["document_count"] = zim_meta["article_count"]
+                        source_status["document_count_source"] = "zim_header"  # Indicates this is from ZIM, not metadata
+                except Exception:
+                    pass
 
         # Check for backup files using unified detection
         from offline_tools.packager import detect_backup_status
@@ -596,17 +612,26 @@ async def generate_metadata(request: GenerateMetadataRequest):
     Runs as a background job since large sources can take a while.
 
     For ZIM files, you can optionally filter by language (ISO code like 'en', 'es').
+    If resume=True and a checkpoint exists, continues from where it left off.
     """
     from admin.job_manager import get_job_manager
 
-    def _run_generate_metadata(source_id: str, language_filter: str = None, progress_callback=None):
+    def _run_generate_metadata(source_id: str, language_filter: str = None,
+                               resume: bool = False, progress_callback=None,
+                               cancel_checker=None):
         from offline_tools.source_manager import SourceManager
         manager = SourceManager()
         result = manager.generate_metadata(
             source_id,
             progress_callback=progress_callback,
-            language_filter=language_filter
+            language_filter=language_filter,
+            resume=resume,
+            cancel_checker=cancel_checker
         )
+
+        # Handle cancellation
+        if result.get("cancelled"):
+            return {"status": "cancelled", "error": "Job cancelled by user", "document_count": result.get("document_count", 0)}
 
         if not result.get("success", True):
             return {"status": "error", "error": result.get("error", "Metadata generation failed")}
@@ -615,13 +640,16 @@ async def generate_metadata(request: GenerateMetadataRequest):
         if result.get("language_filtered_count", 0) > 0:
             lang_info = f" ({result['language_filtered_count']} filtered by language)"
 
+        resumed_info = " (resumed)" if result.get("resumed") else ""
+
         return {
             "status": "success",
             "source_id": source_id,
             "document_count": result.get("document_count", 0),
             "language_filter": result.get("language_filter"),
             "language_filtered_count": result.get("language_filtered_count", 0),
-            "message": f"Generated metadata for {result.get('document_count', 0)} documents{lang_info}"
+            "resumed": result.get("resumed", False),
+            "message": f"Generated metadata for {result.get('document_count', 0)} documents{lang_info}{resumed_info}"
         }
 
     manager = get_job_manager()
@@ -632,7 +660,8 @@ async def generate_metadata(request: GenerateMetadataRequest):
             request.source_id,
             _run_generate_metadata,
             request.source_id,
-            request.language_filter
+            request.language_filter,
+            request.resume
         )
     except ValueError as e:
         raise HTTPException(409, str(e))
@@ -649,20 +678,33 @@ async def generate_metadata(request: GenerateMetadataRequest):
 
 @router.post("/create-index")
 async def create_index(request: CreateIndexRequest):
-    """Create vector embeddings for a source (runs as background job)"""
+    """Create vector embeddings for a source (runs as background job)
+
+    Supports checkpoint-based resumption for ZIM files. If resume=True
+    and a checkpoint exists, continues from where it left off.
+    """
     from admin.job_manager import get_job_manager
 
     def _run_create_index(source_id: str, limit: int, force: bool,
-                          language_filter: str = None, progress_callback=None):
+                          language_filter: str = None, resume: bool = False,
+                          progress_callback=None, cancel_checker=None):
         from offline_tools.source_manager import SourceManager
         manager = SourceManager()
-        return manager.create_index(
+        result = manager.create_index(
             source_id,
             limit=limit,
             skip_existing=not force,  # force=True means skip_existing=False
             progress_callback=progress_callback,
-            language_filter=language_filter
+            language_filter=language_filter,
+            resume=resume,
+            cancel_checker=cancel_checker
         )
+
+        # Handle cancelled jobs
+        if hasattr(result, 'error') and result.error == "Cancelled by user":
+            return {"status": "cancelled", "error": "Job cancelled by user", "indexed_count": result.indexed_count}
+
+        return result
 
     manager = get_job_manager()
 
@@ -674,12 +716,14 @@ async def create_index(request: CreateIndexRequest):
             request.source_id,
             request.limit,
             request.force_reindex,
-            request.language_filter
+            request.language_filter,
+            request.resume
         )
     except ValueError as e:
         raise HTTPException(409, str(e))
 
     lang_msg = f" (language: {request.language_filter})" if request.language_filter else ""
+    resume_msg = " (resuming)" if request.resume else ""
     return {
         "status": "submitted",
         "job_id": job_id,
@@ -687,7 +731,8 @@ async def create_index(request: CreateIndexRequest):
         "limit": request.limit,
         "force_reindex": request.force_reindex,
         "language_filter": request.language_filter,
-        "message": f"Index creation started for {request.source_id}{lang_msg}"
+        "resume": request.resume,
+        "message": f"Index creation started for {request.source_id}{lang_msg}{resume_msg}"
     }
 
 
@@ -697,12 +742,20 @@ async def create_index(request: CreateIndexRequest):
 
 @router.post("/validate-source")
 async def validate_source(request: ValidateSourceRequest):
-    """Validate source completeness and readiness for distribution"""
+    """
+    Validate source completeness and readiness for distribution.
+
+    Returns validation results including actionable_issues - a list of issues
+    with hints about which wizard step/tool can fix them.
+    """
     try:
         from offline_tools.source_manager import SourceManager
 
         manager = SourceManager()
         result = manager.validate_source(request.source_id)
+
+        # Convert actionable_issues to dicts for JSON serialization
+        actionable = [issue.to_dict() for issue in result.actionable_issues] if result.actionable_issues else []
 
         return {
             "status": "success",
@@ -711,6 +764,9 @@ async def validate_source(request: ValidateSourceRequest):
             "production_ready": result.production_ready,
             "has_backup": result.has_backup,
             "has_metadata": result.has_metadata,
+            "has_manifest": result.has_manifest,
+            "has_metadata_file": result.has_metadata_file,
+            "has_vectors_file": result.has_vectors_file,
             "has_embeddings": result.has_embeddings,
             "has_license": result.has_license,
             "has_tags": result.has_tags,
@@ -719,11 +775,108 @@ async def validate_source(request: ValidateSourceRequest):
             "issues": result.issues,
             "warnings": result.warnings,
             "detected_license": result.detected_license,
-            "suggested_tags": result.suggested_tags
+            "suggested_tags": result.suggested_tags,
+            # New actionable issues with fix hints
+            "actionable_issues": actionable
         }
 
     except Exception as e:
         raise HTTPException(500, f"Validation failed: {e}")
+
+
+# =============================================================================
+# CHECKPOINT SYSTEM
+# =============================================================================
+
+@router.get("/check-checkpoint/{source_id}/{job_type}")
+async def check_checkpoint(source_id: str, job_type: str):
+    """
+    Check if a checkpoint exists for a source/job_type combination.
+
+    Used by frontend to show "Resume or Restart?" modal.
+    """
+    try:
+        from admin.job_manager import load_checkpoint
+
+        checkpoint = load_checkpoint(source_id, job_type)
+
+        if checkpoint:
+            return {
+                "has_checkpoint": True,
+                "checkpoint": {
+                    "source_id": checkpoint.source_id,
+                    "job_type": checkpoint.job_type,
+                    "progress": checkpoint.progress,
+                    "last_saved": checkpoint.last_saved,
+                    "created_at": checkpoint.created_at,
+                    "last_article_index": checkpoint.last_article_index,
+                    "documents_processed": checkpoint.documents_processed
+                }
+            }
+        else:
+            return {"has_checkpoint": False}
+
+    except Exception as e:
+        # If checkpoint system not available, just say no checkpoint
+        return {"has_checkpoint": False, "error": str(e)}
+
+
+@router.get("/interrupted-jobs")
+async def get_interrupted_jobs():
+    """
+    Get all interrupted jobs (checkpoint files that can be resumed).
+
+    Used by Jobs page to show "Interrupted Jobs" section.
+    """
+    try:
+        from admin.job_manager import get_interrupted_jobs
+
+        jobs = get_interrupted_jobs()
+        return {"jobs": jobs}
+
+    except Exception as e:
+        return {"jobs": [], "error": str(e)}
+
+
+@router.post("/discard-checkpoint/{source_id}/{job_type}")
+async def discard_checkpoint(source_id: str, job_type: str):
+    """
+    Discard a checkpoint and its partial work file.
+
+    Used when user chooses "Restart" instead of "Resume".
+    """
+    try:
+        from admin.job_manager import delete_checkpoint
+
+        deleted = delete_checkpoint(source_id, job_type)
+        return {
+            "status": "success" if deleted else "not_found",
+            "deleted": deleted
+        }
+
+    except Exception as e:
+        raise HTTPException(500, f"Failed to discard checkpoint: {e}")
+
+
+@router.post("/cleanup-stale-checkpoints")
+async def cleanup_stale_checkpoints():
+    """
+    Delete checkpoint files older than 7 days.
+
+    Manual cleanup option from Jobs page.
+    """
+    try:
+        from admin.job_manager import cleanup_stale_checkpoints
+
+        result = cleanup_stale_checkpoints(max_age_days=7)
+        return {
+            "status": "success",
+            "deleted": result["deleted"],
+            "errors": result["errors"]
+        }
+
+    except Exception as e:
+        raise HTTPException(500, f"Cleanup failed: {e}")
 
 
 @router.post("/cleanup-redundant-files")
@@ -857,12 +1010,13 @@ async def delete_source(request: DeleteSourceRequest):
     try:
         from offline_tools.vectordb import get_vector_store
         store = get_vector_store()
-        results = store.collection.get(where={"source_id": source_id})
-        if results and results.get("ids"):
-            store.collection.delete(ids=results["ids"])
-            deleted_items.append(f"ChromaDB entries ({len(results['ids'])} docs)")
-    except Exception:
-        pass
+        # Note: metadata field is "source", not "source_id"
+        result = store.delete_by_source(source_id)
+        deleted_count = result.get("deleted_count", 0)
+        if deleted_count > 0:
+            deleted_items.append(f"ChromaDB entries ({deleted_count} docs)")
+    except Exception as e:
+        errors.append(f"Failed to remove from ChromaDB: {e}")
 
     if errors and not deleted_items:
         raise HTTPException(500, f"Delete failed: {'; '.join(errors)}")
@@ -950,7 +1104,7 @@ async def inspect_zim_file(request: ZIMInspectRequest):
     # Extract source_id from path for job tracking
     source_id = zim_path.stem
 
-    def _run_zim_inspect(zim_path: str, scan_limit: int, min_text_length: int, progress_callback=None):
+    def _run_zim_inspect(zim_path: str, scan_limit: int, min_text_length: int, progress_callback=None, cancel_checker=None):
         """Background job function for ZIM inspection"""
         from offline_tools.zim_utils import inspect_zim_file as do_inspect
 
@@ -1041,6 +1195,98 @@ async def get_zim_metadata(source_id: str):
         raise HTTPException(500, f"Failed to get metadata: {e}")
 
 
+@router.get("/zim/samples/{source_id}")
+async def get_zim_samples(source_id: str, count: int = 10):
+    """
+    Get sample articles directly from ZIM file (no metadata required).
+
+    Quick scan for URL pattern detection before metadata generation.
+    Returns article titles and paths for base URL configuration.
+    """
+    config = get_local_config()
+    backup_folder = config.get_backup_folder()
+
+    if not backup_folder:
+        raise HTTPException(400, "No backup folder configured")
+
+    # Find the ZIM file
+    source_folder = Path(backup_folder) / source_id
+    zim_path = None
+
+    if source_folder.exists():
+        zim_files = list(source_folder.glob("*.zim"))
+        if zim_files:
+            zim_path = zim_files[0]
+
+    if not zim_path or not zim_path.exists():
+        raise HTTPException(404, f"No ZIM file found for source: {source_id}")
+
+    try:
+        from zimply_core.zim_core import ZIMFile
+        from offline_tools.indexer import extract_text_from_html
+    except ImportError:
+        raise HTTPException(400, "zimply-core not installed")
+
+    samples = []
+    try:
+        zim = ZIMFile(str(zim_path), 'utf-8')
+        article_count = zim.header_fields.get('articleCount', 0)
+
+        # Sample articles spread across the ZIM (skip first few which are often index pages)
+        step = max(1, article_count // (count * 2))
+        start = min(100, article_count // 10)  # Start ~10% in to skip index pages
+
+        checked = 0
+        for i in range(start, min(article_count, start + step * count * 3), step):
+            if len(samples) >= count:
+                break
+            checked += 1
+            if checked > count * 5:  # Safety limit
+                break
+
+            try:
+                article = zim.get_article_by_id(i)
+                if article is None:
+                    continue
+
+                url = getattr(article, 'url', '') or ''
+                title = getattr(article, 'title', '') or ''
+                mimetype = str(getattr(article, 'mimetype', ''))
+
+                # Only include HTML articles with real titles
+                if 'text/html' not in mimetype:
+                    continue
+                if not title or len(title) < 3:
+                    continue
+                if title.lower() in ['index', 'home', 'main page', 'contents']:
+                    continue
+
+                # Extract article name (last path segment)
+                article_name = url.split('/')[-1] if '/' in url else url
+
+                samples.append({
+                    "title": title[:100],
+                    "zim_path": url,
+                    "article_name": article_name,
+                })
+            except Exception:
+                continue
+
+        zim.close()
+
+        return {
+            "status": "success",
+            "source_id": source_id,
+            "article_count": article_count,
+            "sample_count": len(samples),
+            "samples": samples,
+            "message": f"Found {len(samples)} sample articles from {article_count:,} total"
+        }
+
+    except Exception as e:
+        raise HTTPException(500, f"Failed to sample ZIM: {e}")
+
+
 @router.post("/zim/index")
 async def index_zim_file(request: ZIMIndexRequest):
     """
@@ -1060,7 +1306,7 @@ async def index_zim_file(request: ZIMIndexRequest):
     if not zim_path.exists():
         raise HTTPException(404, f"ZIM file not found: {request.zim_path}")
 
-    def _run_zim_index(zim_path: str, source_id: str, limit: int, progress_callback=None):
+    def _run_zim_index(zim_path: str, source_id: str, limit: int, progress_callback=None, cancel_checker=None):
         """Background job function for ZIM indexing"""
         from offline_tools.indexer import ZIMIndexer
 
@@ -1126,7 +1372,7 @@ class InstallSourceRequest(BaseModel):
     sync_mode: str = "update"  # "update" (add/merge) or "replace" (delete old vectors first)
 
 
-def _run_install_job(source_id: str, include_backup: bool, sync_mode: str = "update", progress_callback=None):
+def _run_install_job(source_id: str, include_backup: bool, sync_mode: str = "update", progress_callback=None, cancel_checker=None):
     """Background job function for source installation"""
     from offline_tools.source_manager import install_source_from_cloud
     from offline_tools.vectordb.metadata import MetadataIndex
@@ -1287,6 +1533,146 @@ async def check_local_source(source_id: str):
             }
     except Exception as e:
         return {"exists": False, "error": str(e)}
+
+
+@router.get("/test-links/{source_id}")
+async def test_source_links(source_id: str, test_base_url: Optional[str] = None):
+    """
+    Get sample links from a source to test URL construction.
+
+    Returns sample articles with both local and online URLs so user can
+    verify base_url is configured correctly before publishing to Pinecone.
+
+    Args:
+        source_id: The source ID to test
+        test_base_url: Optional base URL to test with (simulates URL construction)
+    """
+    from admin.local_config import get_local_config
+    import re
+
+    source_id = source_id.strip().lower()
+    config = get_local_config()
+    backup_folder = config.get_backup_folder()
+
+    if not backup_folder:
+        raise HTTPException(status_code=500, detail="Backup folder not configured")
+
+    backup_path = Path(backup_folder)
+    source_path = backup_path / source_id
+
+    if not source_path.exists():
+        raise HTTPException(status_code=404, detail=f"Source '{source_id}' not found")
+
+    # Load manifest for base_url
+    manifest_path = source_path / get_manifest_file()
+    stored_base_url = ""
+    source_type = "unknown"
+    if manifest_path.exists():
+        try:
+            with open(manifest_path, 'r', encoding='utf-8') as f:
+                manifest = json.load(f)
+            stored_base_url = manifest.get("base_url", "")
+            source_type = manifest.get("source_type", "unknown")
+        except Exception:
+            pass
+
+    # Use test_base_url if provided, otherwise use stored
+    base_url = test_base_url if test_base_url else stored_base_url
+
+    # Load metadata for sample documents
+    metadata_path = source_path / get_metadata_file()
+    sample_links = []
+
+    if metadata_path.exists():
+        try:
+            with open(metadata_path, 'r', encoding='utf-8') as f:
+                metadata = json.load(f)
+
+            # Get up to 5 sample documents
+            docs = metadata.get("documents", {})
+            for i, (doc_id, doc) in enumerate(docs.items()):
+                if i >= 5:
+                    break
+
+                local_url = doc.get("local_url", doc.get("url", ""))
+                stored_url = doc.get("url", "")
+                zim_url = doc.get("zim_url", "")  # Original ZIM path
+
+                # Extract article path from local_url
+                article_path = ""
+                if local_url:
+                    # Remove /zim/ or /backup/ prefixes
+                    if local_url.startswith("/zim/"):
+                        article_path = local_url[5:]  # Remove /zim/
+                        # Remove source_id prefix if present
+                        if "/" in article_path:
+                            article_path = article_path.split("/", 1)[1]
+                    elif local_url.startswith("/backup/"):
+                        # /backup/source_id/path -> get just path
+                        parts = local_url.split("/", 3)
+                        if len(parts) > 3:
+                            article_path = parts[3]
+                    else:
+                        article_path = local_url.lstrip("/")
+
+                # Extract just the article name (last path segment)
+                article_name = article_path.split("/")[-1] if "/" in article_path else article_path
+
+                # Check if article_path contains full domain (www.example.com/path)
+                # and extract just the path portion
+                domain_pattern = r'^(www\.|[a-z0-9-]+\.(gov|com|org|net|edu|io|co|info|wiki))[/.]'
+                clean_path = article_path
+                if re.match(domain_pattern, article_path, re.IGNORECASE):
+                    # Extract path after domain
+                    path_match = re.match(r'^[^/]+/(.*)$', article_path)
+                    if path_match:
+                        clean_path = path_match.group(1)
+                        article_name = clean_path.split("/")[-1] if "/" in clean_path else clean_path
+
+                # If testing a new base_url, reconstruct the URL
+                if test_base_url:
+                    # Construct test URL using article name
+                    if article_name:
+                        test_url = test_base_url.rstrip("/") + "/" + article_name
+                    else:
+                        test_url = stored_url  # Fallback to stored
+                    constructed_url = test_url
+                else:
+                    constructed_url = stored_url
+
+                # Determine if URL looks valid
+                is_online_url = constructed_url.startswith("http://") or constructed_url.startswith("https://")
+                is_local_url = constructed_url.startswith("/zim/") or constructed_url.startswith("/backup/")
+
+                sample_links.append({
+                    "title": doc.get("title", "Unknown"),
+                    "stored_url": stored_url,
+                    "constructed_url": constructed_url,
+                    "local_url": local_url,
+                    "zim_path": article_path,  # Full path from ZIM
+                    "article_name": article_name,  # Just the article identifier
+                    "is_online_url": is_online_url,
+                    "is_local_url": is_local_url,
+                    "url_type": "online" if is_online_url else ("local" if is_local_url else "unknown")
+                })
+        except Exception as e:
+            return {
+                "source_id": source_id,
+                "error": f"Failed to read metadata: {e}",
+                "sample_links": []
+            }
+
+    return {
+        "source_id": source_id,
+        "source_type": source_type,
+        "base_url": base_url,
+        "stored_base_url": stored_base_url,
+        "testing_custom_url": bool(test_base_url),
+        "sample_count": len(sample_links),
+        "sample_links": sample_links,
+        "warning": None if all(s["is_online_url"] for s in sample_links) else
+                   "Some URLs are local paths - online users won't be able to access them. Check base_url configuration."
+    }
 
 
 @router.delete("/local-source/{source_id}")

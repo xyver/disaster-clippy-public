@@ -26,6 +26,7 @@ class ZIMInspectionResult:
     source_url: Optional[str] = None
     date: Optional[str] = None
     tags: List[str] = field(default_factory=list)
+    raw_headers: Dict[str, str] = field(default_factory=dict)  # All header fields for debugging
 
     # Content analysis
     mimetype_distribution: Dict[str, int] = field(default_factory=dict)
@@ -71,6 +72,7 @@ class ZIMInspectionResult:
                 "source_url": self.source_url,
                 "date": self.date,
                 "tags": self.tags,
+                "raw_headers": self.raw_headers,  # All ZIM header fields for debugging
             },
             "content_analysis": {
                 "mimetype_distribution": self.mimetype_distribution,
@@ -172,6 +174,30 @@ def inspect_zim_file(
     result.license = header.get('License')
     result.source_url = header.get('Source')
     result.date = header.get('Date')
+
+    # Store all raw header fields for debugging
+    result.raw_headers = dict(header) if header else {}
+
+    # Debug: print all available header fields
+    print(f"[ZIM Inspect] Available header fields: {list(header.keys())}")
+    for key, value in header.items():
+        if value:
+            print(f"  {key}: {value[:100] if isinstance(value, str) else value}")
+
+    # Smart license detection for common ZIM sources
+    if not result.license:
+        # Wikipedia/Wikimedia ZIMs are CC BY-SA
+        creator_lower = (result.creator or '').lower()
+        publisher_lower = (result.publisher or '').lower()
+        title_lower = (result.title or '').lower()
+
+        if any(x in creator_lower or x in publisher_lower or x in title_lower
+               for x in ['wikipedia', 'wikimedia', 'wikibooks', 'wikivoyage', 'wiktionary']):
+            result.license = "CC BY-SA 3.0"
+            print(f"[ZIM Inspect] Auto-detected Wikipedia license: CC BY-SA 3.0")
+        elif 'stackexchange' in creator_lower or 'stack overflow' in creator_lower:
+            result.license = "CC BY-SA 4.0"
+            print(f"[ZIM Inspect] Auto-detected StackExchange license: CC BY-SA 4.0")
 
     # Parse tags
     tags_str = header.get('Tags', '')

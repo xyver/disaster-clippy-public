@@ -671,6 +671,29 @@ async def get_status():
     }
 
 
+@router.get("/api/chromadb-status")
+async def get_chromadb_status():
+    """Get local ChromaDB stats for dashboard"""
+    try:
+        from offline_tools.vectordb import get_vector_store
+        store = get_vector_store(mode="local")
+        stats = store.get_stats()
+
+        return {
+            "connected": True,
+            "total_vectors": stats.get("total_documents", 0),
+            "collection_name": stats.get("collection_name", "articles"),
+            "sources": stats.get("sources", {}),
+            "source_count": len(stats.get("sources", {}))
+        }
+    except Exception as e:
+        return {
+            "connected": False,
+            "error": str(e),
+            "total_vectors": 0
+        }
+
+
 @router.post("/api/validate-path")
 async def validate_path(data: dict):
     """Validate that a path exists and is accessible"""

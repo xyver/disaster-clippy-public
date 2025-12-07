@@ -178,13 +178,122 @@ Validate the 5-step wizard and file creation tools work correctly.
 
 ## Near Term
 
+### Job Checkpoint/Resume System
+
+Resume interrupted long-running jobs (metadata generation, indexing) instead of restarting from scratch.
+
+**Status:** IMPLEMENTED (Generate Metadata), ANALYZED (Others - see below)
+
+**Implemented Features:**
+- Checkpoint infrastructure in `job_manager.py` (Checkpoint class, save/load/delete functions)
+- Generate Metadata saves checkpoints every 60 seconds OR every 2000 articles
+- Full document backup in partial file (not just position)
+- Resume modal in Source Tools: "Incomplete job found - Resume / Start Fresh / Cancel"
+- Interrupted Jobs section on Jobs page with Resume/Discard buttons
+- Manual "Cleanup Old Checkpoints (7+ days)" button
+- Prepared for future parallel processing with worker_id fields
+
+**Checkpoint Storage:**
+```
+BACKUP_PATH/_jobs/
+  {source_id}_{job_type}.checkpoint.json    # Checkpoint state
+  {source_id}_{job_type}.partial.json       # Full partial work backup
+```
+
+**Checkpoint by Job Type:**
+
+| Job Type | Checkpoint Data | Status |
+|----------|----------------|--------|
+| Generate Metadata | last_article_index, documents | IMPLEMENTED |
+| Create Index | N/A | NOT NEEDED - see Incremental Indexing below |
+| Upload to Cloud | N/A | NOT NEEDED - atomic file operations |
+| Download from Cloud | N/A | ALREADY WORKS - smart skip by file size |
+
+**Analysis Results:**
+
+1. **Download from Cloud** already resumes naturally via smart file skipping:
+   ```python
+   if local_path.exists() and local_size == remote_size:
+       skipped.append(filename)  # Already downloaded
+   ```
+
+2. **Upload to Cloud** uses atomic per-file operations. ZIM = single file, HTML = zip+upload.
+   No partial state to track.
+
+3. **Create Index** currently does all-or-nothing (extract all, embed all, add all).
+   The solution is **Incremental Indexing** (see below) not checkpointing.
+
+**Files Changed:**
+- `admin/job_manager.py` - Added Checkpoint class and checkpoint functions
+- `offline_tools/source_manager.py` - Updated `_generate_zim_metadata()` with checkpointing
+- `admin/routes/source_tools.py` - Added checkpoint API endpoints
+- `admin/templates/source_tools.html` - Added resume modal
+- `admin/templates/jobs.html` - Added Interrupted Jobs section
+
+**Future: Parallel Processing**
+The checkpoint system is prepared for parallel processing:
+- `worker_id`, `total_workers`, `work_range_start/end` fields ready
+- Multiple workers would each process a range of articles
+- Merger step would combine partial files when all workers complete
+
+---
+
+### Incremental Indexing (Create Index Resume)
+
+**Status:** IMPLEMENTED
+
+All indexers (ZIM, HTML, PDF) now use incremental indexing via `VectorStore.add_documents_incremental()`.
+
+**How it works:**
+1. Query ChromaDB for existing doc IDs for this source
+2. Filter out already-indexed documents
+3. Process remaining docs in batches of 100
+4. For each batch: compute embeddings, add to ChromaDB (auto-persists)
+5. Repeat until done
+
+**Resume behavior:**
+- If interrupted, re-run Create Index
+- Already-indexed documents are automatically skipped
+- Only new documents are processed
+- No checkpoint files needed - ChromaDB is the checkpoint
+
+**Files changed:**
+- `offline_tools/vectordb/store.py` - Added `get_source_document_ids()` and `add_documents_incremental()`
+- `offline_tools/indexer.py` - Updated ZIMIndexer, HTMLBackupIndexer, PDFIndexer to use incremental mode
+
+**Bug fixes included:**
+- Fixed `delete_source` endpoint using wrong field name (`source_id` vs `source`)
+
+**Benefits over checkpointing:**
+- Simpler implementation (no checkpoint files to manage)
+- ChromaDB handles persistence naturally
+- Resume is automatic (query existing IDs)
+- Works even if server crashes hard
+- Deleting a source still works (queries by `source` metadata field)
+
+---
+
 ### PDF Collection System
 
 Structured ingestion and management for PDF documents.
 
-**Status:** Planning
+**Status:** Partial (indexer ready, needs serving routes)
 
-**Features:**
+**What exists:**
+- `PDFIndexer` class in [offline_tools/indexer.py](offline_tools/indexer.py) - extracts text, chunks long docs
+- Metadata extraction (title, author from PDF properties)
+- Text extraction via PyMuPDF or pypdf
+
+**What's missing:**
+- `/pdf/{source_id}/{filename}` route to serve PDFs locally (browser handles rendering)
+- R2 upload for cloud distribution
+- Dashboard UI for PDF ingestion
+
+**URL handling:**
+- `local_url`: `/pdf/{source_id}/doc.pdf` - needs serving route (not yet implemented)
+- `url`: `https://r2.../sources/{source_id}/doc.pdf` - for cloud access (PDFs often have no original online location)
+
+**Features (planned):**
 - Collection-based organization (group PDFs by topic/author)
 - Two-level metadata (collection + document)
 - DOI detection and CrossRef citation lookup
@@ -291,6 +400,109 @@ Interactive graph showing document relationships based on embedding similarity.
 
 ---
 
+### HTML Scraper Pipeline
+
+Integrate the existing HTML scraper into the admin dashboard for creating custom backups.
+
+**Status:** Backend ready, needs dashboard UI
+
+**What exists:**
+- `HTMLBackupScraper` class in [offline_tools/backup/html.py](offline_tools/backup/html.py) - downloads pages to `pages/` folder
+- `HTMLBackupIndexer` class in [offline_tools/indexer.py](offline_tools/indexer.py) - indexes HTML backups
+- `backup_manifest.json` format for URL-to-filename mapping
+- Metadata generation from HTML files
+
+**What's missing:**
+- Dashboard UI to configure and run scrapes (currently CLI only)
+- Language filtering at scrape time (filter pages before downloading)
+- License detection (scan for /license, /terms, Creative Commons badges)
+- Better metadata extraction from site `<meta>` tags
+- Progress tracking in Jobs page
+
+**URL handling:**
+- `local_url`: `/backup/{source_id}/{filename}` - served from backup folder
+- `url`: Original site URL (e.g., `https://ready.gov/plan`) - for online access
+
+**Comparison with ZIM pipeline:**
+| Aspect | ZIM | HTML Scraper |
+|--------|-----|--------------|
+| Backup source | Single `.zim` file | `pages/` folder with HTML files |
+| Language filter | Applied during indexing | Applied during scraping |
+| Metadata | Embedded in ZIM header | Must extract from site or user input |
+| Indexing | Same `save_all_outputs()` | Same `save_all_outputs()` |
+
+---
+
+### Multi-Dimension Local Search
+
+Support mixed embedding dimensions in local ChromaDB for flexibility between downloaded packs and user-created sources.
+
+**Status:** Planning
+
+**Problem:**
+- Downloaded source packs use OpenAI 1536-dim embeddings (high quality)
+- Local indexing on low-power devices (RPi 5) needs smaller 384-dim models
+- ChromaDB collections are fixed-dimension - can't mix in same collection
+- Users want both: downloaded packs AND their own local sources
+
+**Solution: Per-Source Collections**
+```
+ChromaDB
+  +-- collection: "ready_gov_site" (1536-dim, downloaded)
+  +-- collection: "wikipedia_climate" (1536-dim, downloaded)
+  +-- collection: "my_local_pdfs" (384-dim, user-created)
+  +-- collection: "neighborhood_guide" (384-dim, user-created)
+```
+
+**Search Flow:**
+```
+User query: "how to filter water"
+    |
+    v
+Group sources by dimension:
+  - 1536-dim: ready_gov, wikipedia (need OpenAI or skip if offline)
+  - 384-dim: my_local_pdfs, neighborhood_guide (local model)
+    |
+    v
+Embed query once per unique dimension
+    |
+    v
+Search all collections in parallel
+    |
+    v
+Merge results by score, return top N
+```
+
+**Manifest Tracking:**
+```json
+{
+  "embedding_model": "all-MiniLM-L6-v2",
+  "embedding_dimensions": 384,
+  "embedding_mode": "local"
+}
+```
+
+**Implementation:**
+1. ChromaDB store: Create collection per source_id (not one global)
+2. EmbeddingService: Cache models, support multiple dimensions
+3. Search: Detect dimensions, embed query appropriately, merge results
+4. Downloaded packs: Load `_vectors.json` into source-specific collection
+
+**Hardware Considerations (RPi 5):**
+
+| Model | Dimensions | Size | Speed |
+|-------|------------|------|-------|
+| all-MiniLM-L6-v2 | 384 | 22MB | ~50-100 docs/sec |
+| all-mpnet-base-v2 | 768 | 420MB | ~10-20 docs/sec |
+| OpenAI API | 1536 | N/A | Network-bound |
+
+**Offline Mode:**
+- If 1536-dim sources exist but no API key: skip those collections
+- Show warning: "3 sources unavailable (requires internet)"
+- Or: re-embed locally on first offline use (one-time cost)
+
+---
+
 ### Government Scrapers
 
 Add FEMA, Cal Fire, EPA sources.
@@ -374,6 +586,164 @@ Prioritize locally-relevant content based on user location.
 - NER or regex for location extraction
 - Location filtering in vector search
 - Session-based location storage
+
+---
+
+### Distributed Job Processing
+
+Offload long-running jobs (indexing, embeddings) to multiple machines for parallel processing.
+
+**Status:** Planning
+
+**Problem:**
+- Large sources (450k+ articles) take hours to index on a single machine
+- Embedding generation is CPU/GPU intensive
+- Single-machine approach wastes available compute resources
+- Users may have multiple machines, GPUs, or cloud resources available
+
+**Solution: Coordinator/Worker Model**
+- Coordinator tracks overall job progress and assigns work chunks
+- Workers claim chunks, process them, and report back
+- Each worker checkpoints independently (integrates with Job Checkpoint system)
+- If a worker dies, coordinator reassigns its chunk to another worker
+
+**Architecture:**
+```
+Coordinator (Main Machine)
+    |
+    +-- Tracks: job_id, source_id, total_articles, chunk assignments
+    |
+    +-- Chunk Status: pending, in_progress (worker_id), completed
+    |
+    v
+Workers (Other Machines)
+    |
+    +-- Poll coordinator for available chunks
+    +-- Process assigned chunk (e.g., articles 10000-19999)
+    +-- Write partial results to shared storage or upload to coordinator
+    +-- Report completion, request next chunk
+```
+
+**Chunk Assignment:**
+```json
+{
+  "job_id": "abc123",
+  "source_id": "wikipedia-medical",
+  "total_articles": 450000,
+  "chunk_size": 10000,
+  "chunks": [
+    {"chunk_id": 0, "start": 0, "end": 9999, "status": "completed"},
+    {"chunk_id": 1, "start": 10000, "end": 19999, "status": "in_progress", "worker_id": "gpu-server"},
+    {"chunk_id": 2, "start": 20000, "end": 29999, "status": "pending"}
+  ]
+}
+```
+
+**Implementation Phases:**
+
+| Phase | Scope | Network |
+|-------|-------|---------|
+| 1. Local Multi-GPU | Multiple GPUs on same machine | N/A (process parallelism) |
+| 2. LAN Workers | Other machines on local network | HTTP API, shared storage |
+| 3. Cloud Workers | Remote cloud instances | HTTP API, S3/R2 upload |
+
+**Phase 1: Local Multi-GPU**
+- Detect available GPUs
+- Spawn worker processes per GPU
+- Each process handles a chunk range
+- Merge results when all complete
+
+**Phase 2: LAN Workers**
+- Simple HTTP API for worker registration
+- Workers poll for work: `GET /api/jobs/{job_id}/next-chunk`
+- Workers report completion: `POST /api/jobs/{job_id}/chunks/{chunk_id}/complete`
+- Shared network storage for partial results (or upload to coordinator)
+
+**Phase 3: Cloud Workers (Future)**
+- Workers authenticate with API key
+- Results uploaded to R2/S3
+- Coordinator aggregates from cloud storage
+- Cost-aware scheduling (spot instances)
+
+**Worker Setup:**
+```bash
+# On worker machine (LAN example)
+python cli/worker.py --coordinator http://192.168.1.10:8000 --gpu 0
+```
+
+**Coordinator API Endpoints:**
+```
+GET  /api/jobs/{job_id}/status          # Overall job progress
+GET  /api/jobs/{job_id}/next-chunk      # Claim next available chunk
+POST /api/jobs/{job_id}/chunks/{id}/complete  # Mark chunk done, upload results
+POST /api/jobs/{job_id}/chunks/{id}/heartbeat # Worker still alive
+```
+
+**Failure Handling:**
+- Workers send heartbeat every 30 seconds
+- No heartbeat for 2 minutes = chunk returned to pending
+- Chunk retry limit (3) before marking failed
+- Failed chunks can be manually retried or skipped
+
+**Integration with Checkpoint System:**
+- Each worker maintains its own checkpoint file
+- Coordinator checkpoint tracks chunk assignments
+- On coordinator restart, reload chunk status, reassign orphaned chunks
+
+**Test Plan:**
+1. Test local multi-GPU on 6-GPU machine
+2. Test LAN worker on local network (two machines)
+3. Test cloud worker with remote instance
+
+---
+
+### Personal Cloud Backup
+
+Self-hosted backup system for users with their own hosting infrastructure.
+
+**Status:** Planning (placeholder in Settings page)
+
+**Problem:**
+- "Global" mode requires central Pinecone/R2 access
+- "Local" mode is single-machine only
+- Users with own servers/VPS want a middle ground
+- Want to sync between devices without using project's cloud
+
+**Solution: Personal Cloud Mode**
+- User provides their own S3-compatible storage endpoint
+- User optionally provides their own vector DB endpoint
+- System syncs to user's infrastructure instead of project's cloud
+
+**Settings Page Fields:**
+```
+Personal Cloud Backup
+---------------------
+Storage Type: [S3-Compatible v]
+Endpoint URL: [https://my-minio.example.com]
+Bucket Name: [disaster-clippy]
+Access Key: [********]
+Secret Key: [********]
+[Test Connection] [Save]
+
+Optional: Vector Database
+-------------------------
+Type: [Pinecone v]
+API Key: [********]
+Environment: [us-east-1]
+[Test Connection] [Save]
+```
+
+**Sync Behavior:**
+- Manual sync button (not automatic)
+- Uploads: _manifest.json, _metadata.json, _vectors.json, backups
+- Downloads: Pull sources from personal cloud to new device
+- Conflict resolution: Newer timestamp wins (with confirmation)
+
+**Use Cases:**
+- Family/community shared knowledge base
+- Prepper groups with dedicated server
+- Organizations with internal hosting requirements
+- Developers testing without affecting production cloud
 
 ---
 

@@ -13,6 +13,7 @@ Used by both Global Admin and Local Admin dashboards.
 import os
 import re
 import json
+import hashlib
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Callable
 from datetime import datetime
@@ -49,12 +50,36 @@ class IndexResult:
     skipped_count: int = 0
     total_chars: int = 0
     language_filtered: int = 0  # Count of articles filtered by language
+    resumed: bool = False  # True if resumed from checkpoint
     error: str = ""
     errors: List[str] = None
 
     def __post_init__(self):
         if self.errors is None:
             self.errors = []
+
+
+@dataclass
+class ValidationIssue:
+    """
+    A validation issue with an actionable fix hint.
+
+    Provides clear guidance to users on how to fix each issue.
+    """
+    message: str
+    severity: str = "error"  # "error" blocks validity, "warning" does not
+    action: str = ""  # e.g., "step2_config", "step3_metadata", "step5_index"
+    action_label: str = ""  # Human-readable action, e.g., "Run Generate Metadata"
+    step: int = 0  # Wizard step number (1-5) where this can be fixed
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "message": self.message,
+            "severity": self.severity,
+            "action": self.action,
+            "action_label": self.action_label,
+            "step": self.step
+        }
 
 
 @dataclass
@@ -83,6 +108,9 @@ class ValidationResult:
     has_vectors_file: bool = False  # _vectors.json
     has_backup_manifest: bool = False  # _backup_manifest.json
 
+    # Actionable issues with fix hints
+    actionable_issues: List[ValidationIssue] = None
+
     def __post_init__(self):
         if self.issues is None:
             self.issues = []
@@ -90,6 +118,32 @@ class ValidationResult:
             self.warnings = []
         if self.suggested_tags is None:
             self.suggested_tags = []
+        if self.actionable_issues is None:
+            self.actionable_issues = []
+
+    def add_issue(self, message: str, action: str = "", action_label: str = "", step: int = 0):
+        """Add an issue with optional action hint."""
+        self.issues.append(message)
+        if action or action_label:
+            self.actionable_issues.append(ValidationIssue(
+                message=message,
+                severity="error",
+                action=action,
+                action_label=action_label,
+                step=step
+            ))
+
+    def add_warning(self, message: str, action: str = "", action_label: str = "", step: int = 0):
+        """Add a warning with optional action hint."""
+        self.warnings.append(message)
+        if action or action_label:
+            self.actionable_issues.append(ValidationIssue(
+                message=message,
+                severity="warning",
+                action=action,
+                action_label=action_label,
+                step=step
+            ))
 
 
 class SourceManager:
@@ -184,6 +238,12 @@ class SourceManager:
         "hurricane": ["hurricane", "typhoon", "cyclone", "storm surge", "tropical storm"],
         "nuclear": ["nuclear", "radiation", "fallout", "radioactive", "nbc", "emp"],
         "pandemic": ["pandemic", "epidemic", "quarantine", "infectious disease", "outbreak"],
+        "drought": ["drought", "water shortage", "desertification", "arid"],
+
+        # Climate and environment
+        "climate": ["climate", "climate change", "global warming", "greenhouse", "carbon", "emission", "ipcc", "sea level", "temperature rise"],
+        "environment": ["environment", "environmental", "ecosystem", "biodiversity", "conservation", "pollution", "deforestation"],
+        "weather": ["weather", "meteorology", "forecast", "storm", "severe weather", "heat wave", "cold wave"],
 
         # Skills and knowledge
         "navigation": ["navigation", "compass", "map", "gps", "orienteering", "wayfinding"],
@@ -1153,12 +1213,13 @@ class SourceManager:
     # =========================================================================
 
     def generate_metadata(self, source_id: str, progress_callback: Callable = None,
-                          language_filter: str = None) -> Dict[str, Any]:
+                          language_filter: str = None, resume: bool = False,
+                          cancel_checker: Callable = None) -> Dict[str, Any]:
         """
         Generate metadata for a source from its backup files.
 
         For HTML sources: Scans HTML files and extracts titles, snippets
-        For ZIM sources: Extracts article metadata from ZIM file
+        For ZIM sources: Extracts article metadata from ZIM file (with checkpoint support)
         For PDF sources: Uses _collection.json document info
 
         Args:
@@ -1166,6 +1227,8 @@ class SourceManager:
             progress_callback: Function(current, total, message) for progress
             language_filter: ISO language code to filter (e.g., 'en', 'es').
                            Only applies to ZIM files. None = include all languages.
+            resume: If True, attempt to resume from checkpoint (ZIM only)
+            cancel_checker: Function that returns True if job was cancelled
 
         Returns:
             Dict with success status and document count
@@ -1182,7 +1245,7 @@ class SourceManager:
         source_path = self.get_source_path(source_id)
 
         if source_type == "zim":
-            return self._generate_zim_metadata(source_id, source_path, progress_callback, language_filter)
+            return self._generate_zim_metadata(source_id, source_path, progress_callback, language_filter, resume, cancel_checker)
         elif source_type == "html":
             return self._generate_html_metadata(source_id, source_path, progress_callback)
         elif source_type == "pdf":
@@ -1196,10 +1259,40 @@ class SourceManager:
 
     def _generate_zim_metadata(self, source_id: str, source_path: Path,
                                progress_callback: Callable = None,
-                               language_filter: str = None) -> Dict[str, Any]:
-        """Generate metadata from ZIM file."""
+                               language_filter: str = None,
+                               resume: bool = False,
+                               cancel_checker: Callable = None) -> Dict[str, Any]:
+        """
+        Generate metadata from ZIM file with checkpoint support.
+
+        Checkpoints are saved every 60 seconds OR every 2000 articles.
+        The partial work is stored in _jobs/{source_id}_metadata.partial.json
+
+        Args:
+            source_id: Source identifier
+            source_path: Path to source folder
+            progress_callback: Progress reporting function
+            language_filter: ISO language code to filter (e.g., 'en')
+            resume: If True, attempt to resume from checkpoint
+            cancel_checker: Function that returns True if job was cancelled
+
+        Returns:
+            Dict with success status and document count
+        """
+        import time as time_module
         from .schemas import get_metadata_file
-        from .indexer import should_include_article
+        from .indexer import should_include_article, extract_text_lenient
+
+        # Import checkpoint functions
+        try:
+            from admin.job_manager import (
+                Checkpoint, save_checkpoint, load_checkpoint, delete_checkpoint,
+                get_partial_file_path
+            )
+            checkpointing_available = True
+        except ImportError:
+            checkpointing_available = False
+            print("[metadata] Checkpoint system not available")
 
         zim_files = list(source_path.glob("*.zim"))
         if not zim_files:
@@ -1216,28 +1309,58 @@ class SourceManager:
         except Exception as e:
             return {"success": False, "error": f"Failed to open ZIM: {e}", "document_count": 0}
 
-        documents = {}
         article_count = zim.header_fields.get('articleCount', 0)
-        processed = 0
+
+        # Initialize or load from checkpoint
+        documents = {}
+        start_index = 0
         language_filtered = 0
+        checkpoint = None
+        resumed = False
+
+        if checkpointing_available and resume:
+            checkpoint = load_checkpoint(source_id, "metadata")
+            if checkpoint:
+                # Load partial work
+                partial_path = get_partial_file_path(source_id, "metadata")
+                if partial_path and partial_path.exists():
+                    try:
+                        with open(partial_path, 'r', encoding='utf-8') as f:
+                            partial_data = json.load(f)
+                        documents = partial_data.get("documents", {})
+                        language_filtered = partial_data.get("language_filtered", 0)
+                        start_index = checkpoint.last_article_index + 1
+                        resumed = True
+                        print(f"[metadata] Resuming from checkpoint: {len(documents)} docs, starting at article {start_index}")
+                    except Exception as e:
+                        print(f"[metadata] Error loading partial file: {e}")
+                        # Start fresh if partial file is corrupted
+                        documents = {}
+                        start_index = 0
+
+        if not checkpoint and checkpointing_available:
+            # Create new checkpoint
+            checkpoint = Checkpoint(
+                job_type="metadata",
+                source_id=source_id,
+                work_range_end=article_count
+            )
+
+        processed = len(documents)
+        last_checkpoint_time = time_module.time()
+        articles_since_checkpoint = 0
+        CHECKPOINT_INTERVAL_SECONDS = 60
+        CHECKPOINT_INTERVAL_ARTICLES = 2000
 
         lang_msg = f" (language: {language_filter})" if language_filter else ""
+        resume_msg = f" (resumed from {start_index})" if resumed else ""
         if progress_callback:
-            progress_callback(0, article_count, f"Extracting ZIM metadata{lang_msg}...")
+            progress_callback(start_index, article_count, f"Extracting ZIM metadata{lang_msg}{resume_msg}...")
 
         if language_filter:
             print(f"Language filter: {language_filter} (only including {language_filter} articles in metadata)")
 
-        # Extract text from HTML helper
-        def extract_text(html):
-            import re
-            text = re.sub(r'<script[^>]*>.*?</script>', '', html, flags=re.DOTALL | re.IGNORECASE)
-            text = re.sub(r'<style[^>]*>.*?</style>', '', text, flags=re.DOTALL | re.IGNORECASE)
-            text = re.sub(r'<[^>]+>', ' ', text)
-            text = re.sub(r'\s+', ' ', text)
-            return text.strip()
-
-        for i in range(article_count):
+        for i in range(start_index, article_count):
             try:
                 article = zim.get_article_by_id(i)
                 if article is None:
@@ -1266,11 +1389,13 @@ class SourceManager:
                 if isinstance(content, bytes):
                     content = content.decode('utf-8', errors='ignore')
 
-                text = extract_text(content)
+                # Use unified BeautifulSoup extraction for consistency with indexing
+                text = extract_text_lenient(content)
                 if len(text) < 50:  # Skip very short articles
                     continue
 
-                doc_id = f"zim_{i}"
+                # Use same ID format as indexer: MD5 hash of source_id:url
+                doc_id = hashlib.md5(f"{source_id}:{url}".encode()).hexdigest()
                 documents[doc_id] = {
                     "title": title[:200] if title else url[:200],
                     "url": f"/zim/{source_id}/{url}",
@@ -1281,12 +1406,81 @@ class SourceManager:
                     "zim_url": url
                 }
                 processed += 1
+                articles_since_checkpoint += 1
 
+                # Progress callback
                 if progress_callback and processed % 100 == 0:
                     lang_info = f", {language_filtered} filtered" if language_filtered > 0 else ""
-                    progress_callback(processed, article_count, f"Processed {processed} articles{lang_info}...")
+                    progress_callback(i, article_count, f"Processed {processed} articles{lang_info}...")
 
-            except Exception:
+                # Check for cancellation every 100 articles
+                if cancel_checker and cancel_checker():
+                    print(f"[metadata] Job cancelled by user at article {i}")
+                    # Save checkpoint before exiting so work isn't lost
+                    if checkpoint and checkpointing_available:
+                        checkpoint.last_article_index = i
+                        checkpoint.documents_processed = processed
+                        checkpoint.progress = int((i / article_count) * 100)
+                        save_checkpoint(checkpoint)
+                        # Save partial work
+                        partial_path = get_partial_file_path(source_id, "metadata")
+                        if partial_path:
+                            with open(partial_path, 'w', encoding='utf-8') as f:
+                                json.dump({
+                                    "source_id": source_id,
+                                    "documents": documents,
+                                    "language_filtered": language_filtered,
+                                    "last_article_index": i
+                                }, f)
+                    zim.close()
+                    return {
+                        "success": False,
+                        "error": "Cancelled by user",
+                        "cancelled": True,
+                        "document_count": processed
+                    }
+
+                # Checkpoint: every 60 seconds OR every 2000 articles
+                if checkpointing_available and checkpoint:
+                    time_since_checkpoint = time_module.time() - last_checkpoint_time
+                    should_checkpoint = (
+                        time_since_checkpoint >= CHECKPOINT_INTERVAL_SECONDS or
+                        articles_since_checkpoint >= CHECKPOINT_INTERVAL_ARTICLES
+                    )
+
+                    if should_checkpoint:
+                        # Update checkpoint
+                        checkpoint.last_article_index = i
+                        checkpoint.documents_processed = processed
+                        checkpoint.progress = int((i / article_count) * 100)
+
+                        # Save partial work to file
+                        partial_path = get_partial_file_path(source_id, "metadata")
+                        if partial_path:
+                            checkpoint.partial_file = str(partial_path)
+                            try:
+                                partial_data = {
+                                    "source_id": source_id,
+                                    "documents": documents,
+                                    "language_filtered": language_filtered,
+                                    "last_article_index": i
+                                }
+                                temp_path = partial_path.with_suffix('.tmp')
+                                with open(temp_path, 'w', encoding='utf-8') as f:
+                                    json.dump(partial_data, f)
+                                temp_path.replace(partial_path)
+                            except Exception as e:
+                                print(f"[metadata] Error saving partial file: {e}")
+
+                        # Save checkpoint
+                        save_checkpoint(checkpoint)
+                        last_checkpoint_time = time_module.time()
+                        articles_since_checkpoint = 0
+
+            except Exception as e:
+                # Track errors in checkpoint
+                if checkpoint:
+                    checkpoint.errors.append({"article_index": i, "error": str(e)})
                 continue
 
         try:
@@ -1294,7 +1488,7 @@ class SourceManager:
         except Exception:
             pass
 
-        # Save metadata
+        # Save final metadata
         metadata_file = source_path / get_metadata_file()
         metadata = {
             "source_id": source_id,
@@ -1307,6 +1501,10 @@ class SourceManager:
         with open(metadata_file, 'w', encoding='utf-8') as f:
             json.dump(metadata, f, indent=2)
 
+        # Delete checkpoint on successful completion
+        if checkpointing_available:
+            delete_checkpoint(source_id, "metadata")
+
         lang_info = f", {language_filtered} filtered by language" if language_filtered > 0 else ""
         if progress_callback:
             progress_callback(article_count, article_count, f"Metadata generation complete{lang_info}")
@@ -1316,7 +1514,8 @@ class SourceManager:
             "document_count": len(documents),
             "language_filter": language_filter,
             "language_filtered_count": language_filtered,
-            "metadata_file": str(metadata_file)
+            "metadata_file": str(metadata_file),
+            "resumed": resumed
         }
 
     def _generate_html_metadata(self, source_id: str, source_path: Path,
@@ -1397,7 +1596,9 @@ class SourceManager:
     def create_index(self, source_id: str, source_type: str = None,
                      limit: int = 1000, skip_existing: bool = True,
                      progress_callback: Callable = None,
-                     language_filter: str = None) -> IndexResult:
+                     language_filter: str = None,
+                     resume: bool = False,
+                     cancel_checker: Callable = None) -> IndexResult:
         """
         Create an index for a source.
 
@@ -1409,6 +1610,8 @@ class SourceManager:
             progress_callback: Function(current, total, message)
             language_filter: ISO language code to filter (e.g., 'en', 'es').
                            Only applies to ZIM files. None = index all languages.
+            resume: If True, attempt to resume from checkpoint (ZIM only)
+            cancel_checker: Function that returns True if job was cancelled
 
         Returns:
             IndexResult with success status and counts
@@ -1435,7 +1638,8 @@ class SourceManager:
         if source_type == "html":
             return self._index_html(source_id, limit, skip_existing, progress_callback)
         elif source_type == "zim":
-            return self._index_zim(source_id, limit, progress_callback, language_filter, clear_existing)
+            return self._index_zim(source_id, limit, progress_callback, language_filter,
+                                   clear_existing, resume, cancel_checker)
         elif source_type == "pdf":
             return self._index_pdf(source_id, limit, skip_existing, progress_callback)
         else:
@@ -1524,8 +1728,10 @@ class SourceManager:
     def _index_zim(self, source_id: str, limit: int,
                    progress_callback: Callable,
                    language_filter: str = None,
-                   clear_existing: bool = False) -> IndexResult:
-        """Index a ZIM file"""
+                   clear_existing: bool = False,
+                   resume: bool = False,
+                   cancel_checker: Callable = None) -> IndexResult:
+        """Index a ZIM file with optional checkpoint support"""
         try:
             from offline_tools.indexer import index_zim_file
 
@@ -1550,7 +1756,9 @@ class SourceManager:
                 progress_callback=progress_callback,
                 backup_folder=str(self.get_source_path(source_id)),
                 language_filter=language_filter,
-                clear_existing=clear_existing
+                clear_existing=clear_existing,
+                resume=resume,
+                cancel_checker=cancel_checker
             )
 
             return IndexResult(
@@ -1559,6 +1767,7 @@ class SourceManager:
                 indexed_count=result.get("indexed_count", 0),
                 total_chars=result.get("total_chars", 0),
                 language_filtered=result.get("language_filtered", 0),
+                resumed=result.get("resumed", False),
                 error=result.get("error", ""),
                 errors=result.get("errors", [])
             )
@@ -1666,9 +1875,17 @@ class SourceManager:
         result.has_backup_manifest = schema_validation["has_backup_manifest"]
         result.has_backup = schema_validation["has_backup"]
 
-        # Add schema validation issues
+        # Add schema validation issues with actionable hints
         for issue in schema_validation.get("issues", []):
-            result.issues.append(issue)
+            # Map schema issues to specific steps
+            if "manifest" in issue.lower():
+                result.add_issue(issue, action="step2_config", action_label="Configure Source", step=2)
+            elif "metadata" in issue.lower():
+                result.add_issue(issue, action="step3_metadata", action_label="Generate Metadata", step=3)
+            elif "vectors" in issue.lower():
+                result.add_issue(issue, action="step5_index", action_label="Create Index", step=5)
+            else:
+                result.issues.append(issue)
             result.is_valid = False
 
         # Set legacy fields for compatibility
@@ -1679,51 +1896,98 @@ class SourceManager:
         source_type = self._detect_source_type(source_id)
         if not source_type and not result.has_backup:
             if "No backup found" not in str(result.issues):
-                result.issues.append("No backup found (no HTML, ZIM, or PDF files)")
+                result.add_issue(
+                    "No backup found (no HTML, ZIM, or PDF files)",
+                    action="step1_backup",
+                    action_label="Add Backup Files",
+                    step=1
+                )
             result.is_valid = False
         elif source_type:
             result.has_backup = True
 
         # Verify metadata file has content (not just exists)
+        metadata_doc_count = 0
         metadata_file = source_path / get_metadata_file()
         if metadata_file.exists():
             try:
                 with open(metadata_file, 'r', encoding='utf-8') as f:
                     docs_data = json.load(f)
-                doc_count = len(docs_data.get("documents", {}))
-                if doc_count == 0:
+                metadata_doc_count = len(docs_data.get("documents", {}))
+                if metadata_doc_count == 0:
                     result.has_metadata = False
                     result.has_metadata_file = False
-                    result.issues.append("Metadata file exists but is empty - run 'Create Index'")
+                    result.add_issue(
+                        "Metadata file exists but is empty",
+                        action="step3_metadata",
+                        action_label="Generate Metadata",
+                        step=3
+                    )
                     result.is_valid = False
             except Exception:
                 result.has_metadata = False
                 result.has_metadata_file = False
-                result.issues.append("Metadata file exists but could not be read - run 'Create Index'")
+                result.add_issue(
+                    "Metadata file exists but could not be read",
+                    action="step3_metadata",
+                    action_label="Generate Metadata",
+                    step=3
+                )
                 result.is_valid = False
 
         # Check vectors file has content
+        vectors_doc_count = 0
         vectors_file = source_path / get_vectors_file()
         if vectors_file.exists():
             result.has_embeddings = True
             try:
                 with open(vectors_file, 'r', encoding='utf-8') as f:
                     embed_data = json.load(f)
-                embed_count = len(embed_data.get("vectors", {}))
-                if embed_count == 0:
-                    embed_count = embed_data.get("document_count", 0)
-                if embed_count == 0:
+                vectors_doc_count = len(embed_data.get("vectors", {}))
+                if vectors_doc_count == 0:
+                    vectors_doc_count = embed_data.get("document_count", 0)
+                if vectors_doc_count == 0:
                     result.has_embeddings = False
                     result.has_vectors_file = False
-                    result.issues.append("Vectors file exists but is empty - run 'Create Index'")
+                    result.add_issue(
+                        "Vectors file exists but is empty",
+                        action="step5_index",
+                        action_label="Create Index",
+                        step=5
+                    )
                     result.is_valid = False
             except Exception:
                 result.has_embeddings = False
                 result.has_vectors_file = False
-                result.issues.append("Vectors file exists but could not be read - run 'Create Index'")
+                result.add_issue(
+                    "Vectors file exists but could not be read",
+                    action="step5_index",
+                    action_label="Create Index",
+                    step=5
+                )
                 result.is_valid = False
         else:
             result.has_embeddings = False
+
+        # Check for metadata/index count mismatch
+        if metadata_doc_count > 0 and vectors_doc_count > 0:
+            if vectors_doc_count < metadata_doc_count:
+                coverage = (vectors_doc_count / metadata_doc_count) * 100
+                if coverage < 90:  # Less than 90% coverage is a warning
+                    result.add_warning(
+                        f"Index incomplete: {vectors_doc_count:,} indexed of {metadata_doc_count:,} documents ({coverage:.1f}%)",
+                        action="step5_force_reindex",
+                        action_label="Force Re-index with higher limit",
+                        step=5
+                    )
+                    if coverage < 50:  # Less than 50% is an issue
+                        result.add_issue(
+                            f"Index severely incomplete: only {coverage:.1f}% of documents indexed",
+                            action="step5_force_reindex",
+                            action_label="Force Re-index All Documents",
+                            step=5
+                        )
+                        result.is_valid = False
 
         # Check license
         license_val = source_config.get("license", "")
@@ -1731,17 +1995,32 @@ class SourceManager:
             result.has_license = True
             result.license_verified = source_config.get("license_verified", False)
             if not result.license_verified:
-                result.warnings.append("License not verified")
+                result.add_warning(
+                    "License not verified",
+                    action="step2_verify_license",
+                    action_label="Verify License",
+                    step=2
+                )
         else:
             result.has_license = False
-            result.issues.append("No license specified")
+            result.add_issue(
+                "No license specified",
+                action="step2_config",
+                action_label="Set License in Configure Source",
+                step=2
+            )
             result.is_valid = False
 
             # Try auto-detection
             detected = self.detect_license(source_id)
             if detected:
                 result.detected_license = detected
-                result.warnings.append(f"Auto-detected license: {detected} (needs verification)")
+                result.add_warning(
+                    f"Auto-detected license: {detected} (needs verification)",
+                    action="step2_apply_license",
+                    action_label=f"Apply detected license: {detected}",
+                    step=2
+                )
 
         # Check tags - check source_config first, then _collection.json for PDF sources
         tags = source_config.get("tags", []) or source_config.get("topics", [])
@@ -1763,7 +2042,12 @@ class SourceManager:
             print(f"[validate] Source already has tags: {tags}")
         else:
             result.has_tags = False
-            result.warnings.append("No tags specified")
+            result.add_warning(
+                "No tags specified",
+                action="step2_add_tags",
+                action_label="Add Tags",
+                step=2
+            )
             print(f"[validate] No tags found, calling suggest_tags()")
 
             # Suggest tags
@@ -1771,7 +2055,12 @@ class SourceManager:
             print(f"[validate] suggest_tags returned: {suggested}")
             if suggested:
                 result.suggested_tags = suggested
-                result.warnings.append(f"Suggested tags: {', '.join(suggested)}")
+                result.add_warning(
+                    f"Suggested tags: {', '.join(suggested)}",
+                    action="step2_apply_tags",
+                    action_label="Apply Suggested Tags",
+                    step=2
+                )
 
         # Current schema version (v3 uses underscore-prefixed files)
         result.schema_version = 3
@@ -1972,6 +2261,7 @@ class SourceManager:
         print(f"[suggest_tags] Backup path: {self.backup_path}")
         print(f"[suggest_tags] Looking for metadata in: {source_path}")
         suggested = set()
+        tag_scores = {}  # Track keyword match frequency for ranking
 
         # For PDF sources, check _collection.json topics first
         collection_file = source_path / "_collection.json"
@@ -2007,24 +2297,32 @@ class SourceManager:
                 if not documents:
                     print(f"[suggest_tags] Metadata file exists but has no documents: {metadata_file}")
                 else:
-                    # Scan titles
+                    # Scan titles and snippets for keyword frequency
                     all_text = ""
                     sample_titles = []
                     for doc_id, doc_info in documents.items():
                         title = doc_info.get("title", "")
-                        all_text += " " + title.lower()
+                        snippet = doc_info.get("snippet", "")
+                        all_text += " " + title.lower() + " " + snippet.lower()
                         if len(sample_titles) < 5:
                             sample_titles.append(title[:50])
 
                     print(f"[suggest_tags] Sample titles: {sample_titles}")
 
-                    # Match topic keywords
+                    # Count keyword matches for each tag (frequency-based ranking)
                     for tag, keywords in self.TOPIC_KEYWORDS.items():
+                        score = 0
                         for keyword in keywords:
-                            if keyword in all_text:
-                                suggested.add(tag)
-                                break
+                            # Count occurrences of this keyword
+                            count = all_text.count(keyword)
+                            if count > 0:
+                                score += count
+                        if score > 0:
+                            tag_scores[tag] = score
+                            suggested.add(tag)
 
+                    # Log top scores
+                    print(f"[suggest_tags] Tag scores (top 10): {dict(sorted(tag_scores.items(), key=lambda x: x[1], reverse=True)[:10])}")
                     print(f"[suggest_tags] Found {len(suggested)} suggested tags from content")
 
             except Exception as e:
@@ -2038,15 +2336,35 @@ class SourceManager:
                 files = [f.name for f in source_path.iterdir() if f.is_file()]
                 print(f"[suggest_tags] Files in {source_path}: {files[:10]}")
 
-        # Also check source_id itself
+        # Check source_id for priority tags (these should always be included)
         source_lower = source_id.lower()
+        priority_tags = set()
         for tag, keywords in self.TOPIC_KEYWORDS.items():
             for keyword in keywords:
                 if keyword in source_lower:
-                    suggested.add(tag)
+                    priority_tags.add(tag)
                     break
 
-        return list(suggested)[:10]  # Limit to 10 suggestions
+        # Combine: priority tags first, then highest-scoring content tags
+        # Priority tags from source_id always included at the front
+        if tag_scores:
+            # Use frequency-ranked tags from content scan
+            sorted_content_tags = sorted(
+                [t for t in tag_scores.keys() if t not in priority_tags],
+                key=lambda t: tag_scores[t],
+                reverse=True
+            )
+            content_tags = sorted_content_tags
+        else:
+            # Fallback to unordered set if no content was scanned
+            content_tags = [t for t in suggested if t not in priority_tags]
+
+        all_tags = list(priority_tags) + content_tags
+
+        print(f"[suggest_tags] Priority tags from source_id: {priority_tags}")
+        print(f"[suggest_tags] Total tags: {len(all_tags)}, returning top 10")
+
+        return all_tags[:10]  # Return top 10 (priority + highest-scoring content)
 
     # =========================================================================
     # PACK CREATION

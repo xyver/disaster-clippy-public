@@ -33,6 +33,21 @@ async def get_active_jobs(source_id: str = None):
     }
 
 
+@router.get("/history")
+async def get_job_history(limit: int = 50, days: int = 7):
+    """
+    Get completed job history from disk.
+
+    Args:
+        limit: Maximum number of jobs to return (default 50)
+        days: Maximum age of jobs in days (default 7)
+    """
+    manager = get_job_manager()
+    return {
+        "jobs": manager.get_job_history(limit=limit, max_age_days=days)
+    }
+
+
 @router.get("/{job_id}")
 async def get_job_status(job_id: str):
     """Get status of a specific job."""

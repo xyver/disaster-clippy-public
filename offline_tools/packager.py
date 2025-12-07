@@ -497,7 +497,8 @@ def generate_metadata_from_html(
             rel_path = html_file.relative_to(html_path)
             url = str(rel_path).replace('\\', '/')
 
-            doc_id = f"{source_id}_{content_hash}"
+            # Use same ID format as indexer: MD5 hash of source_id:url
+            doc_id = hashlib.md5(f"{source_id}:{url}".encode()).hexdigest()
             documents[doc_id] = {
                 "title": title,
                 "url": url,

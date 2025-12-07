@@ -298,13 +298,16 @@ def save_vectors(output_folder: Path, source_id: str,
 def save_all_outputs(output_folder: Path, source_id: str, documents: List[Dict],
                      index_data: Dict = None, source_type: str = "unknown",
                      base_url: str = "", license_info: str = "Unknown",
-                     backup_info: Dict = None, zim_metadata: Dict = None) -> Dict[str, Path]:
+                     backup_info: Dict = None, zim_metadata: Dict = None,
+                     skip_metadata_save: bool = False) -> Dict[str, Path]:
     """
     Save all output files for a source.
 
     Args:
         zim_metadata: Optional metadata extracted from ZIM header_fields
                      (name, description, creator, license, tags, etc.)
+        skip_metadata_save: If True, don't overwrite _metadata.json (preserves
+                           metadata from separate "Generate Metadata" step)
 
     Returns dict of saved file paths.
     """
@@ -314,9 +317,13 @@ def save_all_outputs(output_folder: Path, source_id: str, documents: List[Dict],
     saved = {}
 
     # Save metadata first (needed for size calculation in manifest)
-    metadata_path = save_metadata(output_folder, source_id, documents)
-    if metadata_path:
-        saved["metadata"] = metadata_path
+    # Skip if metadata was loaded from existing file (to preserve full document list)
+    if not skip_metadata_save:
+        metadata_path = save_metadata(output_folder, source_id, documents)
+        if metadata_path:
+            saved["metadata"] = metadata_path
+    else:
+        print(f"[save_all_outputs] Skipping metadata save (preserving existing _metadata.json)")
 
     # Save full content index
     index_path = save_index(output_folder, source_id, documents)
@@ -355,30 +362,48 @@ def save_all_outputs(output_folder: Path, source_id: str, documents: List[Dict],
 # SHARED UTILITIES
 # =============================================================================
 
-def extract_text_from_html(html_content: str) -> str:
-    """Extract clean text from HTML content"""
+def extract_text_lenient(html_content: str) -> str:
+    """
+    Extract text from HTML using lenient BeautifulSoup parsing.
+
+    This is the UNIFIED extraction method used by both metadata generation
+    and indexing to ensure consistent document counts.
+
+    Approach:
+    - Removes junk tags (script, style, nav, header, footer, aside, iframe)
+    - Does NOT require main/article container (lenient)
+    - Extracts all remaining text content
+    - Cleans up whitespace
+
+    This replaces both:
+    - The regex-based extraction in metadata generation
+    - The strict main-content extraction in indexing
+    """
     soup = BeautifulSoup(html_content, 'html.parser')
 
-    # Remove scripts, styles, navigation, ads
-    for tag in soup.find_all(['script', 'style', 'nav', 'header', 'footer', 'aside', 'iframe']):
+    # Remove junk tags that don't contain useful content
+    for tag in soup.find_all(['script', 'style', 'nav', 'header', 'footer', 'aside', 'iframe', 'noscript']):
         tag.decompose()
 
-    # Try to find main content area
-    main_content = (
-        soup.find('main') or
-        soup.find('article') or
-        soup.find('div', {'id': 'content'}) or
-        soup.find('div', {'class': 'mw-parser-output'})
-    )
+    # Get all remaining text (lenient - don't require main/article container)
+    text = soup.get_text(separator=' ', strip=True)
 
-    if main_content:
-        text = main_content.get_text(separator=' ', strip=True)
-    else:
-        text = soup.get_text(separator=' ', strip=True)
-
-    # Clean up whitespace
+    # Clean up whitespace - normalize spaces and remove empty lines
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     return ' '.join(lines)
+
+
+def extract_text_from_html(html_content: str) -> str:
+    """
+    Extract clean text from HTML content.
+
+    DEPRECATED: This function now calls extract_text_lenient() for consistency.
+    Keeping the function name for backwards compatibility with existing code.
+
+    Previously tried to find main content areas (main, article, etc.) which
+    caused metadata/index count mismatches. Now uses lenient extraction.
+    """
+    return extract_text_lenient(html_content)
 
 
 def get_title_from_html(html_content: str, fallback_url: str = "") -> str:
@@ -482,7 +507,7 @@ LANGUAGE_TITLE_SUFFIXES = {
     'tr': ['(Turkish)', '(TR)'],
     'pl': ['(Polish)', '(PL)'],
     'nl': ['(Dutch)', '(NL)'],
-    'uk': ['(Ukrainian)', '(UK)'],
+    'uk': ['(Ukrainian)'],  # Note: (UK) means United Kingdom, not Ukrainian
     'ro': ['(Romanian)', '(RO)'],
     'el': ['(Greek)', '(EL)'],
     'he': ['(Hebrew)', '(HE)'],
@@ -642,7 +667,7 @@ class ZIMIndexer:
 
         return metadata
 
-    def _build_online_url(self, zim_path: str, zim_metadata: Optional[Dict] = None) -> str:
+    def _build_online_url(self, zim_path: str, zim_metadata: Optional[Dict] = None, manifest_base_url: str = None) -> str:
         """
         Build online URL from ZIM path.
 
@@ -650,20 +675,30 @@ class ZIMIndexer:
         This method detects such paths and converts them to proper https:// URLs.
 
         Fallback order:
-        1. If path looks like a full URL (www.*, contains domain), prepend https://
-        2. If zim_metadata has source_url, use base_url + article name
-        3. Return None (caller should use local_url)
+        1. If manifest_base_url is set (user configured), use it + article name
+        2. If path looks like a full URL (www.*, contains domain), prepend https://
+        3. If zim_metadata has source_url, use base_url + article name
+        4. Return None (caller should use local_url)
         """
         import re
 
-        # Check if ZIM path contains a full URL (common in ZIM files)
+        # Extract article name (last path segment) for base_url construction
+        article_name = zim_path.split('/')[-1] if '/' in zim_path else zim_path
+
+        # Priority 1: User-configured base_url from manifest
+        if manifest_base_url:
+            if not manifest_base_url.endswith('/'):
+                manifest_base_url += '/'
+            return f"{manifest_base_url}{article_name}"
+
+        # Priority 2: Check if ZIM path contains a full URL (common in ZIM files)
         # Match patterns like: www.example.com/..., subdomain.domain.tld/...
         url_pattern = r'^(www\.|[a-z0-9-]+\.(gov|com|org|net|edu|io|co|info|wiki)[/\.])'
         if re.match(url_pattern, zim_path, re.IGNORECASE):
             # Path is a full URL, just add protocol
             return f"https://{zim_path}"
 
-        # Try base_url from ZIM metadata
+        # Priority 3: Try base_url from ZIM metadata
         base_url = zim_metadata.get("source_url", "") if zim_metadata else ""
         if base_url:
             if not base_url.endswith('/'):
@@ -677,13 +712,17 @@ class ZIMIndexer:
 
     def index(self, limit: int = 1000, progress_callback: Optional[Callable] = None,
               language_filter: Optional[str] = None,
-              clear_existing: bool = False) -> Dict:
+              clear_existing: bool = False,
+              resume: bool = False,
+              cancel_checker: Optional[Callable] = None) -> Dict:
         """
         Index content from ZIM file into vector database.
 
         If _metadata.json exists (from Generate Metadata step), uses that document
         list instead of re-scanning the entire ZIM. This is faster and ensures
         consistency with any language filtering applied during metadata generation.
+
+        Supports checkpoint-based resumption for long-running index jobs.
 
         Args:
             limit: Maximum number of articles to index
@@ -693,6 +732,8 @@ class ZIMIndexer:
                            If metadata exists, its filtering is already applied.
             clear_existing: If True, delete all existing documents for this source
                           from ChromaDB before indexing (for force reindex).
+            resume: If True, attempt to resume from checkpoint if available.
+            cancel_checker: Function that returns True if job was cancelled.
 
         Returns:
             Dict with success status, count, errors
@@ -706,9 +747,24 @@ class ZIMIndexer:
                 "indexed_count": 0
             }
 
+        # Import checkpoint system
+        import time as time_module
+        try:
+            from admin.job_manager import (
+                Checkpoint, save_checkpoint, load_checkpoint,
+                delete_checkpoint, get_partial_file_path
+            )
+            checkpointing_available = True
+        except ImportError:
+            checkpointing_available = False
+            print("[ZIMIndexer] Checkpoint system not available")
+
         errors = []
         documents = []
         deleted_count = 0
+        checkpoint = None
+        resumed_from_checkpoint = False
+        start_doc_index = 0  # For resuming from checkpoint
 
         # Clear existing documents from ChromaDB if requested (force reindex)
         if clear_existing:
@@ -728,7 +784,7 @@ class ZIMIndexer:
             print(f"[ZIMIndexer] Skip existing mode - not clearing documents")
 
         # Check for existing _metadata.json - use it if available
-        from .schemas import get_metadata_file
+        from .schemas import get_metadata_file, get_manifest_file
         metadata_path = self.output_folder / get_metadata_file()
         use_metadata = metadata_path.exists()
         metadata_docs = {}
@@ -748,21 +804,72 @@ class ZIMIndexer:
                 use_metadata = False
                 print(f"[ZIMIndexer] Could not read _metadata.json: {e}, falling back to full scan")
 
+        # Load manifest to get user-configured base_url
+        manifest_base_url = None
+        manifest_path = self.output_folder / get_manifest_file()
+        if manifest_path.exists():
+            try:
+                with open(manifest_path, 'r', encoding='utf-8') as f:
+                    manifest_data = json.load(f)
+                manifest_base_url = manifest_data.get("base_url", "")
+                if manifest_base_url:
+                    print(f"[ZIMIndexer] Using base_url from manifest: {manifest_base_url}")
+            except Exception as e:
+                print(f"[ZIMIndexer] Could not read manifest for base_url: {e}")
+
+        # Load checkpoint if resuming
+        indexed_doc_ids = set()  # Track already-indexed doc IDs for resume
+        if checkpointing_available and resume and not clear_existing:
+            checkpoint = load_checkpoint(self.source_id, "index")
+            if checkpoint:
+                # Load partial work - the set of doc IDs already extracted
+                partial_path = get_partial_file_path(self.source_id, "index")
+                if partial_path and partial_path.exists():
+                    try:
+                        with open(partial_path, 'r', encoding='utf-8') as f:
+                            partial_data = json.load(f)
+                        indexed_doc_ids = set(partial_data.get("indexed_doc_ids", []))
+                        start_doc_index = checkpoint.last_article_index
+                        resumed_from_checkpoint = True
+                        print(f"[ZIMIndexer] Resuming from checkpoint: {len(indexed_doc_ids)} docs already indexed")
+                    except Exception as e:
+                        print(f"[ZIMIndexer] Error loading partial file: {e}, starting fresh")
+                        indexed_doc_ids = set()
+
+        if checkpointing_available and not checkpoint:
+            # Create new checkpoint
+            checkpoint = Checkpoint(
+                job_type="index",
+                source_id=self.source_id
+            )
+
+        # Checkpoint tracking
+        last_checkpoint_time = time_module.time()
+        docs_since_checkpoint = 0
+        CHECKPOINT_INTERVAL_SECONDS = 60
+        CHECKPOINT_INTERVAL_DOCS = 500
+
         try:
-            # Progress is split: 0-50% extraction, 50-100% embeddings
+            # Track total documents for progress reporting
+            # We report actual counts so UI shows "100 / 18,000 items"
+            extraction_total = [0]  # Use list to allow modification in nested function
+
             def report_extraction_progress(current, total, message):
+                extraction_total[0] = total  # Remember extraction total
                 if progress_callback:
-                    # Scale to 0-50%
-                    scaled_progress = int((current / max(total, 1)) * 50)
-                    progress_callback(scaled_progress, 100, message)
+                    # Pass actual counts - job manager calculates percentage
+                    progress_callback(current, total, message)
 
             def report_embedding_progress(current, total, message):
                 if progress_callback:
-                    # Scale to 50-100%
-                    scaled_progress = 50 + int((current / max(total, 1)) * 50)
-                    progress_callback(scaled_progress, 100, message)
+                    # During embedding, show docs being indexed
+                    # Add extraction_total to offset so progress continues from where extraction left off
+                    ext_total = extraction_total[0]
+                    combined_current = ext_total + current
+                    combined_total = ext_total + total
+                    progress_callback(combined_current, combined_total, message)
 
-            report_extraction_progress(0, 100, "Opening ZIM file...")
+            report_extraction_progress(0, 1, "Opening ZIM file...")
 
             zim = ZIMFile(str(self.zim_path), 'utf-8')
             article_count = zim.header_fields.get('articleCount', 0)
@@ -781,13 +888,25 @@ class ZIMIndexer:
                 # Only fetch content for documents already in _metadata.json
                 docs_to_process = list(metadata_docs.items())[:limit]
                 target_count = len(docs_to_process)
-                report_extraction_progress(0, target_count, f"Processing {target_count} documents from metadata...")
+
+                # If resuming, adjust progress message
+                resume_msg = f" (resumed)" if resumed_from_checkpoint else ""
+                report_extraction_progress(0, target_count, f"Processing {target_count} documents{resume_msg}...")
 
                 for idx, (doc_id, doc_info) in enumerate(docs_to_process):
                     try:
                         zim_index = doc_info.get("zim_index")
                         if zim_index is None:
                             # No zim_index stored - skip this document
+                            skipped += 1
+                            continue
+
+                        # Build final_doc_id first to check if already indexed
+                        zim_url = doc_info.get("zim_url", doc_info.get("url", ""))
+                        final_doc_id = hashlib.md5(f"{self.source_id}:{zim_url}".encode()).hexdigest()
+
+                        # Skip if already indexed (from checkpoint resume)
+                        if final_doc_id in indexed_doc_ids:
                             skipped += 1
                             continue
 
@@ -806,7 +925,6 @@ class ZIMIndexer:
 
                         # Use metadata for title/url, extract fresh content
                         title = doc_info.get("title", "")
-                        zim_url = doc_info.get("zim_url", doc_info.get("url", ""))
 
                         text = extract_text_from_html(content)
                         if len(text) < 50:
@@ -815,15 +933,13 @@ class ZIMIndexer:
 
                         # Build URLs - local for offline viewer, online for Pinecone
                         local_url = f"/zim/{self.source_id}/{zim_url}"
-                        online_url = self._build_online_url(zim_url, zim_metadata) or local_url
-
-                        # Use consistent doc_id
-                        final_doc_id = hashlib.md5(f"{self.source_id}:{zim_url}".encode()).hexdigest()
+                        online_url = self._build_online_url(zim_url, zim_metadata, manifest_base_url) or local_url
 
                         if final_doc_id in seen_ids:
                             skipped += 1
                             continue
                         seen_ids.add(final_doc_id)
+                        indexed_doc_ids.add(final_doc_id)  # Track for checkpoint
 
                         documents.append({
                             "id": final_doc_id,
@@ -840,10 +956,57 @@ class ZIMIndexer:
                         })
 
                         indexed += 1
+                        docs_since_checkpoint += 1
 
                         if indexed % 10 == 0:
                             report_extraction_progress(indexed, target_count,
                                             f"Extracting: {title[:50]}...")
+
+                        # Check for cancellation
+                        if cancel_checker and cancel_checker():
+                            print(f"[ZIMIndexer] Job cancelled at document {idx}")
+                            if checkpoint and checkpointing_available:
+                                checkpoint.last_article_index = idx
+                                checkpoint.documents_processed = indexed
+                                checkpoint.progress = int((idx / target_count) * 100)
+                                save_checkpoint(checkpoint)
+                                # Save partial work
+                                partial_path = get_partial_file_path(self.source_id, "index")
+                                if partial_path:
+                                    with open(partial_path, 'w', encoding='utf-8') as f:
+                                        json.dump({
+                                            "source_id": self.source_id,
+                                            "indexed_doc_ids": list(indexed_doc_ids),
+                                            "last_doc_index": idx
+                                        }, f)
+                            zim.close()
+                            return {
+                                "success": False,
+                                "error": "Cancelled by user",
+                                "cancelled": True,
+                                "indexed_count": indexed
+                            }
+
+                        # Periodic checkpoint saving
+                        current_time = time_module.time()
+                        should_save = (docs_since_checkpoint >= CHECKPOINT_INTERVAL_DOCS or
+                                      current_time - last_checkpoint_time >= CHECKPOINT_INTERVAL_SECONDS)
+                        if should_save and checkpoint and checkpointing_available:
+                            checkpoint.last_article_index = idx
+                            checkpoint.documents_processed = indexed
+                            checkpoint.progress = int((idx / target_count) * 100)
+                            save_checkpoint(checkpoint)
+                            # Save partial work
+                            partial_path = get_partial_file_path(self.source_id, "index")
+                            if partial_path:
+                                with open(partial_path, 'w', encoding='utf-8') as f:
+                                    json.dump({
+                                        "source_id": self.source_id,
+                                        "indexed_doc_ids": list(indexed_doc_ids),
+                                        "last_doc_index": idx
+                                    }, f)
+                            last_checkpoint_time = current_time
+                            docs_since_checkpoint = 0
 
                     except Exception as e:
                         errors.append(f"Error processing article {zim_index}: {str(e)}")
@@ -854,7 +1017,8 @@ class ZIMIndexer:
             else:
                 # === LEGACY PATH: Full ZIM scan (fallback if no metadata) ===
                 target_count = min(limit, article_count)
-                report_extraction_progress(0, target_count, f"Found {article_count} articles in ZIM")
+                resume_msg = f" (resumed)" if resumed_from_checkpoint else ""
+                report_extraction_progress(0, target_count, f"Found {article_count} articles in ZIM{resume_msg}")
 
                 if language_filter:
                     print(f"Language filter: {language_filter} (only indexing {language_filter} articles)")
@@ -886,6 +1050,14 @@ class ZIMIndexer:
                         url = getattr(article, 'url', '') or f"article_{i}"
                         title = getattr(article, 'title', '') or get_title_from_html(content, url)
 
+                        # Build doc_id first to check if already indexed
+                        doc_id = hashlib.md5(f"{self.source_id}:{url}".encode()).hexdigest()
+
+                        # Skip if already indexed (from checkpoint resume)
+                        if doc_id in indexed_doc_ids:
+                            skipped += 1
+                            continue
+
                         # Filter by language if specified
                         # Enable debug for first 10 filtered articles to see what's being excluded
                         if language_filter and not should_include_article(
@@ -906,14 +1078,13 @@ class ZIMIndexer:
 
                         # Build URLs - local for offline viewer, online for Pinecone
                         local_url = f"/zim/{self.source_id}/{url}"
-                        online_url = self._build_online_url(url, zim_metadata) or local_url
-
-                        doc_id = hashlib.md5(f"{self.source_id}:{url}".encode()).hexdigest()
+                        online_url = self._build_online_url(url, zim_metadata, manifest_base_url) or local_url
 
                         if doc_id in seen_ids:
                             skipped += 1
                             continue
                         seen_ids.add(doc_id)
+                        indexed_doc_ids.add(doc_id)  # Track for checkpoint
 
                         documents.append({
                             "id": doc_id,
@@ -930,10 +1101,57 @@ class ZIMIndexer:
                         })
 
                         indexed += 1
+                        docs_since_checkpoint += 1
 
                         if indexed % 10 == 0:
                             report_extraction_progress(indexed, target_count,
                                             f"Extracting: {title[:50]}...")
+
+                        # Check for cancellation
+                        if cancel_checker and cancel_checker():
+                            print(f"[ZIMIndexer] Job cancelled at article {i}")
+                            if checkpoint and checkpointing_available:
+                                checkpoint.last_article_index = i
+                                checkpoint.documents_processed = indexed
+                                checkpoint.progress = int((indexed / target_count) * 100)
+                                save_checkpoint(checkpoint)
+                                # Save partial work
+                                partial_path = get_partial_file_path(self.source_id, "index")
+                                if partial_path:
+                                    with open(partial_path, 'w', encoding='utf-8') as f:
+                                        json.dump({
+                                            "source_id": self.source_id,
+                                            "indexed_doc_ids": list(indexed_doc_ids),
+                                            "last_article_index": i
+                                        }, f)
+                            zim.close()
+                            return {
+                                "success": False,
+                                "error": "Cancelled by user",
+                                "cancelled": True,
+                                "indexed_count": indexed
+                            }
+
+                        # Periodic checkpoint saving
+                        current_time = time_module.time()
+                        should_save = (docs_since_checkpoint >= CHECKPOINT_INTERVAL_DOCS or
+                                      current_time - last_checkpoint_time >= CHECKPOINT_INTERVAL_SECONDS)
+                        if should_save and checkpoint and checkpointing_available:
+                            checkpoint.last_article_index = i
+                            checkpoint.documents_processed = indexed
+                            checkpoint.progress = int((indexed / target_count) * 100)
+                            save_checkpoint(checkpoint)
+                            # Save partial work
+                            partial_path = get_partial_file_path(self.source_id, "index")
+                            if partial_path:
+                                with open(partial_path, 'w', encoding='utf-8') as f:
+                                    json.dump({
+                                        "source_id": self.source_id,
+                                        "indexed_doc_ids": list(indexed_doc_ids),
+                                        "last_article_index": i
+                                    }, f)
+                            last_checkpoint_time = current_time
+                            docs_since_checkpoint = 0
 
                     except Exception as e:
                         errors.append(f"Error processing article {i}: {str(e)}")
@@ -953,14 +1171,25 @@ class ZIMIndexer:
                 }
 
             # Add to vector store - embeddings phase (50-100%)
-            report_embedding_progress(0, len(documents), f"Computing embeddings for {len(documents)} documents...")
+            # Uses incremental indexing: processes in batches, skips already-indexed docs
+            report_embedding_progress(0, len(documents), f"Indexing {len(documents)} documents...")
 
-            print("Adding documents to vector store...")
+            print("Adding documents to vector store (incremental mode)...")
             store = VectorStore()
-            result = store.add_documents(documents, return_index_data=True,
-                                        progress_callback=report_embedding_progress)
+            result = store.add_documents_incremental(
+                documents,
+                source_id=self.source_id,
+                batch_size=100,  # Process 100 docs at a time, persist after each batch
+                return_index_data=True,
+                progress_callback=report_embedding_progress
+            )
             count = result["count"]
-            index_data = result["index_data"]
+            skipped_existing = result.get("skipped", 0)
+            resumed = result.get("resumed", False)
+            index_data = result.get("index_data")
+
+            if resumed:
+                print(f"[ZIMIndexer] Resumed indexing: {skipped_existing} docs already indexed, {count} new docs added")
 
             # Save all output files with ZIM metadata
             if count > 0:
@@ -979,13 +1208,20 @@ class ZIMIndexer:
                     license_info=zim_metadata.get("license") or "Unknown",
                     backup_info=backup_info,
                     zim_metadata=zim_metadata,  # Pass for manifest population
+                    skip_metadata_save=use_metadata,  # Preserve existing metadata from Generate step
                 )
+
+            # Delete checkpoint on successful completion
+            if checkpointing_available:
+                delete_checkpoint(self.source_id, "index")
 
             return {
                 "success": True,
                 "indexed_count": count,
                 "total_extracted": len(documents),
                 "skipped": skipped,
+                "skipped_existing": skipped_existing,  # Already indexed (incremental)
+                "resumed": resumed or resumed_from_checkpoint,  # True if resumed from checkpoint
                 "deleted_existing": deleted_count,
                 "language_filtered": language_filtered,
                 "language_filter": language_filter,
@@ -994,6 +1230,20 @@ class ZIMIndexer:
             }
 
         except Exception as e:
+            # Save checkpoint on error so work isn't lost
+            if checkpointing_available and checkpoint:
+                save_checkpoint(checkpoint)
+                partial_path = get_partial_file_path(self.source_id, "index")
+                if partial_path and indexed_doc_ids:
+                    try:
+                        with open(partial_path, 'w', encoding='utf-8') as f:
+                            json.dump({
+                                "source_id": self.source_id,
+                                "indexed_doc_ids": list(indexed_doc_ids),
+                                "error": str(e)
+                            }, f)
+                    except:
+                        pass
             return {
                 "success": False,
                 "error": str(e),
@@ -1169,15 +1419,26 @@ class HTMLBackupIndexer:
                 "errors": errors
             }
 
-        # Add to vector store
+        # Add to vector store (incremental mode)
         if progress_callback:
-            progress_callback(len(documents), len(documents), "Computing embeddings...")
+            progress_callback(len(documents), len(documents), "Indexing documents...")
 
-        print("Adding documents to vector store...")
+        print("Adding documents to vector store (incremental mode)...")
         store = VectorStore()
-        result = store.add_documents(documents, return_index_data=True)
+        result = store.add_documents_incremental(
+            documents,
+            source_id=self.source_id,
+            batch_size=100,
+            return_index_data=True,
+            progress_callback=progress_callback
+        )
         count = result["count"]
-        index_data = result["index_data"]
+        skipped_existing = result.get("skipped", 0)
+        resumed = result.get("resumed", False)
+        index_data = result.get("index_data")
+
+        if resumed:
+            print(f"[HTMLBackupIndexer] Resumed: {skipped_existing} docs already indexed, {count} new")
 
         # Get base_url from manifest
         base_url = ""
@@ -1401,15 +1662,25 @@ class PDFIndexer:
             except Exception as e:
                 errors.append(f"{pdf_path.name}: {str(e)}")
 
-        # Index to vector store
+        # Index to vector store (incremental mode)
         indexed_count = 0
+        skipped_existing = 0
         index_data = None
         if documents:
             try:
                 store = VectorStore()
-                result = store.add_documents(documents, return_index_data=True)
+                result = store.add_documents_incremental(
+                    documents,
+                    source_id=self.source_id,
+                    batch_size=100,
+                    return_index_data=True
+                )
                 indexed_count = result["count"]
-                index_data = result["index_data"]
+                skipped_existing = result.get("skipped", 0)
+                index_data = result.get("index_data")
+
+                if result.get("resumed", False):
+                    print(f"[PDFIndexer] Resumed: {skipped_existing} chunks already indexed")
             except Exception as e:
                 return {
                     "success": False,
@@ -1444,7 +1715,9 @@ def index_zim_file(zim_path: str, source_id: str, limit: int = 1000,
                    progress_callback: Optional[Callable] = None,
                    backup_folder: str = None,
                    language_filter: Optional[str] = None,
-                   clear_existing: bool = False) -> Dict:
+                   clear_existing: bool = False,
+                   resume: bool = False,
+                   cancel_checker: Optional[Callable] = None) -> Dict:
     """
     Index a ZIM file.
 
@@ -1458,11 +1731,15 @@ def index_zim_file(zim_path: str, source_id: str, limit: int = 1000,
                         Only articles in this language will be indexed.
         clear_existing: If True, delete existing documents for this source
                        from ChromaDB before indexing (for force reindex).
+        resume: If True, attempt to resume from checkpoint if available.
+        cancel_checker: Function that returns True if job was cancelled.
     """
     indexer = ZIMIndexer(zim_path, source_id, backup_folder=backup_folder)
     return indexer.index(limit=limit, progress_callback=progress_callback,
                         language_filter=language_filter,
-                        clear_existing=clear_existing)
+                        clear_existing=clear_existing,
+                        resume=resume,
+                        cancel_checker=cancel_checker)
 
 
 def index_html_backup(backup_path: str, source_id: str, limit: int = 1000,

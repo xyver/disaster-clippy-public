@@ -242,7 +242,7 @@ class UploadBackupRequest(BaseModel):
     sync_mode: str = "update"  # "update" (add/merge) or "replace" (delete old vectors first)
 
 
-def _run_upload_backup(source_id: str, source_info: dict, progress_callback=None):
+def _run_upload_backup(source_id: str, source_info: dict, progress_callback=None, cancel_checker=None):
     """Background worker function for uploading backup to cloud."""
     from dotenv import load_dotenv
     load_dotenv()
@@ -561,7 +561,7 @@ def _upload_submission_metadata_sync(storage, submission_folder: str, source_id:
 # GLOBAL ADMIN: Publish to Production
 # =============================================================================
 
-def _run_publish_to_production(source_id: str, source_info: dict, sync_mode: str = "update", progress_callback=None):
+def _run_publish_to_production(source_id: str, source_info: dict, sync_mode: str = "update", progress_callback=None, cancel_checker=None):
     """
     Background worker for global admin: publish source directly to production.
 

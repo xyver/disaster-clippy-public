@@ -268,6 +268,134 @@ class VectorStore:
         except:
             return set()
 
+    def get_source_document_ids(self, source_id: str) -> set:
+        """
+        Get all document IDs for a specific source.
+
+        Used by incremental indexing to skip already-indexed documents.
+
+        Args:
+            source_id: The source identifier to query
+
+        Returns:
+            Set of document IDs for this source
+        """
+        try:
+            result = self.collection.get(
+                where={"source": source_id},
+                include=[]  # Only need IDs, not content/metadata
+            )
+            return set(result.get("ids", []))
+        except Exception as e:
+            print(f"[VectorStore] Error getting source IDs for {source_id}: {e}")
+            return set()
+
+    def add_documents_incremental(self, documents: List[Dict[str, Any]],
+                                  source_id: str,
+                                  batch_size: int = 100,
+                                  progress_callback=None,
+                                  return_index_data: bool = False) -> Any:
+        """
+        Add documents incrementally with resume support.
+
+        Processes documents in batches, persisting after each batch.
+        Skips documents that are already indexed (by ID).
+
+        This allows resuming if interrupted - only the current batch is lost.
+
+        Args:
+            documents: List of document dicts
+            source_id: Source identifier (used to check existing docs)
+            batch_size: Documents per batch (default 100)
+            progress_callback: Function(current, total, message) for progress
+            return_index_data: If True, return index data for file saving
+
+        Returns:
+            Dict with count, skipped, index_data (if requested)
+        """
+        if not documents:
+            return {"count": 0, "skipped": 0, "index_data": None}
+
+        # Get existing doc IDs for this source
+        existing_ids = self.get_source_document_ids(source_id)
+        print(f"[VectorStore] Found {len(existing_ids)} existing documents for {source_id}")
+
+        # Filter out already-indexed documents
+        new_documents = [doc for doc in documents if doc.get("id") not in existing_ids]
+        skipped_count = len(documents) - len(new_documents)
+
+        if skipped_count > 0:
+            print(f"[VectorStore] Skipping {skipped_count} already-indexed documents")
+
+        if not new_documents:
+            print(f"[VectorStore] All documents already indexed")
+            return {"count": 0, "skipped": skipped_count, "index_data": None, "resumed": True}
+
+        print(f"[VectorStore] Processing {len(new_documents)} new documents in batches of {batch_size}")
+
+        total_added = 0
+        all_index_data = {"ids": [], "embeddings": [], "contents": [], "metadatas": []}
+
+        # Process in batches
+        for batch_start in range(0, len(new_documents), batch_size):
+            batch_end = min(batch_start + batch_size, len(new_documents))
+            batch = new_documents[batch_start:batch_end]
+            batch_num = (batch_start // batch_size) + 1
+            total_batches = (len(new_documents) + batch_size - 1) // batch_size
+
+            if progress_callback:
+                progress_callback(batch_start, len(new_documents),
+                                f"Batch {batch_num}/{total_batches}: Processing {len(batch)} documents...")
+
+            # Prepare batch data
+            ids = []
+            contents = []
+            metadatas = []
+
+            for doc in batch:
+                doc_id = doc.get("id") or doc.get("content_hash") or str(hash(doc["url"]))
+                ids.append(doc_id)
+                contents.append(doc["content"])
+
+                metadata = {k: v for k, v in doc.items() if k != "content"}
+                metadata["categories"] = json.dumps(metadata.get("categories", []))
+                metadatas.append(metadata)
+
+            # Compute embeddings for this batch
+            embeddings = self.embedding_service.embed_batch(contents)
+
+            # Add to ChromaDB (persists immediately)
+            self.collection.add(
+                ids=ids,
+                embeddings=embeddings,
+                documents=contents,
+                metadatas=metadatas
+            )
+
+            total_added += len(ids)
+            print(f"[VectorStore] Batch {batch_num}/{total_batches}: Added {len(ids)} documents (total: {total_added})")
+
+            # Accumulate index data if needed
+            if return_index_data:
+                all_index_data["ids"].extend(ids)
+                all_index_data["embeddings"].extend([list(e) for e in embeddings])
+                all_index_data["contents"].extend(contents)
+                all_index_data["metadatas"].extend(metadatas)
+
+        if progress_callback:
+            progress_callback(len(new_documents), len(new_documents), "Indexing complete")
+
+        result = {
+            "count": total_added,
+            "skipped": skipped_count,
+            "resumed": skipped_count > 0
+        }
+
+        if return_index_data:
+            result["index_data"] = all_index_data if total_added > 0 else None
+
+        return result
+
     def get_existing_titles(self) -> set:
         """Get all document titles currently in the database"""
         try:

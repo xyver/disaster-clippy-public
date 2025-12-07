@@ -349,7 +349,7 @@ async def get_available_packs():
 # DOWNLOAD PACK (Background Job)
 # =============================================================================
 
-def _run_download_pack(source_id: str, progress_callback=None):
+def _run_download_pack(source_id: str, progress_callback=None, cancel_checker=None):
     """
     Background job function to download a source pack from R2.
     Automatically uses Railway proxy if R2 keys aren't configured.

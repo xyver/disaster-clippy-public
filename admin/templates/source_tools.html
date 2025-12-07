@@ -63,6 +63,11 @@
             color: #4ecca3;
         }
 
+        .wizard-step.pending {
+            border-color: #f9a825;
+            color: #f9a825;
+        }
+
         .wizard-step .step-number {
             display: block;
             font-size: 0.75rem;
@@ -170,6 +175,59 @@
         .checklist-item.missing { color: #e94560; }
         .checklist-item.warning { color: #f9a825; }
 
+        /* Validation Issues Panel */
+        .validation-issues-panel {
+            background: #0f3460;
+            border-radius: 6px;
+            padding: 1rem;
+        }
+
+        .validation-step-group {
+            color: #888;
+            font-size: 0.8rem;
+            margin-top: 0.75rem;
+            margin-bottom: 0.25rem;
+            padding-bottom: 0.25rem;
+            border-bottom: 1px solid #1a1a2e;
+        }
+
+        .validation-step-group:first-child {
+            margin-top: 0;
+        }
+
+        .validation-issue {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 0.75rem;
+            padding: 0.5rem 0.75rem;
+            margin: 0.25rem 0;
+            border-radius: 4px;
+            background: #1a1a2e;
+            font-size: 0.85rem;
+        }
+
+        .validation-issue.error {
+            border-left: 3px solid #e94560;
+        }
+
+        .validation-issue.warning {
+            border-left: 3px solid #f9a825;
+        }
+
+        .validation-issue .issue-text {
+            flex: 1;
+        }
+
+        .validation-issue.error .issue-text { color: #e94560; }
+        .validation-issue.warning .issue-text { color: #f9a825; }
+
+        .validation-issue .btn-sm {
+            padding: 0.25rem 0.5rem;
+            font-size: 0.75rem;
+            white-space: nowrap;
+        }
+
         /* Source Type Cards */
         .source-type-grid {
             display: grid;
@@ -215,16 +273,55 @@
         /* Tool Sections */
         .tool-section {
             background: #1a1a2e;
-            border: 1px solid #0f3460;
+            border: 2px solid #f9a825;
             border-radius: 6px;
             padding: 1rem;
             margin-bottom: 1rem;
+            transition: border-color 0.3s, background 0.1s;
         }
 
         .tool-section h3 {
-            color: #4ecca3;
+            color: #f9a825;
             font-size: 0.95rem;
             margin-bottom: 0.5rem;
+            transition: color 0.3s;
+        }
+
+        .tool-section.completed {
+            border-color: #4ecca3;
+        }
+
+        .tool-section.completed h3 {
+            color: #4ecca3;
+        }
+
+        .tool-section.skipped {
+            border-color: #666;
+            opacity: 0.7;
+        }
+
+        .tool-section.skipped h3 {
+            color: #888;
+        }
+
+        /* Section completion indicator */
+        .tool-section h3::after {
+            content: '';
+            margin-left: 0.5rem;
+        }
+
+        .tool-section.completed h3::after {
+            content: '[OK]';
+            color: #4ecca3;
+            font-size: 0.75rem;
+            font-weight: normal;
+        }
+
+        .tool-section.skipped h3::after {
+            content: '[SKIP]';
+            color: #666;
+            font-size: 0.75rem;
+            font-weight: normal;
         }
 
         .tool-section p {
@@ -606,13 +703,6 @@
                         <textarea id="editDescription" rows="3" placeholder="Brief description of the source content"></textarea>
                     </div>
                     <div class="form-group">
-                        <label>Base URL</label>
-                        <input type="text" id="editBaseUrl" placeholder="https://example.com">
-                        <p style="font-size: 0.8rem; color: #888; margin-top: 0.25rem;">
-                            The original website URL - For improved offline browsing (rewrites internal links to local archive)
-                        </p>
-                    </div>
-                    <div class="form-group">
                         <label>
                             <input type="checkbox" id="editLicenseVerified"> License Verified
                         </label>
@@ -646,18 +736,12 @@
                         </div>
                     </div>
 
-                    <!-- ZIM Diagnostics Section (ZIM sources only) -->
-                    <div id="zimDiagnosticsSection" style="display: none; margin-top: 1.5rem; padding-top: 1.5rem; border-top: 1px solid #0f3460;">
-                        <h3 style="color: #4ecca3; margin-bottom: 0.75rem;">ZIM File Diagnostics</h3>
-                        <p style="font-size: 0.85rem; color: #888; margin-bottom: 1rem;">
-                            Analyze the ZIM file content before indexing. Helps identify content type and optimal indexing settings.
-                        </p>
-                        <div class="tool-actions" style="margin-bottom: 1rem;">
-                            <button class="btn btn-secondary" id="btnRunZimInspect" onclick="runZimInspection()">Run Diagnostics</button>
-                        </div>
-                        <div id="zimDiagnosticsResult" style="display: none;">
-                            <div class="info-grid" id="zimInfoGrid"></div>
-                            <div id="zimRecommendations" style="margin-top: 1rem;"></div>
+                    <!-- Scan Backup Section (HTML sources) -->
+                    <div class="tool-section" id="scanBackupSection" style="margin-top: 1.5rem; padding-top: 1.5rem; border-top: 1px solid #0f3460;">
+                        <h3>Scan Backup (HTML sources)</h3>
+                        <p>Scan the backup folder and create a manifest of all files. Required for HTML sources before generating metadata.</p>
+                        <div class="tool-actions">
+                            <button class="btn btn-secondary" id="btnScanBackup" onclick="scanBackup()">Scan Backup</button>
                         </div>
                     </div>
                 </div>
@@ -696,16 +780,8 @@
                         </div>
                     </div>
 
-                    <div class="tool-section">
-                        <h3>1. Scan Backup</h3>
-                        <p>Scan the backup folder and create a manifest of all files. Required for HTML sources.</p>
-                        <div class="tool-actions">
-                            <button class="btn btn-secondary" id="btnScanBackup" onclick="scanBackup()">Scan Backup</button>
-                        </div>
-                    </div>
-
-                    <div class="tool-section">
-                        <h3>2. Generate Metadata</h3>
+                    <div class="tool-section" id="sectionGenerateMetadata">
+                        <h3>1. Generate Metadata</h3>
                         <p>Extract document titles, content, and create the metadata file. For ZIM files, you can filter by language.</p>
 
                         <div style="display: flex; gap: 1rem; align-items: flex-end; margin-bottom: 1rem; flex-wrap: wrap;">
@@ -774,7 +850,65 @@
                         </div>
                     </div>
 
-                    <div class="tool-section">
+                    <div class="tool-section" id="sectionBaseUrl">
+                        <h3>2. Configure Base URL (Optional)</h3>
+                        <p>For ZIM sources, detect the correct base URL by comparing sample articles with their actual online URLs.</p>
+
+                        <div class="tool-actions" style="margin-bottom: 1rem;">
+                            <button class="btn btn-secondary" onclick="loadUrlSamples()">Load Sample Articles</button>
+                            <span id="urlSamplesStatus" style="margin-left: 0.5rem; font-size: 0.85rem;"></span>
+                        </div>
+
+                        <!-- Sample articles table -->
+                        <div id="urlSamplesTable" style="display: none; margin-bottom: 1rem;">
+                            <table style="width: 100%; border-collapse: collapse; font-size: 0.85rem;">
+                                <thead>
+                                    <tr style="border-bottom: 1px solid #333;">
+                                        <th style="text-align: left; padding: 0.5rem; width: 25%;">Article Title</th>
+                                        <th style="text-align: left; padding: 0.5rem; width: 20%;">Article ID</th>
+                                        <th style="text-align: left; padding: 0.5rem; width: 55%;">Paste Actual URL Here</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="urlSamplesBody">
+                                    <!-- Sample rows will be inserted here -->
+                                </tbody>
+                            </table>
+                            <p style="font-size: 0.8rem; color: #888; margin-top: 0.5rem;">
+                                Find any article online (e.g., search Wikipedia for the title), copy its URL, and paste above. Then click "Detect Pattern".
+                            </p>
+                            <div class="tool-actions" style="margin-top: 0.75rem;">
+                                <button class="btn btn-primary" onclick="detectUrlPattern()">Detect Pattern</button>
+                            </div>
+                        </div>
+
+                        <!-- Detected/Manual base URL -->
+                        <div id="detectedUrlSection" style="display: none; margin-top: 1rem; padding: 1rem; background: #0f3460; border: 1px solid #4ecca3; border-radius: 6px;">
+                            <div style="color: #4ecca3; font-weight: 600; margin-bottom: 0.5rem;">Detected Base URL:</div>
+                            <div class="form-group" style="margin-bottom: 0.5rem;">
+                                <input type="text" id="editBaseUrl" placeholder="https://example.com/wiki/" style="font-family: monospace;" oninput="updateUrlPreview()">
+                            </div>
+                            <div id="urlPreview" style="font-size: 0.8rem; color: #888; margin-bottom: 0.75rem;">
+                                <!-- Preview will show here -->
+                            </div>
+                            <div class="tool-actions">
+                                <button class="btn btn-primary" onclick="saveBaseUrl()">Save Base URL</button>
+                                <button class="btn btn-secondary" onclick="testBaseUrl()">Test All Samples</button>
+                                <span id="testUrlStatus" style="margin-left: 0.5rem; font-size: 0.85rem;"></span>
+                            </div>
+                        </div>
+
+                        <!-- Test results -->
+                        <div id="testUrlResults" style="display: none; margin-top: 0.75rem; padding: 0.75rem; background: #0a0a14; border-radius: 4px; font-size: 0.85rem;">
+                            <!-- Test results will appear here -->
+                        </div>
+
+                        <!-- Manual entry option -->
+                        <div style="margin-top: 1rem;">
+                            <button class="btn btn-small btn-secondary" onclick="showManualBaseUrl()">Or Enter Base URL Manually</button>
+                        </div>
+                    </div>
+
+                    <div class="tool-section" id="sectionCreateIndex">
                         <h3>3. Create Index</h3>
                         <p>Generate vector embeddings for semantic search. Uses the filtered document list from metadata (no re-scanning ZIM).</p>
 
@@ -823,7 +957,7 @@
                     </div>
 
                     <!-- Tags Section -->
-                    <div class="tool-section" style="margin-top: 1.5rem;">
+                    <div class="tool-section" id="sectionTags" style="margin-top: 1.5rem;">
                         <h3>Source Tags</h3>
                         <p>Tags help categorize and filter sources. Suggested tags are based on indexed content.</p>
 
@@ -883,19 +1017,30 @@
                         </div>
                     </div>
 
-                    <div class="tool-section">
-                        <h3>Cleanup Redundant Files</h3>
-                        <p>Remove legacy v1 files if v2 files exist. Frees up disk space.</p>
-                        <div class="tool-actions">
-                            <button class="btn btn-secondary" onclick="cleanupFiles()">Cleanup Files</button>
-                        </div>
-                    </div>
-
-                    <div class="tool-section">
+                    <div class="tool-section" id="sectionValidate">
                         <h3>Validate Source</h3>
                         <p>Check if the source meets all requirements for distribution.</p>
                         <div class="tool-actions">
                             <button class="btn btn-primary" onclick="validateSource()">Run Validation</button>
+                        </div>
+
+                        <!-- Actionable Issues Panel - shows after validation -->
+                        <div id="validationIssuesPanel" class="validation-issues-panel" style="display: none; margin-top: 1rem;">
+                            <h4 style="margin-bottom: 0.75rem; color: #f9a825;">Issues to Fix</h4>
+                            <div id="validationIssuesList">
+                                <!-- Issues will be rendered here by showActionableIssues() -->
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="tool-section" id="sectionTestLinks">
+                        <h3>Test Links</h3>
+                        <p>Verify that article URLs are correct for online access. Important before publishing to Pinecone.</p>
+                        <div class="tool-actions">
+                            <button class="btn btn-secondary" onclick="testLinks()">Test Sample Links</button>
+                        </div>
+                        <div id="testLinksResults" style="display: none; margin-top: 1rem; font-size: 0.85rem;">
+                            <!-- Results will be shown here -->
                         </div>
                     </div>
 
@@ -942,8 +1087,149 @@
         let selectedSourceType = null;
 
         // Pending index state for sync mode modal
-        let pendingIndexLimit = 1000;
+        let pendingIndexLimit = null;  // null = use input field value
         let pendingIndexLanguageFilter = null;
+
+        // Section completion state tracking
+        // Maps section IDs to their completion status
+        let sectionState = {
+            // Step 2: Configure
+            'scanBackupSection': 'pending',
+            // Step 3: Index
+            'sectionGenerateMetadata': 'pending',
+            'sectionBaseUrl': 'pending',
+            'sectionCreateIndex': 'pending',
+            // Step 4: Review
+            'sectionTags': 'pending',
+            // Step 5: Validate
+            'sectionValidate': 'pending',
+            'sectionTestLinks': 'pending'
+        };
+
+        // Map steps to their required sections
+        const stepSections = {
+            2: ['scanBackupSection'],
+            3: ['sectionGenerateMetadata', 'sectionCreateIndex'], // sectionBaseUrl is optional
+            4: ['sectionTags'],
+            5: ['sectionValidate']  // sectionTestLinks is optional
+        };
+
+        // Mark a section as completed
+        function markSectionComplete(sectionId) {
+            const section = document.getElementById(sectionId);
+            if (section) {
+                section.classList.remove('pending', 'skipped');
+                section.classList.add('completed');
+                sectionState[sectionId] = 'completed';
+                updateStepCompletion();
+                logOutput(`Section completed: ${section.querySelector('h3')?.textContent || sectionId}`, 'success');
+            }
+        }
+
+        // Mark a section as skipped (optional sections)
+        function markSectionSkipped(sectionId) {
+            const section = document.getElementById(sectionId);
+            if (section) {
+                section.classList.remove('pending', 'completed');
+                section.classList.add('skipped');
+                sectionState[sectionId] = 'skipped';
+            }
+        }
+
+        // Reset a section to pending state
+        function markSectionPending(sectionId) {
+            const section = document.getElementById(sectionId);
+            if (section) {
+                section.classList.remove('completed', 'skipped');
+                sectionState[sectionId] = 'pending';
+            }
+        }
+
+        // Reset all sections to pending (when switching sources)
+        function resetAllSections() {
+            Object.keys(sectionState).forEach(sectionId => {
+                markSectionPending(sectionId);
+            });
+            // Also reset wizard step completion
+            document.querySelectorAll('.wizard-step').forEach(el => {
+                el.classList.remove('completed', 'pending');
+            });
+        }
+
+        // Check if a step has all required sections completed
+        function isStepComplete(step) {
+            const sections = stepSections[step];
+            if (!sections) return true;
+            return sections.every(sectionId =>
+                sectionState[sectionId] === 'completed' || sectionState[sectionId] === 'skipped'
+            );
+        }
+
+        // Update wizard step indicators based on section completion
+        function updateStepCompletion() {
+            document.querySelectorAll('.wizard-step').forEach(el => {
+                const step = parseInt(el.dataset.step);
+                if (step !== currentStep) {
+                    // Check if step is complete based on sections
+                    if (isStepComplete(step) && step < currentStep) {
+                        el.classList.add('completed');
+                        el.classList.remove('pending');
+                    } else if (step < currentStep) {
+                        // Visited but not all sections complete
+                        el.classList.add('pending');
+                        el.classList.remove('completed');
+                    }
+                }
+            });
+        }
+
+        // Initialize section states from source data (when loading existing source)
+        function initializeSectionStates(source) {
+            if (!source) {
+                resetAllSections();
+                return;
+            }
+
+            // Check what's already done based on source data
+            // Step 2: Config is "complete" if manifest exists with name
+            if (source.name && source.name !== source.source_id) {
+                // Config has been customized - but we track this via save action
+            }
+
+            // Step 2: Scan backup complete if backup_manifest exists
+            if (source.has_backup) {
+                markSectionComplete('scanBackupSection');
+            }
+
+            // Step 3: Metadata exists
+            if (source.has_metadata) {
+                markSectionComplete('sectionGenerateMetadata');
+            }
+
+            // Step 3: Base URL configured (optional)
+            if (source.base_url) {
+                markSectionComplete('sectionBaseUrl');
+            } else {
+                markSectionSkipped('sectionBaseUrl');
+            }
+
+            // Step 3: Index/vectors exist
+            if (source.has_vectors || source.has_index) {
+                markSectionComplete('sectionCreateIndex');
+            }
+
+            // Step 4: Tags exist
+            if (source.tags && source.tags.length > 0) {
+                markSectionComplete('sectionTags');
+            }
+
+            // Step 5: We don't persist validation state, so leave pending
+            // unless we want to check if all status boxes are green
+            if (source.has_config && source.has_backup && source.has_metadata &&
+                source.has_index && source.license_verified) {
+                markSectionComplete('sectionValidate');
+            }
+        }
 
         // Wizard Navigation
         function goToStep(step) {
@@ -1259,6 +1545,7 @@
 
             if (!sourceId) {
                 currentSource = null;
+                resetAllSections();
                 updateWizardUI();
                 // Hide document count when no source selected
                 document.getElementById('documentCountDisplay').style.display = 'none';
@@ -1269,6 +1556,9 @@
             currentSource = sources.find(s => s.source_id === sourceId);
 
             if (currentSource) {
+                // Initialize section states based on what's already done for this source
+                initializeSectionStates(currentSource);
+
                 populateEditForm();
                 populateTagsForm();
                 updateSourceInfo();
@@ -1338,190 +1628,6 @@
                     </div>
                 ` : ''}
             `;
-
-            // Show/hide ZIM diagnostics section based on source type
-            const zimSection = document.getElementById('zimDiagnosticsSection');
-            if (zimSection) {
-                const isZim = s.backup_type && s.backup_type.toLowerCase() === 'zim';
-                zimSection.style.display = isZim ? 'block' : 'none';
-                // Reset diagnostics result when switching sources
-                document.getElementById('zimDiagnosticsResult').style.display = 'none';
-            }
-        }
-
-        async function runZimInspection() {
-            if (!currentSource) return;
-
-            const btn = document.getElementById('btnRunZimInspect');
-            btn.disabled = true;
-            btn.textContent = 'Starting...';
-
-            logOutput(`Running ZIM diagnostics for ${currentSource.source_id}...`);
-
-            try {
-                // First get the ZIM file path
-                const listResponse = await fetch('/useradmin/api/zim/list');
-                const listData = await listResponse.json();
-
-                // Find ZIM file for this source
-                const zimFile = listData.zim_files?.find(z => z.source_id === currentSource.source_id);
-                if (!zimFile) {
-                    logOutput('No ZIM file found for this source', 'error');
-                    showToast('No ZIM file found', true);
-                    btn.disabled = false;
-                    btn.textContent = 'Run Diagnostics';
-                    return;
-                }
-
-                // Submit inspection job
-                const response = await fetch('/useradmin/api/zim/inspect', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        zim_path: zimFile.path,
-                        scan_limit: 5000,
-                        min_text_length: 50
-                    })
-                });
-
-                const data = await response.json();
-
-                if (!response.ok) {
-                    logOutput(`Error: ${data.detail || 'Inspection failed'}`, 'error');
-                    showToast(data.detail || 'Inspection failed', true);
-                    btn.disabled = false;
-                    btn.textContent = 'Run Diagnostics';
-                    return;
-                }
-
-                // Job submitted - poll for completion
-                const jobId = data.job_id;
-                logOutput(`Job submitted: ${jobId}`, 'info');
-                logOutput('Scanning articles... (this may take a few minutes for large files)', 'info');
-                btn.textContent = 'Analyzing...';
-
-                // Poll for job completion
-                const pollInterval = 2000; // 2 seconds
-                const maxAttempts = 180; // 6 minutes max
-                let attempts = 0;
-
-                const pollForCompletion = async () => {
-                    attempts++;
-                    try {
-                        const statusResp = await fetch(`/useradmin/api/jobs/${jobId}`);
-                        const status = await statusResp.json();
-
-                        if (status.status === 'completed') {
-                            // Job completed - display results
-                            if (status.result && status.result.status === 'success') {
-                                displayZimDiagnostics(status.result);
-                                logOutput('ZIM diagnostics complete', 'success');
-                                showToast('Diagnostics complete');
-                            } else {
-                                const errMsg = status.result?.error || 'Inspection failed';
-                                logOutput(`Error: ${errMsg}`, 'error');
-                                showToast(errMsg, true);
-                            }
-                            btn.disabled = false;
-                            btn.textContent = 'Run Diagnostics';
-                            return;
-                        } else if (status.status === 'failed') {
-                            logOutput(`Error: ${status.error || 'Job failed'}`, 'error');
-                            showToast('Diagnostics failed', true);
-                            btn.disabled = false;
-                            btn.textContent = 'Run Diagnostics';
-                            return;
-                        } else if (attempts >= maxAttempts) {
-                            logOutput('Timeout waiting for job to complete', 'error');
-                            showToast('Job timeout', true);
-                            btn.disabled = false;
-                            btn.textContent = 'Run Diagnostics';
-                            return;
-                        }
-
-                        // Update progress if available
-                        if (status.progress) {
-                            btn.textContent = `Analyzing... ${status.progress}%`;
-                        }
-
-                        // Continue polling
-                        setTimeout(pollForCompletion, pollInterval);
-                    } catch (pollErr) {
-                        logOutput(`Error polling job status: ${pollErr.message}`, 'error');
-                        btn.disabled = false;
-                        btn.textContent = 'Run Diagnostics';
-                    }
-                };
-
-                // Start polling
-                setTimeout(pollForCompletion, pollInterval);
-
-            } catch (e) {
-                logOutput(`Error: ${e.message}`, 'error');
-                showToast('Error: ' + e.message, true);
-                btn.disabled = false;
-                btn.textContent = 'Run Diagnostics';
-            }
-        }
-
-        function displayZimDiagnostics(data) {
-            const resultDiv = document.getElementById('zimDiagnosticsResult');
-            const infoGrid = document.getElementById('zimInfoGrid');
-            const recsDiv = document.getElementById('zimRecommendations');
-
-            // Build info grid
-            const meta = data.metadata || {};
-            const content = data.content_analysis || {};
-
-            infoGrid.innerHTML = `
-                <div class="info-item">
-                    <label>Content Type</label>
-                    <span style="text-transform: uppercase;">${data.content_type || 'Unknown'}</span>
-                </div>
-                <div class="info-item">
-                    <label>Total Articles</label>
-                    <span>${(data.article_count || 0).toLocaleString()}</span>
-                </div>
-                <div class="info-item">
-                    <label>Indexable</label>
-                    <span style="color: #4ecca3;">${(content.indexable_count || 0).toLocaleString()}</span>
-                </div>
-                <div class="info-item">
-                    <label>Would Skip</label>
-                    <span style="color: ${content.skip_rate_percent > 50 ? '#f9a825' : '#888'};">
-                        ${(content.skipped_count || 0).toLocaleString()} (${content.skip_rate_percent || 0}%)
-                    </span>
-                </div>
-                <div class="info-item">
-                    <label>File Size</label>
-                    <span>${data.file_size_mb || 0} MB</span>
-                </div>
-                <div class="info-item">
-                    <label>Avg Text Length</label>
-                    <span>${Math.round(content.avg_text_length || 0)} chars</span>
-                </div>
-            `;
-
-            // Build recommendations
-            const recs = data.recommendations || [];
-            if (recs.length > 0) {
-                recsDiv.innerHTML = `
-                    <h4 style="color: #f9a825; margin-bottom: 0.5rem;">Recommendations:</h4>
-                    <ul style="margin: 0; padding-left: 1.5rem; color: #888; font-size: 0.85rem;">
-                        ${recs.map(r => `<li style="margin-bottom: 0.25rem;">${escapeHtml(r)}</li>`).join('')}
-                    </ul>
-                `;
-            } else {
-                recsDiv.innerHTML = '';
-            }
-
-            // Log detailed info
-            if (meta.title) logOutput(`  Title: ${meta.title}`, 'info');
-            if (meta.creator) logOutput(`  Creator: ${meta.creator}`, 'info');
-            if (data.has_video_content) logOutput(`  Video content detected: ${data.video_article_count} articles`, 'warning');
-            if (data.has_pdf_content) logOutput(`  PDF content detected`, 'info');
-
-            resultDiv.style.display = 'block';
         }
 
         function updateSourceBanners() {
@@ -1562,6 +1668,12 @@
             // Populate rename form (admin only)
             document.getElementById('renameCurrentId').value = s.source_id || '';
             document.getElementById('renameNewId').value = '';
+
+            // Show base URL section if already configured
+            if (s.base_url) {
+                document.getElementById('detectedUrlSection').style.display = 'block';
+                document.getElementById('urlPreview').innerHTML = 'Existing base URL loaded. Test or update as needed.';
+            }
         }
 
         function populateTagsForm() {
@@ -1583,9 +1695,9 @@
                 name: document.getElementById('editName').value,
                 description: document.getElementById('editDescription').value,
                 license: document.getElementById('editLicense').value,
-                base_url: document.getElementById('editBaseUrl').value,
                 license_verified: document.getElementById('editLicenseVerified').checked
             };
+            // Note: base_url is now configured in Step 3
 
             logOutput(`Saving configuration for ${currentSource.source_id}...`);
 
@@ -1609,6 +1721,299 @@
                 }
             } catch (e) {
                 logOutput(`Error: ${e.message}`, 'error');
+                showToast('Error: ' + e.message, true);
+            }
+        }
+
+        // Store sample articles for URL pattern detection
+        let urlSamples = [];
+
+        // Load sample articles for URL pattern detection
+        async function loadUrlSamples() {
+            if (!currentSource) {
+                showToast('No source selected', true);
+                return;
+            }
+
+            const statusSpan = document.getElementById('urlSamplesStatus');
+
+            // Check if we already have pre-fetched samples from Auto-detect
+            if (urlSamples.length > 0) {
+                statusSpan.textContent = '';
+                displayUrlSamples(urlSamples);
+                logOutput(`Using ${urlSamples.length} pre-loaded sample articles`);
+                return;
+            }
+
+            statusSpan.textContent = 'Loading...';
+            statusSpan.style.color = '#888';
+
+            try {
+                // Try the new ZIM samples endpoint first (no metadata required)
+                const response = await fetch(`/useradmin/api/zim/samples/${currentSource.source_id}?count=20`);
+                const data = await response.json();
+
+                if (response.ok && data.samples && data.samples.length > 0) {
+                    // Convert to expected format
+                    urlSamples = data.samples.map(s => ({
+                        title: s.title,
+                        article_name: s.article_name,
+                        zim_path: s.zim_path
+                    }));
+                    statusSpan.textContent = '';
+                    displayUrlSamples(urlSamples);
+                    logOutput(`Loaded ${urlSamples.length} sample articles from ZIM`);
+                    return;
+                }
+
+                // Fallback to metadata-based endpoint for non-ZIM sources
+                const metaResponse = await fetch(`/useradmin/api/test-links/${currentSource.source_id}`);
+                const metaData = await metaResponse.json();
+
+                if (metaData.error) {
+                    statusSpan.textContent = 'Error';
+                    statusSpan.style.color = '#e94560';
+                    showToast(metaData.error, true);
+                    return;
+                }
+
+                if (!metaData.sample_links || metaData.sample_links.length === 0) {
+                    statusSpan.textContent = 'No samples';
+                    statusSpan.style.color = '#f9a825';
+                    showToast('No sample articles found', true);
+                    return;
+                }
+
+                urlSamples = metaData.sample_links;
+                statusSpan.textContent = '';
+                displayUrlSamples(urlSamples);
+                logOutput(`Loaded ${urlSamples.length} sample articles for URL detection`);
+
+            } catch (e) {
+                statusSpan.textContent = 'Error';
+                statusSpan.style.color = '#e94560';
+                showToast('Error: ' + e.message, true);
+            }
+        }
+
+        // Display sample articles in the URL detection table
+        function displayUrlSamples(samples) {
+            const tbody = document.getElementById('urlSamplesBody');
+            tbody.innerHTML = '';
+
+            samples.forEach((link, i) => {
+                const row = document.createElement('tr');
+                row.style.borderBottom = '1px solid #222';
+                row.innerHTML = `
+                    <td style="padding: 0.5rem; max-width: 150px; overflow: hidden; text-overflow: ellipsis;" title="${link.title}">${link.title}</td>
+                    <td style="padding: 0.5rem; font-family: monospace; color: #4ecca3; font-size: 0.8rem;" title="${link.article_name}">${link.article_name || '(unknown)'}</td>
+                    <td style="padding: 0.5rem;">
+                        <input type="text" class="actual-url-input" data-index="${i}" data-article="${link.article_name}"
+                               placeholder="https://..." style="width: 100%; font-size: 0.8rem; font-family: monospace;">
+                    </td>
+                `;
+                tbody.appendChild(row);
+            });
+
+            document.getElementById('urlSamplesTable').style.display = 'block';
+        }
+
+        // Detect URL pattern from user-provided actual URLs
+        function detectUrlPattern() {
+            const inputs = document.querySelectorAll('.actual-url-input');
+            let detectedBase = null;
+            let matchCount = 0;
+
+            inputs.forEach(input => {
+                const actualUrl = input.value.trim();
+                const articleName = input.dataset.article;
+
+                if (actualUrl && articleName) {
+                    // Find where the article name appears in the actual URL
+                    const articleIndex = actualUrl.indexOf(articleName);
+
+                    if (articleIndex > 0) {
+                        // Extract everything before the article name as the base URL
+                        const candidateBase = actualUrl.substring(0, articleIndex);
+
+                        if (candidateBase.startsWith('http://') || candidateBase.startsWith('https://')) {
+                            if (!detectedBase) {
+                                detectedBase = candidateBase;
+                                matchCount = 1;
+                            } else if (candidateBase === detectedBase) {
+                                matchCount++;
+                            }
+                        }
+                    }
+                }
+            });
+
+            if (detectedBase) {
+                // Show the detected base URL
+                document.getElementById('editBaseUrl').value = detectedBase;
+                document.getElementById('detectedUrlSection').style.display = 'block';
+
+                // Show preview
+                const previewDiv = document.getElementById('urlPreview');
+                if (urlSamples.length > 0) {
+                    const sample = urlSamples[0];
+                    previewDiv.innerHTML = `Example: <code style="color: #4ecca3;">${detectedBase}${sample.article_name}</code>`;
+                }
+
+                logOutput(`Detected base URL from ${matchCount} sample(s): ${detectedBase}`, 'success');
+                showToast('Pattern detected! Review and save.');
+            } else {
+                showToast('Could not detect pattern. Make sure URLs contain the article name.', true);
+                logOutput('Pattern detection failed. Ensure pasted URLs contain the exact article name.', 'warning');
+            }
+        }
+
+        // Show manual base URL entry
+        function showManualBaseUrl() {
+            document.getElementById('detectedUrlSection').style.display = 'block';
+            document.getElementById('editBaseUrl').focus();
+
+            // Show preview if we have samples
+            const previewDiv = document.getElementById('urlPreview');
+            if (urlSamples.length > 0) {
+                const sample = urlSamples[0];
+                previewDiv.innerHTML = `Article name: <code style="color: #888;">${sample.article_name}</code> - enter the URL prefix before it`;
+            } else {
+                previewDiv.innerHTML = 'Load samples first to see article names, or enter URL directly.';
+            }
+        }
+
+        // Update preview when base URL changes
+        function updateUrlPreview() {
+            const baseUrl = document.getElementById('editBaseUrl').value.trim();
+            const previewDiv = document.getElementById('urlPreview');
+
+            if (urlSamples.length > 0 && baseUrl) {
+                const sample = urlSamples[0];
+                const fullUrl = baseUrl.endsWith('/') ? baseUrl + sample.article_name : baseUrl + '/' + sample.article_name;
+                previewDiv.innerHTML = `Preview: <a href="${fullUrl}" target="_blank" style="color: #4ecca3;">${fullUrl}</a>`;
+            }
+        }
+
+        // Test base URL with sample articles (Step 3)
+        async function testBaseUrl() {
+            if (!currentSource) {
+                showToast('No source selected', true);
+                return;
+            }
+
+            const baseUrl = document.getElementById('editBaseUrl').value.trim();
+            const statusSpan = document.getElementById('testUrlStatus');
+            const resultsDiv = document.getElementById('testUrlResults');
+
+            if (!baseUrl) {
+                showToast('Enter a base URL to test', true);
+                return;
+            }
+
+            statusSpan.textContent = 'Testing...';
+            statusSpan.style.color = '#888';
+            resultsDiv.style.display = 'none';
+
+            try {
+                const response = await fetch(`/useradmin/api/test-links/${currentSource.source_id}?test_base_url=${encodeURIComponent(baseUrl)}`);
+                const data = await response.json();
+
+                if (data.error) {
+                    statusSpan.textContent = 'Error';
+                    statusSpan.style.color = '#e94560';
+                    resultsDiv.style.display = 'block';
+                    resultsDiv.innerHTML = `<div style="color: #e94560;">${data.error}</div>`;
+                    return;
+                }
+
+                if (!data.sample_links || data.sample_links.length === 0) {
+                    statusSpan.textContent = 'No metadata';
+                    statusSpan.style.color = '#f9a825';
+                    resultsDiv.style.display = 'block';
+                    resultsDiv.innerHTML = '<div style="color: #f9a825;">No sample articles found. Run "Generate Metadata" above first, then test your base URL.</div>';
+                    return;
+                }
+
+                // Build results
+                let html = '<div style="margin-bottom: 0.5rem;"><strong>Sample URLs with this base:</strong></div>';
+                html += '<table style="width: 100%; border-collapse: collapse;">';
+                html += '<tr style="border-bottom: 1px solid #333;"><th style="text-align: left; padding: 0.25rem;">Title</th><th style="text-align: left; padding: 0.25rem;">Constructed URL</th><th style="text-align: left; padding: 0.25rem;">Test</th></tr>';
+
+                data.sample_links.forEach(link => {
+                    const testUrl = link.constructed_url;
+                    const displayUrl = testUrl.length > 50 ? testUrl.substring(0, 47) + '...' : testUrl;
+
+                    html += `<tr style="border-bottom: 1px solid #222;">
+                        <td style="padding: 0.25rem; max-width: 150px; overflow: hidden; text-overflow: ellipsis;">${link.title}</td>
+                        <td style="padding: 0.25rem; font-family: monospace; font-size: 0.8rem; color: #4ecca3;" title="${testUrl}">${displayUrl}</td>
+                        <td style="padding: 0.25rem;">
+                            <a href="${testUrl}" target="_blank" style="color: #4ecca3;">Open</a>
+                        </td>
+                    </tr>`;
+                });
+
+                html += '</table>';
+                html += '<div style="margin-top: 0.5rem; color: #888; font-size: 0.8rem;">Click "Open" to verify links work before saving.</div>';
+
+                resultsDiv.style.display = 'block';
+                resultsDiv.innerHTML = html;
+                statusSpan.textContent = 'Done';
+                statusSpan.style.color = '#4ecca3';
+
+            } catch (e) {
+                statusSpan.textContent = 'Error';
+                statusSpan.style.color = '#e94560';
+                resultsDiv.style.display = 'block';
+                resultsDiv.innerHTML = `<div style="color: #e94560;">Error: ${e.message}</div>`;
+            }
+        }
+
+        // Save just the base URL (Step 3)
+        async function saveBaseUrl() {
+            if (!currentSource) {
+                showToast('No source selected', true);
+                return;
+            }
+
+            const baseUrl = document.getElementById('editBaseUrl').value.trim();
+            const statusSpan = document.getElementById('testUrlStatus');
+
+            statusSpan.textContent = 'Saving...';
+            statusSpan.style.color = '#888';
+
+            try {
+                const response = await fetch('/useradmin/api/update-source-config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        source_id: currentSource.source_id,
+                        base_url: baseUrl
+                    })
+                });
+
+                if (response.ok) {
+                    statusSpan.textContent = 'Saved!';
+                    statusSpan.style.color = '#4ecca3';
+                    showToast('Base URL saved');
+                    logOutput(`Base URL saved: ${baseUrl || '(empty)'}`, 'success');
+                    if (baseUrl) {
+                        markSectionComplete('sectionBaseUrl');
+                    } else {
+                        markSectionSkipped('sectionBaseUrl');
+                    }
+                    // Refresh source details
+                    await refreshSources();
+                    await loadSourceDetails();
+                } else {
+                    const data = await response.json();
+                    statusSpan.textContent = 'Error';
+                    statusSpan.style.color = '#e94560';
+                    showToast(data.detail || 'Save failed', true);
+                }
+            } catch (e) {
+                statusSpan.textContent = 'Error';
+                statusSpan.style.color = '#e94560';
                 showToast('Error: ' + e.message, true);
             }
         }
@@ -1680,11 +2085,39 @@
                     } else {
                         showToast('No metadata could be auto-detected', true);
                     }
+
+                    // For ZIM sources, also fetch sample articles for URL detection in Step 3
+                    if (data.source_type === 'zim') {
+                        fetchZimSamples();
+                    }
                 } else {
                     logOutput(`Error: ${data.detail || 'Auto-detect failed'}`, 'error');
                 }
             } catch (e) {
                 logOutput(`Error: ${e.message}`, 'error');
+            }
+        }
+
+        // Fetch ZIM sample articles directly (no metadata required)
+        async function fetchZimSamples() {
+            if (!currentSource) return;
+
+            try {
+                const response = await fetch(`/useradmin/api/zim/samples/${currentSource.source_id}?count=20`);
+                const data = await response.json();
+
+                if (response.ok && data.samples && data.samples.length > 0) {
+                    // Convert to the format expected by URL detection
+                    urlSamples = data.samples.map(s => ({
+                        title: s.title,
+                        article_name: s.article_name,
+                        zim_path: s.zim_path
+                    }));
+                    logOutput(`Loaded ${urlSamples.length} sample articles for URL detection (Step 3)`, 'info');
+                }
+            } catch (e) {
+                // Silent fail - samples are optional for URL detection
+                console.log('Could not fetch ZIM samples:', e);
             }
         }
 
@@ -1710,6 +2143,7 @@
                 if (response.ok) {
                     logOutput(`Scan complete: ${data.file_count || 0} files found`, 'success');
                     showToast('Backup scanned successfully');
+                    markSectionComplete('scanBackupSection');
                     await refreshSources();
                     await loadSourceDetails();
                 } else {
@@ -1725,19 +2159,114 @@
             }
         }
 
+        // Checkpoint modal state
+        let pendingCheckpointJobType = null;
+        let pendingCheckpointSourceId = null;
+
+        function showCheckpointModal(checkpoint, jobType) {
+            pendingCheckpointJobType = jobType;
+            pendingCheckpointSourceId = checkpoint.source_id;
+
+            document.getElementById('checkpointJobType').textContent = jobType;
+            document.getElementById('checkpointSourceId').textContent = checkpoint.source_id;
+            document.getElementById('checkpointProgress').textContent = checkpoint.progress + '%';
+            document.getElementById('checkpointDocsProcessed').textContent = (checkpoint.documents_processed || 0).toLocaleString();
+
+            // Format last saved time
+            if (checkpoint.last_saved) {
+                const savedDate = new Date(checkpoint.last_saved);
+                const now = new Date();
+                const hoursAgo = Math.floor((now - savedDate) / (1000 * 60 * 60));
+                if (hoursAgo < 1) {
+                    document.getElementById('checkpointLastSaved').textContent = 'Less than an hour ago';
+                } else if (hoursAgo < 24) {
+                    document.getElementById('checkpointLastSaved').textContent = hoursAgo + ' hours ago';
+                } else {
+                    document.getElementById('checkpointLastSaved').textContent = Math.floor(hoursAgo / 24) + ' days ago';
+                }
+            } else {
+                document.getElementById('checkpointLastSaved').textContent = 'Unknown';
+            }
+
+            document.getElementById('resumeCheckpointModal').style.display = 'flex';
+        }
+
+        function closeCheckpointModal() {
+            document.getElementById('resumeCheckpointModal').style.display = 'none';
+            pendingCheckpointJobType = null;
+            pendingCheckpointSourceId = null;
+
+            // Re-enable button
+            const btn = document.getElementById('btnGenerateMetadata');
+            if (btn) {
+                btn.disabled = false;
+                btn.textContent = 'Generate Metadata';
+            }
+        }
+
+        async function proceedWithCheckpoint(action) {
+            closeCheckpointModal();
+
+            if (action === 'restart') {
+                // Discard checkpoint and start fresh
+                try {
+                    await fetch(`/useradmin/api/discard-checkpoint/${pendingCheckpointSourceId}/${pendingCheckpointJobType}`, {
+                        method: 'POST'
+                    });
+                    logOutput('Discarded old checkpoint, starting fresh...', 'info');
+                } catch (e) {
+                    logOutput('Warning: Could not discard checkpoint: ' + e.message, 'warning');
+                }
+                // Start fresh
+                startMetadataGeneration(false);
+            } else if (action === 'resume') {
+                // Resume from checkpoint
+                logOutput('Resuming from checkpoint...', 'info');
+                startMetadataGeneration(true);
+            }
+        }
+
         async function generateMetadata() {
             if (!currentSource) return;
 
+            const btn = document.getElementById('btnGenerateMetadata');
+            btn.disabled = true;
+            btn.textContent = 'Checking...';
+
+            // Check for existing checkpoint first
+            try {
+                const checkResp = await fetch(`/useradmin/api/check-checkpoint/${currentSource.source_id}/metadata`);
+                const checkData = await checkResp.json();
+
+                if (checkData.has_checkpoint) {
+                    // Show modal to ask user what to do
+                    showCheckpointModal(checkData.checkpoint, 'metadata');
+                    return;
+                }
+            } catch (e) {
+                // Checkpoint system not available, proceed normally
+                console.log('Checkpoint check failed:', e);
+            }
+
+            // No checkpoint, start fresh
+            startMetadataGeneration(false);
+        }
+
+        async function startMetadataGeneration(resume = false) {
             const btn = document.getElementById('btnGenerateMetadata');
             btn.disabled = true;
             btn.textContent = 'Starting...';
 
             const languageFilter = document.getElementById('metadataLanguageFilter').value || null;
             const langInfo = languageFilter ? ` (language: ${languageFilter})` : '';
-            logOutput(`Generating metadata for ${currentSource.source_id}${langInfo}...`);
+            const resumeInfo = resume ? ' (resuming)' : '';
+            logOutput(`Generating metadata for ${currentSource.source_id}${langInfo}${resumeInfo}...`);
 
             try {
-                const requestBody = { source_id: currentSource.source_id };
+                const requestBody = {
+                    source_id: currentSource.source_id,
+                    resume: resume
+                };
                 if (languageFilter) {
                     requestBody.language_filter = languageFilter;
                 }
@@ -1778,6 +2307,7 @@
                                 const docCount = status.result.document_count || 0;
                                 logOutput(`Metadata generated: ${docCount} documents`, 'success');
                                 showToast('Metadata generated successfully');
+                                markSectionComplete('sectionGenerateMetadata');
                                 updateDocumentCount(docCount);
                                 await refreshSources();
                                 await loadSourceDetails();
@@ -1922,6 +2452,10 @@
             const limit = pendingIndexLimit || parseInt(document.getElementById('indexLimit').value) || 1000;
             const languageFilter = pendingIndexLanguageFilter || document.getElementById('metadataLanguageFilter').value || null;
 
+            // Reset pending state after reading
+            pendingIndexLimit = null;
+            pendingIndexLanguageFilter = null;
+
             const btn = document.getElementById('btnCreateIndex');
             if (!btn) {
                 console.error('doCreateIndex: Button not found');
@@ -1957,9 +2491,12 @@
                         logOutput(`Job submitted: ${data.job_id}`, 'success');
                         logOutput('Index creation running in background. Check the job monitor for progress.', 'info');
                         showToast('Index job started');
+                        // Mark as complete - job is running and will update source
+                        markSectionComplete('sectionCreateIndex');
                     } else {
                         logOutput(`Index complete: ${data.indexed_count || 0} documents indexed`, 'success');
                         showToast('Index created successfully');
+                        markSectionComplete('sectionCreateIndex');
                     }
                     await refreshSources();
                     await loadSourceDetails();
@@ -1996,13 +2533,18 @@
                 if (response.ok) {
                     if (data.is_valid) {
                         logOutput('Validation passed! Source is ready for distribution.', 'success');
+                        markSectionComplete('sectionValidate');
                         // Show success banner with link to Cloud page
                         showValidationSuccess();
+                        // Hide issues panel
+                        document.getElementById('validationIssuesPanel').style.display = 'none';
                     } else {
                         logOutput('Validation failed. Issues found:', 'warning');
                         if (data.issues) {
                             data.issues.forEach(issue => logOutput(`  - ${issue}`, 'error'));
                         }
+                        // Show actionable issues panel
+                        showActionableIssues(data.actionable_issues || [], data.issues || [], data.warnings || []);
                     }
 
                     if (data.warnings && data.warnings.length > 0) {
@@ -2024,6 +2566,152 @@
                     showToast(data.detail || 'Validation failed', true);
                 }
             } catch (e) {
+                logOutput(`Error: ${e.message}`, 'error');
+                showToast('Error: ' + e.message, true);
+            }
+        }
+
+        // Display actionable issues with fix buttons
+        function showActionableIssues(actionableIssues, issues, warnings) {
+            const panel = document.getElementById('validationIssuesPanel');
+            const container = document.getElementById('validationIssuesList');
+
+            if (!actionableIssues || actionableIssues.length === 0) {
+                // Fall back to plain issues/warnings display
+                if (issues.length === 0 && warnings.length === 0) {
+                    panel.style.display = 'none';
+                    return;
+                }
+                let html = '';
+                issues.forEach(issue => {
+                    html += `<div class="validation-issue error"><span class="issue-text">${issue}</span></div>`;
+                });
+                warnings.forEach(warning => {
+                    html += `<div class="validation-issue warning"><span class="issue-text">${warning}</span></div>`;
+                });
+                container.innerHTML = html;
+                panel.style.display = 'block';
+                return;
+            }
+
+            // Group issues by step for organized display
+            const byStep = {};
+            actionableIssues.forEach(issue => {
+                const step = issue.step || 0;
+                if (!byStep[step]) byStep[step] = [];
+                byStep[step].push(issue);
+            });
+
+            const stepNames = {
+                1: 'Step 1: Create/Import',
+                2: 'Step 2: Configure',
+                3: 'Step 3: Generate Metadata',
+                4: 'Step 4: Tags',
+                5: 'Step 5: Index & Validate'
+            };
+
+            let html = '';
+            Object.keys(byStep).sort((a, b) => a - b).forEach(step => {
+                const stepIssues = byStep[step];
+                if (step > 0) {
+                    html += `<div class="validation-step-group"><strong>${stepNames[step] || 'Step ' + step}</strong></div>`;
+                }
+                stepIssues.forEach(issue => {
+                    const severityClass = issue.severity === 'error' ? 'error' : 'warning';
+                    const fixBtn = issue.action_label && issue.step > 0
+                        ? `<button class="btn btn-sm" onclick="goToStep(${issue.step})">${issue.action_label}</button>`
+                        : '';
+                    html += `
+                        <div class="validation-issue ${severityClass}">
+                            <span class="issue-text">${issue.message}</span>
+                            ${fixBtn}
+                        </div>
+                    `;
+                });
+            });
+
+            container.innerHTML = html;
+            panel.style.display = 'block';
+        }
+
+        async function testLinks() {
+            if (!currentSource) {
+                showToast('No source selected', true);
+                return;
+            }
+
+            const resultsDiv = document.getElementById('testLinksResults');
+            resultsDiv.style.display = 'block';
+            resultsDiv.innerHTML = '<div style="color: #888;">Testing links...</div>';
+            logOutput(`Testing links for ${currentSource.source_id}...`);
+
+            try {
+                const response = await fetch(`/useradmin/api/test-links/${currentSource.source_id}`);
+                const data = await response.json();
+
+                if (data.error) {
+                    resultsDiv.innerHTML = `<div style="color: #e94560;">Error: ${data.error}</div>`;
+                    logOutput(`Error: ${data.error}`, 'error');
+                    return;
+                }
+
+                // Build results HTML
+                let html = `<div style="margin-bottom: 0.5rem;">
+                    <strong>Base URL:</strong> ${data.base_url || '(not set)'}
+                </div>`;
+
+                if (data.warning) {
+                    html += `<div style="color: #f9a825; margin-bottom: 0.5rem;">
+                        Warning: ${data.warning}
+                    </div>`;
+                    logOutput(`Warning: ${data.warning}`, 'warning');
+                }
+
+                if (data.sample_links && data.sample_links.length > 0) {
+                    html += '<table style="width: 100%; border-collapse: collapse; margin-top: 0.5rem;">';
+                    html += '<tr style="border-bottom: 1px solid #333;"><th style="text-align: left; padding: 0.25rem;">Title</th><th style="text-align: left; padding: 0.25rem;">URL Type</th><th style="text-align: left; padding: 0.25rem;">Test</th></tr>';
+
+                    data.sample_links.forEach(link => {
+                        const typeColor = link.is_online_url ? '#4ecca3' : '#e94560';
+                        const typeLabel = link.is_online_url ? 'Online' : (link.is_local_url ? 'Local' : 'Unknown');
+                        const displayUrl = link.constructed_url || link.stored_url;
+                        const testUrl = link.is_online_url ? displayUrl : null;
+
+                        html += `<tr style="border-bottom: 1px solid #222;">
+                            <td style="padding: 0.25rem; max-width: 200px; overflow: hidden; text-overflow: ellipsis;">${link.title}</td>
+                            <td style="padding: 0.25rem; color: ${typeColor};">${typeLabel}</td>
+                            <td style="padding: 0.25rem;">
+                                ${testUrl ? `<a href="${testUrl}" target="_blank" style="color: #4ecca3;">Open</a>` : '<span style="color: #666;">N/A</span>'}
+                            </td>
+                        </tr>`;
+
+                        logOutput(`  ${link.title}: ${typeLabel} - ${displayUrl}`);
+                    });
+
+                    html += '</table>';
+                } else {
+                    html += '<div style="color: #888;">No sample links found. Generate metadata first.</div>';
+                }
+
+                resultsDiv.innerHTML = html;
+
+                // Summary
+                const onlineCount = data.sample_links.filter(l => l.is_online_url).length;
+                const totalCount = data.sample_links.length;
+                if (onlineCount === totalCount && totalCount > 0) {
+                    logOutput(`All ${totalCount} sample links are online URLs - ready for Pinecone!`, 'success');
+                    showToast('Links look good!');
+                    markSectionComplete('sectionTestLinks');
+                } else if (totalCount > 0) {
+                    logOutput(`${onlineCount}/${totalCount} links are online. Re-index may be needed.`, 'warning');
+                    showToast(`${totalCount - onlineCount} links are local - may not work on Railway`, true);
+                } else {
+                    // No links to test, mark as skipped
+                    markSectionSkipped('sectionTestLinks');
+                }
+
+            } catch (e) {
+                resultsDiv.innerHTML = `<div style="color: #e94560;">Error: ${e.message}</div>`;
                 logOutput(`Error: ${e.message}`, 'error');
                 showToast('Error: ' + e.message, true);
             }
@@ -2088,6 +2776,7 @@
                 if (response.ok) {
                     logOutput(`Tags saved: ${tags.join(', ') || '(none)'}`, 'success');
                     showToast('Tags saved');
+                    markSectionComplete('sectionTags');
                     await refreshSources();
                     await loadSourceDetails();
                 } else {
@@ -2362,6 +3051,15 @@
                 if (sources.find(s => s.source_id === sourceParam)) {
                     document.getElementById('sourceSelect').value = sourceParam;
                     await loadSourceDetails();
+
+                    // Check for ?step= parameter to jump to a specific step
+                    const stepParam = urlParams.get('step');
+                    if (stepParam) {
+                        const stepNum = parseInt(stepParam);
+                        if (stepNum >= 1 && stepNum <= 5) {
+                            goToStep(stepNum);
+                        }
+                    }
                 }
             }
 
@@ -2407,11 +3105,46 @@
         </div>
     </div>
 
+    <!-- Resume Checkpoint Modal -->
+    <div id="resumeCheckpointModal" class="modal-overlay">
+        <div class="modal-content">
+            <div class="modal-title">Incomplete Job Found</div>
+            <div class="modal-body">
+                <p>An incomplete <strong id="checkpointJobType">metadata</strong> job was found for <strong id="checkpointSourceId"></strong>.</p>
+                <div style="background: #0f3460; padding: 0.75rem; border-radius: 4px; margin: 1rem 0;">
+                    <div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;">
+                        <span style="color: #888;">Progress:</span>
+                        <span style="color: #4ecca3;" id="checkpointProgress">0%</span>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;">
+                        <span style="color: #888;">Documents processed:</span>
+                        <span style="color: #4ecca3;" id="checkpointDocsProcessed">0</span>
+                    </div>
+                    <div style="display: flex; justify-content: space-between;">
+                        <span style="color: #888;">Last saved:</span>
+                        <span style="color: #888;" id="checkpointLastSaved">-</span>
+                    </div>
+                </div>
+                <p>Would you like to resume from where it left off, or start over?</p>
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" id="btnCheckpointCancel">Cancel</button>
+                <button class="btn btn-danger" id="btnCheckpointRestart">Start Fresh</button>
+                <button class="btn btn-primary" id="btnCheckpointResume">Resume</button>
+            </div>
+        </div>
+    </div>
+
     <script>
         // Attach event listeners for modal buttons (CSP-compliant)
         document.getElementById('btnIndexCancel').addEventListener('click', closeIndexModal);
         document.getElementById('btnIndexUpdate').addEventListener('click', function() { proceedWithIndex('update'); });
         document.getElementById('btnIndexReplace').addEventListener('click', function() { proceedWithIndex('replace'); });
+
+        // Checkpoint modal listeners
+        document.getElementById('btnCheckpointCancel').addEventListener('click', closeCheckpointModal);
+        document.getElementById('btnCheckpointRestart').addEventListener('click', function() { proceedWithCheckpoint('restart'); });
+        document.getElementById('btnCheckpointResume').addEventListener('click', function() { proceedWithCheckpoint('resume'); });
     </script>
 </body>
 </html>
