@@ -5,105 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Source Tools - Disaster Clippy</title>
     <link rel="icon" type="image/png" href="/static/paperclip.png">
+    <link rel="stylesheet" href="/admin/static/admin-common.css">
     <style>
-        * {
-            box-sizing: border-box;
-            margin: 0;
-            padding: 0;
-        }
-
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
-            background: #1a1a2e;
-            color: #eee;
-            min-height: 100vh;
-        }
-
-        header {
-            background: #16213e;
-            padding: 1rem 2rem;
-            border-bottom: 1px solid #0f3460;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-
-        header h1 {
-            font-size: 1.5rem;
-            color: #e94560;
-        }
-
-        header p {
-            font-size: 0.9rem;
-            color: #888;
-            margin-top: 0.25rem;
-        }
-
-        .nav-links {
-            display: flex;
-            gap: 0.5rem;
-            flex-wrap: wrap;
-        }
-
-        .nav-links a {
-            color: #4ecca3;
-            text-decoration: none;
-            font-size: 0.85rem;
-            padding: 0.5rem 0.75rem;
-            border-radius: 4px;
-            transition: background 0.2s;
-        }
-
-        .nav-links a:hover {
-            background: #0f3460;
-        }
-
-        .nav-links a.active {
-            background: #0f3460;
-            color: #e94560;
-        }
-
-        .nav-divider { width: 1px; background: #0f3460; margin: 0 0.25rem; }
-        .admin-toggle {
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-            padding: 0.4rem 0.75rem;
-            background: #0f3460;
-            border-radius: 4px;
-            font-size: 0.8rem;
-            color: #888;
-        }
-        .admin-toggle.active { background: #4a1942; color: #e94560; }
-        .admin-toggle input { display: none; }
-        .toggle-slider {
-            width: 36px;
-            height: 18px;
-            background: #1a1a2e;
-            border-radius: 9px;
-            position: relative;
-            cursor: pointer;
-            transition: background 0.2s;
-        }
-        .toggle-slider::after {
-            content: '';
-            position: absolute;
-            width: 14px;
-            height: 14px;
-            background: #888;
-            border-radius: 50%;
-            top: 2px;
-            left: 2px;
-            transition: all 0.2s;
-        }
-        .admin-toggle.active .toggle-slider { background: #e94560; }
-        .admin-toggle.active .toggle-slider::after { left: 20px; background: #fff; }
-
-        .container {
-            max-width: 1200px;
-            margin: 0 auto;
-            padding: 2rem;
-        }
+        /* Page-specific styles for Source Tools wizard */
 
         .sub-nav {
             display: flex;
@@ -178,22 +82,6 @@
 
         .step-content.active {
             display: block;
-        }
-
-        .section {
-            background: #16213e;
-            border: 1px solid #0f3460;
-            border-radius: 8px;
-            padding: 1.5rem;
-            margin-bottom: 1.5rem;
-        }
-
-        .section h2 {
-            font-size: 1.1rem;
-            color: #e94560;
-            margin-bottom: 1rem;
-            padding-bottom: 0.5rem;
-            border-bottom: 1px solid #0f3460;
         }
 
         .section p.description {
@@ -396,57 +284,22 @@
             min-height: 80px;
         }
 
-        /* Buttons */
+        /* Page-specific button extensions */
         .btn {
             padding: 0.6rem 1.2rem;
-            border: none;
-            border-radius: 6px;
             font-size: 0.9rem;
             font-weight: 500;
-            cursor: pointer;
-            transition: all 0.2s;
         }
 
-        .btn-primary {
-            background: #4ecca3;
-            color: #1a1a2e;
-        }
-
-        .btn-primary:hover {
-            background: #3db892;
-        }
-
-        .btn-secondary {
-            background: #0f3460;
-            color: #4ecca3;
-        }
-
-        .btn-secondary:hover {
-            background: #1a4a7a;
-        }
-
-        .btn-danger {
-            background: #e94560;
-            color: white;
-        }
-
-        .btn-danger:hover {
-            background: #d53a54;
-        }
+        .btn-primary:hover { background: #3db892; }
+        .btn-secondary:hover { background: #1a4a7a; }
+        .btn-danger:hover { background: #d53a54; }
 
         .btn-warning {
             background: #f9a825;
             color: #1a1a2e;
         }
-
-        .btn-warning:hover {
-            background: #e09620;
-        }
-
-        .btn:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-        }
+        .btn-warning:hover { background: #e09620; }
 
         /* Navigation Buttons */
         .step-navigation {
@@ -551,10 +404,11 @@
             <a href="/useradmin/pinecone">Pinecone</a>
             <a href="/">Chat</a>
             <span class="nav-divider"></span>
-            <label class="admin-toggle" id="adminToggle" title="Toggle Admin Mode">
-                <input type="checkbox" id="adminModeCheckbox" onchange="toggleAdminMode()">
-                <span>Admin</span>
+            <label class="mode-toggle" id="modeToggle" title="Switch between Local and Global mode for testing">
+                <input type="checkbox" id="modeCheckbox" onchange="toggleMode()">
+                <span class="mode-label" id="modeLabel">Local</span>
                 <span class="toggle-slider"></span>
+                <span class="mode-badge" id="modeBadge">TEST</span>
             </label>
         </nav>
     </header>
@@ -1074,9 +928,6 @@
             if (hasSource && currentStep === 4) {
                 populateTagsForm();
             }
-
-            // Update admin visibility
-            updateAdminVisibility();
         }
 
         // Source Type Selection
@@ -2328,41 +2179,10 @@
             }
         });
 
-        // Update visibility of admin-only elements
-        function updateAdminVisibility() {
-            const isAdmin = localStorage.getItem('adminMode') === 'true';
-
-            // Hide/show Pinecone link
-            const pineconeLink = document.querySelector('a[href="/useradmin/pinecone"]');
-            if (pineconeLink) {
-                pineconeLink.style.display = isAdmin ? '' : 'none';
-            }
-
-            // Hide/show admin-only sections
-            const adminOnlySections = document.querySelectorAll('.admin-only');
-            adminOnlySections.forEach(section => {
-                section.style.display = isAdmin ? 'block' : 'none';
-            });
-        }
-        updateAdminVisibility();
-
-        // Admin Mode Toggle
-        function toggleAdminMode() {
-            const checkbox = document.getElementById('adminModeCheckbox');
-            const toggle = document.getElementById('adminToggle');
-            const isAdmin = checkbox.checked;
-            localStorage.setItem('adminMode', isAdmin ? 'true' : 'false');
-            toggle.classList.toggle('active', isAdmin);
-            updateAdminVisibility();
-        }
-        function initAdminMode() {
-            const isAdmin = localStorage.getItem('adminMode') === 'true';
-            document.getElementById('adminModeCheckbox').checked = isAdmin;
-            document.getElementById('adminToggle').classList.toggle('active', isAdmin);
-            updateAdminVisibility();
-        }
-        initAdminMode();
     </script>
+
+    <!-- Shared admin functionality -->
+    <script src="/admin/static/admin-common.js"></script>
 
     <!-- Job Monitor - shows active background jobs -->
     <script src="/admin/static/job-monitor.js"></script>

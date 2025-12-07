@@ -5,93 +5,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Cloud Backup Upload - Disaster Clippy</title>
     <link rel="icon" type="image/png" href="/static/paperclip.png">
+    <link rel="stylesheet" href="/admin/static/admin-common.css">
     <style>
-        * {
-            box-sizing: border-box;
-            margin: 0;
-            padding: 0;
-        }
-
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
-            background: #1a1a2e;
-            color: #eee;
-            min-height: 100vh;
-        }
-
-        header {
-            background: #16213e;
-            padding: 1rem 2rem;
-            border-bottom: 1px solid #0f3460;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-
-        header h1 {
-            font-size: 1.5rem;
-            color: #e94560;
-        }
-
-        header p {
-            font-size: 0.9rem;
-            color: #888;
-            margin-top: 0.25rem;
-        }
-
-        .nav-links {
-            display: flex;
-            gap: 0.5rem;
-            flex-wrap: wrap;
-        }
-
-        .nav-links a {
-            color: #4ecca3;
-            text-decoration: none;
-            font-size: 0.85rem;
-            padding: 0.5rem 0.75rem;
-            border-radius: 4px;
-            transition: background 0.2s;
-        }
-
-        .nav-links a:hover {
-            background: #0f3460;
-        }
-
-        .nav-links a.active {
-            background: #0f3460;
-            color: #e94560;
-        }
-
-        .nav-divider { width: 1px; background: #0f3460; margin: 0 0.25rem; }
-        .admin-toggle { display: flex; align-items: center; gap: 0.5rem; padding: 0.4rem 0.75rem; background: #0f3460; border-radius: 4px; font-size: 0.8rem; color: #888; }
-        .admin-toggle.active { background: #4a1942; color: #e94560; }
-        .admin-toggle input { display: none; }
-        .toggle-slider { width: 36px; height: 18px; background: #1a1a2e; border-radius: 9px; position: relative; cursor: pointer; transition: background 0.2s; }
-        .toggle-slider::after { content: ''; position: absolute; width: 14px; height: 14px; background: #888; border-radius: 50%; top: 2px; left: 2px; transition: all 0.2s; }
-        .admin-toggle.active .toggle-slider { background: #e94560; }
-        .admin-toggle.active .toggle-slider::after { left: 20px; background: #fff; }
-
+        /* Page-specific CSS only */
         .container {
             max-width: 1000px;
-            margin: 0 auto;
-            padding: 2rem;
-        }
-
-        .section {
-            background: #16213e;
-            border: 1px solid #0f3460;
-            border-radius: 8px;
-            padding: 1.5rem;
-            margin-bottom: 1.5rem;
-        }
-
-        .section h2 {
-            font-size: 1.1rem;
-            color: #e94560;
-            margin-bottom: 1rem;
-            padding-bottom: 0.5rem;
-            border-bottom: 1px solid #0f3460;
         }
 
         .section p.description {
@@ -107,32 +25,13 @@
             padding: 1rem;
             margin-bottom: 1rem;
         }
-
-        .status-card.connected {
-            border-color: #4ecca3;
-        }
-
-        .status-card.disconnected {
-            border-color: #e94560;
-        }
-
-        .status-indicator {
-            display: inline-block;
-            width: 10px;
-            height: 10px;
-            border-radius: 50%;
-            margin-right: 0.5rem;
-        }
+        .status-card.connected { border-color: #4ecca3; }
+        .status-card.disconnected { border-color: #e94560; }
 
         .status-online { background: #4ecca3; }
         .status-offline { background: #e94560; }
-        .status-warning { background: #f9a825; }
 
-        .source-grid {
-            display: grid;
-            gap: 1rem;
-        }
-
+        .source-grid { display: grid; gap: 1rem; }
         .source-card {
             background: #1a1a2e;
             border: 1px solid #0f3460;
@@ -140,15 +39,8 @@
             padding: 1rem;
             transition: border-color 0.2s;
         }
-
-        .source-card.complete {
-            border-color: #4ecca3;
-        }
-
-        .source-card.incomplete {
-            border-color: #f9a825;
-            opacity: 0.8;
-        }
+        .source-card.complete { border-color: #4ecca3; }
+        .source-card.incomplete { border-color: #f9a825; opacity: 0.8; }
 
         .source-header {
             display: flex;
@@ -156,13 +48,7 @@
             align-items: center;
             margin-bottom: 0.75rem;
         }
-
-        .source-name {
-            font-size: 1rem;
-            font-weight: 600;
-            color: #e94560;
-        }
-
+        .source-name { font-size: 1rem; font-weight: 600; color: #e94560; }
         .source-badge {
             font-size: 0.7rem;
             padding: 0.2rem 0.5rem;
@@ -170,112 +56,24 @@
             text-transform: uppercase;
             font-weight: 600;
         }
+        .badge-complete { background: #4ecca3; color: #1a1a2e; }
+        .badge-incomplete { background: #f9a825; color: #1a1a2e; }
 
-        .badge-complete {
-            background: #4ecca3;
-            color: #1a1a2e;
-        }
+        .source-meta { font-size: 0.85rem; color: #888; margin-bottom: 0.5rem; }
+        .source-meta span { margin-right: 1rem; }
 
-        .badge-incomplete {
-            background: #f9a825;
-            color: #1a1a2e;
-        }
+        .checklist { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 0.75rem; }
+        .check-item { font-size: 0.8rem; padding: 0.2rem 0.5rem; border-radius: 4px; background: #0f3460; }
+        .check-item.has { color: #4ecca3; }
+        .check-item.missing { color: #e94560; }
 
-        .source-meta {
-            font-size: 0.85rem;
-            color: #888;
-            margin-bottom: 0.5rem;
-        }
+        .missing-list { font-size: 0.8rem; color: #f9a825; margin-bottom: 0.75rem; }
+        .source-actions { display: flex; gap: 0.5rem; }
 
-        .source-meta span {
-            margin-right: 1rem;
-        }
+        .btn-uploaded { background: #2e4a2e; color: #4ecca3; cursor: default; }
 
-        .checklist {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 0.5rem;
-            margin-bottom: 0.75rem;
-        }
-
-        .check-item {
-            font-size: 0.8rem;
-            padding: 0.2rem 0.5rem;
-            border-radius: 4px;
-            background: #0f3460;
-        }
-
-        .check-item.has {
-            color: #4ecca3;
-        }
-
-        .check-item.missing {
-            color: #e94560;
-        }
-
-        .missing-list {
-            font-size: 0.8rem;
-            color: #f9a825;
-            margin-bottom: 0.75rem;
-        }
-
-        .source-actions {
-            display: flex;
-            gap: 0.5rem;
-        }
-
-        .btn {
-            padding: 0.5rem 1rem;
-            border: none;
-            border-radius: 6px;
-            cursor: pointer;
-            font-size: 0.85rem;
-            font-weight: 500;
-            transition: background 0.2s;
-        }
-
-        .btn-primary {
-            background: #e94560;
-            color: white;
-        }
-
-        .btn-primary:hover {
-            background: #ff6b6b;
-        }
-
-        .btn-primary:disabled {
-            background: #555;
-            cursor: not-allowed;
-        }
-
-        .btn-secondary {
-            background: #0f3460;
-            color: #4ecca3;
-            border: 1px solid #4ecca3;
-        }
-
-        .btn-secondary:hover {
-            background: #4ecca3;
-            color: #1a1a2e;
-        }
-
-        .btn-uploaded {
-            background: #2e4a2e;
-            color: #4ecca3;
-            cursor: default;
-        }
-
-        .loading {
-            text-align: center;
-            padding: 2rem;
-            color: #888;
-        }
-
-        .empty-state {
-            text-align: center;
-            padding: 2rem;
-            color: #666;
-        }
+        .loading { text-align: center; padding: 2rem; color: #888; }
+        .empty-state { text-align: center; padding: 2rem; color: #666; }
 
         .toast {
             position: fixed;
@@ -291,46 +89,17 @@
             transition: all 0.3s ease;
             z-index: 1000;
         }
+        .toast.show { transform: translateY(0); opacity: 1; }
+        .toast.error { background: #e94560; color: white; }
 
-        .toast.show {
-            transform: translateY(0);
-            opacity: 1;
-        }
-
-        .toast.error {
-            background: #e94560;
-            color: white;
-        }
-
-        .progress-bar {
-            width: 100%;
-            height: 4px;
-            background: #0f3460;
-            border-radius: 2px;
-            margin-top: 0.5rem;
-            overflow: hidden;
-        }
-
-        .progress-fill {
-            height: 100%;
-            background: #4ecca3;
-            transition: width 0.3s ease;
-        }
-
-        .cloud-files {
-            margin-top: 1rem;
-        }
-
+        .cloud-files { margin-top: 1rem; }
         .cloud-file {
             display: flex;
             justify-content: space-between;
             padding: 0.5rem;
             border-bottom: 1px solid #0f3460;
         }
-
-        .cloud-file:last-child {
-            border-bottom: none;
-        }
+        .cloud-file:last-child { border-bottom: none; }
 
         .token-warning {
             background: #3d2e00;
@@ -339,15 +108,10 @@
             border-radius: 6px;
             margin-bottom: 1rem;
         }
-
-        .token-warning strong {
-            color: #f9a825;
-        }
+        .token-warning strong { color: #f9a825; }
 
         @media (max-width: 600px) {
-            .container {
-                padding: 1rem;
-            }
+            .container { padding: 1rem; }
         }
     </style>
 </head>
@@ -367,10 +131,11 @@
             <a href="/useradmin/pinecone">Pinecone</a>
             <a href="/">Chat</a>
             <span class="nav-divider"></span>
-            <label class="admin-toggle" id="adminToggle" title="Toggle Admin Mode">
-                <input type="checkbox" id="adminModeCheckbox" onchange="toggleAdminMode()">
-                <span>Admin</span>
+            <label class="mode-toggle" id="modeToggle" title="Switch between Local and Global mode for testing">
+                <input type="checkbox" id="modeCheckbox" onchange="toggleMode()">
+                <span class="mode-label" id="modeLabel">Local</span>
                 <span class="toggle-slider"></span>
+                <span class="mode-badge" id="modeBadge">TEST</span>
             </label>
         </nav>
     </header>
@@ -799,22 +564,9 @@
         }
         updateAdminView();
 
-        // Admin Mode Toggle
-        function toggleAdminMode() {
-            const checkbox = document.getElementById('adminModeCheckbox');
-            const toggle = document.getElementById('adminToggle');
-            const isAdmin = checkbox.checked;
-            localStorage.setItem('adminMode', isAdmin ? 'true' : 'false');
-            toggle.classList.toggle('active', isAdmin);
-            updateAdminView();
-        }
-        function initAdminMode() {
-            const isAdmin = localStorage.getItem('adminMode') === 'true';
-            document.getElementById('adminModeCheckbox').checked = isAdmin;
-            document.getElementById('adminToggle').classList.toggle('active', isAdmin);
-        }
-        initAdminMode();
     </script>
+    <script src="/admin/static/admin-common.js"></script>
+    <script src="/admin/static/mode-toggle.js"></script>
     <script src="/admin/static/job-monitor.js"></script>
 </body>
 </html>

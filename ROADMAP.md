@@ -4,7 +4,7 @@ Future plans and feature development priorities.
 
 ---
 
-## Current Status: v1.0
+## Current Status: v0.9 (Pre-release)
 
 ### Completed Features
 
@@ -48,21 +48,22 @@ Future plans and feature development priorities.
 
 ---
 
-## In Progress (v1.5)
+## In Progress
 
-### ADMIN_MODE Gating
+### Deployment Mode Gating
 
-Gate global-only features so local admins don't see them.
+Unified VECTOR_DB_MODE controls all access levels.
 
 **Status:** COMPLETED (Dec 2025)
 
 **Implemented:**
-- `ADMIN_MODE` environment variable (defaults to "local")
+- Single `VECTOR_DB_MODE` environment variable with 3 modes: local, pinecone, global
+- `local` = Admin UI, local ChromaDB, R2 read/submissions write
+- `pinecone` = No admin UI (public mode), cloud search only
+- `global` = Admin UI, Pinecone R/W, full R2 access
 - `require_global_admin()` dependency blocks cloud write endpoints
-- `/api/admin-mode` endpoint for frontend feature detection
+- `/api/admin-available` endpoint for frontend feature detection
 - Protected endpoints: `/api/upload-backup`, `/api/pinecone-push`, `/api/pinecone-namespace`
-- Frontend banners and disabled buttons when not in global mode
-- API key security remains primary layer (R2/Pinecone credentials required)
 
 ---
 
@@ -561,8 +562,9 @@ My Source Preferences:
 | Version | Focus | Key Features |
 |---------|-------|--------------|
 | v0.5 | Unified codebase | Merged repos, admin dashboard, scrapers (COMPLETE) |
-| v0.75 | Production polish | ADMIN_MODE gating, schema updates, testing (IN PROGRESS) |
-| v1.0 | Offline | ZIM distribution, local AI, source packs |
+| v0.75 | Production polish | Mode gating, schema updates, testing (COMPLETE) |
+| v0.9 | Pre-release | Final testing, documentation cleanup (CURRENT) |
+| v1.0 | Official Release | Stable API, ZIM distribution, source packs |
 | v2.0 | Platform | User accounts, marketplace, federated queries |
 
 ---
@@ -578,9 +580,43 @@ My Source Preferences:
 - Fix: Check EMBEDDING_MODE before initializing OpenAI client
 
 ### Testing
+
+**Automated Tests (TODO):**
 - Unit tests for scrapers (mock HTTP)
 - Integration tests for search flow
 - Load tests for concurrent sessions
+
+**Manual Testing Checklist:**
+
+Before release, verify the following workflows:
+
+| Test | Steps | Verify |
+|------|-------|--------|
+| Fresh HTML Source | Source Tools -> Create Backup -> Create Index | All 5 status boxes green, search works |
+| ZIM Indexing | Place .zim in backup path -> Source Tools -> Create Index | Schema files created, search returns ZIM content |
+| ZIM Language Filter | Step 3 -> Select language -> Force Re-index | Only target language articles indexed |
+| PDF Collection | Add PDFs to folder -> Create Index | PDFs chunked and searchable |
+| Source Rename | Select source -> Rename | Folder renamed, ChromaDB updated, old folder deleted |
+| Cloud Download | Sources -> Cloud tab -> Download | Files downloaded, ChromaDB populated |
+| Source Filtering | Chat -> Select Sources dropdown | Only selected sources return results |
+| Link Behavior | Click article links in chat | Opens in new tab, chat history preserved |
+| Tag Suggestions | Source Tools Step 4 -> Get Suggestions | Tags suggested based on content |
+| Railway Proxy | Set RAILWAY_PROXY_URL, no R2 keys | Cloud sources accessible via proxy |
+| Public Mode | Set VECTOR_DB_MODE=pinecone | Admin UI blocked, chat works |
+
+**Schema File Verification:**
+
+Each source should have these files with `schema_version: 3`:
+- `_manifest.json` - Source identity and config
+- `_metadata.json` - Document list
+- `_index.json` - Full content
+- `_vectors.json` - Embeddings
+- `backup_manifest.json` - URL to file mapping
+
+**Common Issues:**
+- Status box red but files exist: Check filename matches schema (e.g., `_metadata.json` not `{source_id}_metadata.json`)
+- Search returns no results: Verify ChromaDB has vectors, check source_id matches
+- "Source not found": Verify `_manifest.json` exists in source folder
 
 ### Code Quality
 - Type hints (Python 3.10+)
@@ -608,6 +644,17 @@ My Source Preferences:
 - Pinecone free tier: 100K vectors ($0)
 - Local storage: their drives ($0)
 - Optional cloud backup: ~$5/mo
+
+---
+
+## Related Documentation
+
+| Document | Purpose |
+|----------|---------|
+| [README.md](README.md) | Quick start and project overview |
+| [DEVELOPER.md](DEVELOPER.md) | Technical details, CLI tools, security |
+| [SUMMARY.md](SUMMARY.md) | Executive summary (non-technical) |
+| [CONTEXT.md](CONTEXT.md) | Architecture and design decisions |
 
 ---
 

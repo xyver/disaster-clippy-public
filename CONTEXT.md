@@ -224,16 +224,20 @@ File naming is centralized in `offline_tools/schemas.py` via getter functions.
 |----------|---------|----------|
 | `OPENAI_API_KEY` | Embeddings and chat | Yes (unless EMBEDDING_MODE=local) |
 | `ANTHROPIC_API_KEY` | Claude chat (optional) | No |
-| `PINECONE_API_KEY` | Cloud vector DB | Global admin only |
+| `PINECONE_API_KEY` | Cloud vector DB | If VECTOR_DB_MODE=pinecone or global |
 | `R2_ACCESS_KEY_ID` | Cloud storage | For R2 upload/download |
 | `R2_SECRET_ACCESS_KEY` | Cloud storage | For R2 upload/download |
-| `ADMIN_MODE` | "local" or "global" | No (defaults to local) |
 | `EMBEDDING_MODE` | "openai" or "local" | No (defaults to openai) |
-| `VECTOR_DB_MODE` | "local" or "pinecone" | No (defaults to local) |
+| `VECTOR_DB_MODE` | "local", "pinecone", or "global" | No (defaults to local) |
+
+**VECTOR_DB_MODE controls deployment:**
+- `local` - Admin UI visible, local ChromaDB, R2 read backups + R/W submissions
+- `pinecone` - Admin UI blocked (public mode), Pinecone cloud search only
+- `global` - Admin UI visible, Pinecone R/W, R2 full access
 
 ---
 
-## Current Work (v1.0 Complete, v1.5 In Progress)
+## Current Work (v0.9 Pre-release)
 
 ### Completed (Dec 2025)
 
@@ -248,16 +252,32 @@ The codebase was recently consolidated from two repos (private + public):
 - Route refactoring (extracted API into modular route files)
 - Removed all legacy/backwards compatibility code
 
-### In Progress
-
-- Pipeline testing with data sources
-
-### Recently Completed (Dec 2025)
+### Features (Complete)
 
 - ADMIN_MODE gating for global-only features
 - Schema standardization (all tools use schemas.py)
 - ZIM metadata extraction (auto-populates license, description, tags from ZIM files)
 - Tag taxonomy expansion (28 categories for better content categorization)
+- Language filtering for multi-language ZIM files
+- Source filtering in chat UI
+- Chat UX improvements (links open in new tabs)
+- Unified AI Pipeline with streaming support
+
+### Security (Complete)
+
+- VECTOR_DB_MODE=pinecone blocks admin UI (public Railway deployment)
+- VECTOR_DB_MODE=global enables full cloud write access
+- Two-bucket R2 system (backups + submissions) with separate credentials
+- Railway proxy endpoints for local admins without API keys
+- Rate limiting on all public endpoints (5-30 requests/min)
+- Cloud-only mode (Railway works without BACKUP_PATH)
+- EMBEDDING_MODE=local error handling improved
+
+### In Progress (v0.9)
+
+- Pipeline testing with real data sources
+- Documentation cleanup and consolidation
+- Final validation before v1.0 release
 
 See [ROADMAP.md](ROADMAP.md) for full details.
 
@@ -340,6 +360,17 @@ curl -X POST "http://localhost:8000/api/v1/chat" \
 # Check admin panel
 # Visit http://localhost:8000/useradmin/
 ```
+
+---
+
+## Related Documentation
+
+| Document | Purpose |
+|----------|---------|
+| [README.md](README.md) | Quick start and project overview |
+| [DEVELOPER.md](DEVELOPER.md) | Technical details, CLI tools, security |
+| [SUMMARY.md](SUMMARY.md) | Executive summary (non-technical) |
+| [ROADMAP.md](ROADMAP.md) | Future plans and testing checklist |
 
 ---
 

@@ -105,6 +105,55 @@ ADMIN_MODE=global python app.py
 
 ---
 
+## Security Architecture
+
+### Deployment Modes (VECTOR_DB_MODE)
+
+A single environment variable controls your deployment mode:
+
+| Mode | Admin UI | Vector DB | R2 Access |
+|------|----------|-----------|-----------|
+| `local` (default) | Yes | ChromaDB | Read backups, R/W submissions |
+| `pinecone` | No | Pinecone (read) | None (public chat only) |
+| `global` | Yes | Pinecone (R/W) | Full access |
+
+### Feature Access by Mode
+
+| Feature | local | pinecone | global |
+|---------|-------|----------|--------|
+| Chat UI | Yes | Yes | Yes |
+| Admin UI (`/useradmin/`) | Yes | No | Yes |
+| Local ChromaDB | Yes | No | No |
+| Pinecone Read (search) | Via proxy | Yes | Yes |
+| Pinecone Write (sync) | No | No | Yes |
+| R2 Read (download backups) | Via proxy | No | Yes |
+| R2 Write (submissions) | Via proxy | No | Yes |
+| R2 Full (official backups) | No | No | Yes |
+
+### Rate Limits (Railway)
+
+| Endpoint | Limit | Purpose |
+|----------|-------|---------|
+| `/chat`, `/api/v1/chat` | 10/min | Chat requests |
+| `/api/cloud/sources` | 30/min | List sources |
+| `/api/cloud/download/{id}` | 10/min | List files |
+| `/api/cloud/download/{id}/{file}` | 5/min | Download file |
+| `/api/cloud/submit` | 5/min | Submit content |
+
+### Railway Proxy for Local Admins
+
+Local admins without API keys can access cloud features through Railway proxy endpoints:
+
+```
+GET  /api/cloud/sources          - List available backups
+GET  /api/cloud/download/{id}    - Stream backup download
+POST /api/cloud/submit           - Submit content for review
+```
+
+Configure with `RAILWAY_PROXY_URL` in local settings.
+
+---
+
 ## Quick Start
 
 ### 1. Clone and Install
@@ -726,45 +775,122 @@ The following locations contain legacy file format handling that can be deleted 
 
 ## Other Documentation
 
-- [CONTEXT.md](CONTEXT.md) - Architecture and design decisions (AI onboarding)
-- [SUMMARY.md](SUMMARY.md) - Executive summary
-- [README.md](README.md) - Project overview
-- [ROADMAP.md](ROADMAP.md) - Future plans
+| Document | Purpose |
+|----------|---------|
+| [README.md](README.md) | Project overview and quick start |
+| [CONTEXT.md](CONTEXT.md) | Architecture and design decisions (AI onboarding) |
+| [SUMMARY.md](SUMMARY.md) | Executive summary (non-technical) |
+| [ROADMAP.md](ROADMAP.md) | Future plans, testing, and feature development |
 
 ---
 
-Summary
-New R2 Storage Features (r2.py)
-Bucket getters:
-get_backups_storage() - Uses R2_BACKUPS_BUCKET (reads official content)
-get_submissions_storage() - Uses R2_SUBMISSIONS_BUCKET (writes user submissions)
-get_r2_storage() - Legacy single-bucket mode (backward compatible)
-Server-side copy methods:
-copy_to_bucket(source_key, dest_bucket, dest_key) - Cross-bucket copy
-move_to_bucket(source_key, dest_bucket, dest_key) - Copy + delete
-Helper functions:
-approve_submission(submission_key, dest_source_id, dest_filename) - Server-side approve
-reject_submission(submission_key, reason) - Move to rejected folder
-Environment Variables
-Railway (create two R2 tokens with limited access):
-R2_ACCESS_KEY_ID=<railway-token-id>
-R2_SECRET_ACCESS_KEY=<railway-token-secret>
-R2_ENDPOINT_URL=https://<account>.r2.cloudflarestorage.com
-R2_BACKUPS_BUCKET=disaster-clippy-backups      # Read-only token
-R2_SUBMISSIONS_BUCKET=disaster-clippy-submissions  # Write-only token
-Global Admin (full access token):
-R2_ACCESS_KEY_ID=<admin-token-id>
-R2_SECRET_ACCESS_KEY=<admin-token-secret>
+## R2 Cloud Storage (Advanced)
+
+### Two-Bucket Architecture
+
+The R2 storage system uses two separate buckets for security:
+
+| Bucket | Purpose | Railway Access | Global Admin |
+|--------|---------|----------------|--------------|
+| `disaster-clippy-backups` | Official content | Read only | Read/Write |
+| `disaster-clippy-submissions` | User submissions | Write only | Read/Delete |
+
+### R2 Storage Functions (`offline_tools/cloud/r2.py`)
+
+**Bucket Getters:**
+- `get_backups_storage()` - Uses `R2_BACKUPS_BUCKET` (reads official content)
+- `get_submissions_storage()` - Uses `R2_SUBMISSIONS_BUCKET` (writes user submissions)
+- `get_r2_storage()` - Legacy single-bucket mode (backward compatible)
+
+**Server-Side Copy Methods:**
+- `copy_to_bucket(source_key, dest_bucket, dest_key)` - Cross-bucket copy
+- `move_to_bucket(source_key, dest_bucket, dest_key)` - Copy + delete
+
+**Helper Functions:**
+- `approve_submission(submission_key, dest_source_id, dest_filename)` - Server-side approve
+- `reject_submission(submission_key, reason)` - Move to rejected folder
+
+### R2 Environment Variables
+
+**Railway Deployment** (limited access tokens):
+
+```bash
+R2_ACCESS_KEY_ID=<your-key-id>
+R2_SECRET_ACCESS_KEY=<your-secret>
 R2_ENDPOINT_URL=https://<account>.r2.cloudflarestorage.com
 R2_BACKUPS_BUCKET=disaster-clippy-backups
 R2_SUBMISSIONS_BUCKET=disaster-clippy-submissions
-Cloudflare R2 Setup
-Create bucket: disaster-clippy-backups
-Create bucket: disaster-clippy-submissions
-Create API token for Railway: Read on backups, Write on submissions
-Create API token for Global Admin: Full access on both
-The code is backward compatible - if you only set R2_BUCKET_NAME, it uses single-bucket mode.
+```
 
+**Global Admin** (full access token):
 
+```bash
+R2_ACCESS_KEY_ID=<admin-key-id>
+R2_SECRET_ACCESS_KEY=<admin-secret>
+R2_ENDPOINT_URL=https://<account>.r2.cloudflarestorage.com
+R2_BACKUPS_BUCKET=disaster-clippy-backups
+R2_SUBMISSIONS_BUCKET=disaster-clippy-submissions
+```
+
+### Cloudflare R2 Setup
+
+1. Create bucket: `disaster-clippy-backups`
+2. Create bucket: `disaster-clippy-submissions`
+3. Create API token for Railway: Read on backups, Write on submissions
+4. Create API token for Global Admin: Full access on both
+
+The code is backward compatible - if you only set `R2_BUCKET_NAME`, it uses single-bucket mode.
+
+---
+
+## Vector Database Configuration
+
+`VECTOR_DB_MODE` controls where vectors are stored:
+
+| Mode | Storage | Use Case |
+|------|---------|----------|
+| `local` (default) | ChromaDB in `BACKUP_PATH/chroma/` | Local admin, offline use |
+| `pinecone` | Pinecone cloud service | Railway deployment, global admin |
+
+### Pinecone Variables
+
+Only needed if `VECTOR_DB_MODE=pinecone`:
+
+| Variable | Description |
+|----------|-------------|
+| `PINECONE_API_KEY` | Your Pinecone API key from console.pinecone.io |
+| `PINECONE_ENVIRONMENT` | Region (e.g., us-east-1, gcp-starter) |
+| `PINECONE_INDEX_NAME` | Index name (default: disaster-clippy) |
+
+### Deployment Requirements
+
+| Deployment | VECTOR_DB_MODE | Pinecone Keys |
+|------------|----------------|---------------|
+| Local admin | `local` | Not needed |
+| Railway public | `pinecone` | Yes - in Railway env vars |
+| Global admin | `pinecone` | Yes - for syncing to cloud |
+
+---
+
+## URL Handling (Local vs Cloud)
+
+The indexer stores both online and local URLs for each document:
+
+| Source Type | `url` Field | `local_url` Field |
+|-------------|-------------|-------------------|
+| ZIM | Online URL (e.g., `https://en.bitcoin.it/wiki/Mining`) | `/zim/{source_id}/{article_path}` |
+| HTML | `base_url` + relative path | `/backup/{source_id}/{filename}` |
+| PDF | `/api/pdf/{source_id}/{filename}` | `file://{local_path}` |
+
+### Context-Aware Display
+
+The `_get_display_url()` helper in `app.py` selects the appropriate URL:
+
+| Deployment | Vector DB | URL Used | Result |
+|------------|-----------|----------|--------|
+| Railway (`PUBLIC_MODE=true`) | Pinecone | `url` | Online URLs |
+| Local admin | ChromaDB | `local_url` | Local viewer URLs |
+
+---
 
 *Last Updated: December 2025*

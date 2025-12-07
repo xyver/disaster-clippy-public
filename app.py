@@ -291,6 +291,26 @@ async def health_check():
     }
 
 
+@app.get("/api/admin-available")
+async def admin_available():
+    """
+    Check if admin UI is available based on VECTOR_DB_MODE.
+    Used by chat page to conditionally show Local Settings link.
+
+    VECTOR_DB_MODE values:
+        - local: Admin UI available (local ChromaDB)
+        - pinecone: Admin UI blocked (public mode, cloud search only)
+        - global: Admin UI available (full cloud access)
+    """
+    mode = os.getenv("VECTOR_DB_MODE", "local").lower()
+    is_public = (mode == "pinecone")
+    return {
+        "available": not is_public,
+        "mode": mode,
+        "admin_url": "/useradmin/" if not is_public else None
+    }
+
+
 @app.get("/welcome")
 async def get_welcome():
     """
@@ -619,16 +639,12 @@ async def chat(request: Request, body: ChatRequest):
     session["history"].append(HumanMessage(content=message))
     session["history"].append(AIMessage(content=response_text))
 
-    # Format articles for response (convert ZIM URLs to local browsable URLs)
+    # Format articles for response (use appropriate URL based on context)
     formatted_articles = []
     for a in articles:
-        url = a["metadata"].get("url", "")
-        # Convert zim:// URLs to local /zim/ URLs for offline browsing
-        if url.startswith("zim://"):
-            url = _convert_zim_url(url, a["metadata"].get("source", "")) or url
         formatted_articles.append({
             "title": a["metadata"].get("title", "Unknown"),
-            "url": url,
+            "url": _get_display_url(a),  # Uses online URL on Railway, local URL locally
             "source": a["metadata"].get("source", "unknown"),
             "doc_type": a.get("doc_type", "article"),
             "score": round(a.get("original_score", a["score"]), 3),
@@ -805,16 +821,10 @@ async def stream_chat(request: Request, body: SimpleQueryRequest):
 
     async def generate():
         # Send articles first as JSON (prefixed with [ARTICLES])
-        # Convert ZIM URLs to local browsable URLs
-        def get_browsable_url(a):
-            url = a.get("metadata", {}).get("url", "")
-            if url.startswith("zim://"):
-                return _convert_zim_url(url, a.get("metadata", {}).get("source", "")) or url
-            return url
-
+        # Use appropriate URL based on context (online for Railway, local for offline)
         articles_json = json.dumps([{
             "title": a.get("metadata", {}).get("title", "Unknown"),
-            "url": get_browsable_url(a),
+            "url": _get_display_url(a),  # Uses online URL on Railway, local URL locally
             "source": a.get("metadata", {}).get("source", "unknown"),
             "snippet": a.get("content", "")[:200] + "..." if a.get("content", "") else "",
             "score": a.get("score", 0)
@@ -1772,6 +1782,47 @@ def _convert_zim_url(zim_url: str, source_id: str, prefer_offline: bool = True) 
 
     # Fall back to local ZIM server
     return f"/zim/{zim_source}/{article_path}"
+
+
+def _get_display_url(article: dict) -> str:
+    """
+    Get the appropriate URL to display for an article based on deployment context.
+
+    VECTOR_DB_MODE controls URL selection:
+    - pinecone: Use 'url' (online URL from Pinecone cloud)
+    - local/global: Use 'local_url' if available (for offline browsing), else 'url'
+
+    Also handles legacy zim:// URLs by converting them to browsable /zim/ URLs.
+
+    Args:
+        article: Article dict with metadata
+
+    Returns:
+        The appropriate URL to display
+    """
+    metadata = article.get("metadata", {})
+    url = metadata.get("url", "")
+    local_url = metadata.get("local_url", "")
+
+    # Check if we're in public mode (VECTOR_DB_MODE=pinecone)
+    mode = os.getenv("VECTOR_DB_MODE", "local").lower()
+    is_public = (mode == "pinecone")
+
+    if is_public:
+        # Railway/public: use online URL (from Pinecone)
+        # No local_url available from Pinecone, so just use url
+        display_url = url
+    else:
+        # Local/global: prefer local_url if available for offline browsing
+        display_url = local_url if local_url else url
+
+    # Handle legacy zim:// URLs (convert to browsable /zim/ URLs)
+    if display_url.startswith("zim://"):
+        converted = _convert_zim_url(display_url, metadata.get("source", ""))
+        if converted:
+            display_url = converted
+
+    return display_url
 
 
 def prioritize_results_by_doc_type(articles: List[dict],

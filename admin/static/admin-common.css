@@ -1,0 +1,199 @@
+/**
+ * Admin Common CSS - Shared styles for all admin pages
+ */
+
+/* Reset and Base */
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #1a1a2e;
+    color: #eee;
+    min-height: 100vh;
+}
+
+/* Header */
+header {
+    background: #16213e;
+    padding: 1rem 2rem;
+    border-bottom: 1px solid #0f3460;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+header h1 { font-size: 1.5rem; color: #e94560; }
+header p { font-size: 0.9rem; color: #888; margin-top: 0.25rem; }
+
+/* Navigation */
+.nav-links { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+.nav-links a {
+    color: #4ecca3;
+    text-decoration: none;
+    font-size: 0.85rem;
+    padding: 0.5rem 0.75rem;
+    border-radius: 4px;
+    transition: background 0.2s;
+}
+.nav-links a:hover { background: #0f3460; }
+.nav-links a.active { background: #0f3460; color: #e94560; }
+.nav-divider { width: 1px; background: #0f3460; margin: 0 0.25rem; }
+
+/* Mode Toggle */
+.mode-toggle {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.4rem 0.75rem;
+    background: #0f3460;
+    border-radius: 4px;
+    font-size: 0.8rem;
+    color: #888;
+}
+.mode-toggle.global { background: #4a1942; color: #e94560; }
+.mode-toggle input { display: none; }
+.mode-toggle .toggle-slider {
+    width: 36px;
+    height: 18px;
+    background: #1a1a2e;
+    border-radius: 9px;
+    position: relative;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+.mode-toggle .toggle-slider::after {
+    content: '';
+    position: absolute;
+    width: 14px;
+    height: 14px;
+    background: #888;
+    border-radius: 50%;
+    top: 2px;
+    left: 2px;
+    transition: all 0.2s;
+}
+.mode-toggle.global .toggle-slider { background: #e94560; }
+.mode-toggle.global .toggle-slider::after { left: 20px; background: #fff; }
+.mode-label { min-width: 50px; text-align: right; }
+.mode-badge {
+    font-size: 0.7rem;
+    padding: 0.15rem 0.4rem;
+    border-radius: 3px;
+    background: #1a1a2e;
+    margin-left: 0.25rem;
+}
+.mode-toggle.global .mode-badge { background: #e94560; color: #fff; }
+
+/* Container */
+.container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 2rem;
+}
+
+/* Sections */
+.section {
+    background: #16213e;
+    border: 1px solid #0f3460;
+    border-radius: 8px;
+    padding: 1.5rem;
+    margin-bottom: 1.5rem;
+}
+.section h2 {
+    font-size: 1.1rem;
+    color: #e94560;
+    margin-bottom: 1rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid #0f3460;
+}
+
+/* Buttons */
+.btn {
+    padding: 0.5rem 1rem;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.85rem;
+    transition: opacity 0.2s;
+}
+.btn:hover { opacity: 0.8; }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-primary { background: #4ecca3; color: #1a1a2e; }
+.btn-secondary { background: #0f3460; color: #eee; }
+.btn-danger { background: #e94560; color: #fff; }
+.btn-success { background: #4ecca3; color: #1a1a2e; }
+.actions { display: flex; gap: 0.5rem; margin-top: 1rem; }
+
+/* Stats Grid */
+.stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 1rem;
+}
+.stat-card {
+    background: #1a1a2e;
+    border: 1px solid #0f3460;
+    border-radius: 8px;
+    padding: 1rem;
+    text-align: center;
+}
+.stat-value { font-size: 2rem; color: #4ecca3; font-weight: bold; }
+.stat-label { font-size: 0.85rem; color: #888; margin-top: 0.25rem; }
+
+/* Status Indicators */
+.status-indicator {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    margin-right: 0.5rem;
+}
+.status-connected { background: #4ecca3; }
+.status-disconnected { background: #e94560; }
+.status-warning { background: #f9a825; }
+
+/* Placeholders and Empty States */
+.placeholder, .empty {
+    text-align: center;
+    padding: 2rem;
+    color: #666;
+    font-style: italic;
+}
+
+/* Lists */
+.source-list, .item-list { display: flex; flex-direction: column; gap: 0.5rem; }
+.source-item, .list-item {
+    background: #1a1a2e;
+    border: 1px solid #0f3460;
+    border-radius: 4px;
+    padding: 0.75rem 1rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+/* Progress Bar */
+.progress-bar {
+    width: 100%;
+    height: 4px;
+    background: #0f3460;
+    border-radius: 2px;
+    overflow: hidden;
+}
+.progress-fill {
+    height: 100%;
+    background: #4ecca3;
+    transition: width 0.3s;
+}
+
+/* Banners */
+.warning-banner {
+    background: #e94560;
+    color: white;
+    padding: 0.75rem 2rem;
+    text-align: center;
+}
+.info-banner {
+    background: #0f3460;
+    color: #4ecca3;
+    padding: 0.75rem 2rem;
+    text-align: center;
+}

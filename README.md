@@ -79,7 +79,7 @@ All content is Creative Commons or Public Domain with full attribution.
 - **Natural language search** - Ask questions like you would ask a person
 - **Source attribution** - Every answer links to the original source
 - **Document types** - Results tagged as Guide, Article, Research, or Product
-- **Multi-turn conversation** - Follow-up questions keep context
+- **Multi-turn conversation** - Follow-up questions keep context and enhance further research
 
 ### For Local Admins
 
@@ -158,10 +158,11 @@ disaster-clippy/
 
 | Document | Purpose |
 |----------|---------|
-| [DEVELOPER.md](DEVELOPER.md) | Repository structure, setup guide, CLI tools |
-| [CONTEXT.md](CONTEXT.md) | Architecture and design decisions (start here for AI onboarding) |
+| [README.md](README.md) | This file - getting started and overview |
+| [DEVELOPER.md](DEVELOPER.md) | Technical setup, CLI tools, security architecture |
 | [SUMMARY.md](SUMMARY.md) | Executive summary (non-technical overview) |
-| [ROADMAP.md](ROADMAP.md) | Future plans and feature development |
+| [CONTEXT.md](CONTEXT.md) | Architecture and design decisions (AI onboarding) |
+| [ROADMAP.md](ROADMAP.md) | Future plans, testing checklist, version targets |
 
 ---
 
@@ -197,4 +198,4 @@ Key areas:
 
 ---
 
-*Version 1.0 - December 2025*
+*Version 0.9 (Pre-release) - December 2025*

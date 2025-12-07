@@ -28,15 +28,33 @@ from offline_tools.schemas import get_manifest_file, get_metadata_file
 
 
 # =============================================================================
-# PUBLIC MODE - Disables admin UI for public deployments (Railway)
+# VECTOR_DB_MODE - Controls deployment mode and access levels
 # =============================================================================
+#
+# VECTOR_DB_MODE has 3 values:
+#   - local:    Admin UI visible, local ChromaDB, R2 backups read + submissions R/W
+#   - pinecone: Admin UI blocked (public mode), Pinecone cloud search only
+#   - global:   Admin UI visible, Pinecone R/W, R2 full access
+#
+
+def get_vector_db_mode() -> str:
+    """
+    Get the current deployment mode from VECTOR_DB_MODE environment variable.
+
+    Returns:
+        "local" - Local admin with ChromaDB (default)
+        "pinecone" - Public deployment with cloud search only
+        "global" - Global admin with full cloud write access
+    """
+    return os.getenv("VECTOR_DB_MODE", "local").lower()
+
 
 def is_public_mode() -> bool:
     """
-    Check if running in public mode (Railway deployment).
-    When PUBLIC_MODE=true, all admin UI routes are blocked.
+    Check if running in public mode (VECTOR_DB_MODE=pinecone).
+    In public mode, admin UI is blocked - only chat is available.
     """
-    return os.getenv("PUBLIC_MODE", "").lower() in ("true", "1", "yes")
+    return get_vector_db_mode() == "pinecone"
 
 
 def block_in_public_mode():
@@ -52,35 +70,33 @@ def block_in_public_mode():
     return True
 
 
-# =============================================================================
-# ADMIN MODE - Controls access to global cloud features
-# =============================================================================
-
 def get_admin_mode() -> str:
     """
-    Get the current admin mode from environment.
+    Get the admin mode based on VECTOR_DB_MODE.
+    For backwards compatibility with code that checks admin mode.
 
     Returns:
-        "global" - Full access to cloud write operations (official admin only)
-        "local" - Read-only cloud access, full local access (default for users)
+        "global" if VECTOR_DB_MODE=global
+        "local" otherwise
     """
-    return os.getenv("ADMIN_MODE", "local").lower()
+    mode = get_vector_db_mode()
+    return "global" if mode == "global" else "local"
 
 
 def is_global_admin() -> bool:
-    """Check if running in global admin mode"""
-    return get_admin_mode() == "global"
+    """Check if running in global admin mode (VECTOR_DB_MODE=global)"""
+    return get_vector_db_mode() == "global"
 
 
 def require_global_admin():
     """
-    Dependency that blocks access unless ADMIN_MODE=global.
+    Dependency that blocks access unless VECTOR_DB_MODE=global.
     Use this to protect endpoints that write to the shared cloud.
     """
     if not is_global_admin():
         raise HTTPException(
             status_code=403,
-            detail="This feature requires global admin access. Set ADMIN_MODE=global to enable."
+            detail="This feature requires global admin access. Set VECTOR_DB_MODE=global to enable."
         )
     return True
 
@@ -95,7 +111,7 @@ from .routes.source_tools import router as source_tools_router
 from .routes.packs import router as packs_router
 from .routes.jobs import router as jobs_router
 
-# Create router with public mode check - blocks all routes when PUBLIC_MODE=true
+# Create router with public mode check - blocks all routes when VECTOR_DB_MODE=pinecone
 router = APIRouter(
     prefix="/useradmin",
     tags=["User Admin"],

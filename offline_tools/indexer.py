@@ -180,6 +180,7 @@ def save_metadata(output_folder: Path, source_id: str,
             doc_metadata[doc_id] = {
                 "title": doc.get("title", "Unknown"),
                 "url": doc.get("url", ""),
+                "local_url": doc.get("local_url", ""),  # Local URL for offline use
                 "content_hash": doc.get("content_hash", ""),
                 "char_count": char_count,
                 "categories": doc.get("categories", []),
@@ -227,6 +228,7 @@ def save_index(output_folder: Path, source_id: str,
             doc_content[doc_id] = {
                 "title": doc.get("title", "Unknown"),
                 "url": doc.get("url", ""),
+                "local_url": doc.get("local_url", ""),  # Local URL for offline use
                 "content": doc.get("content", ""),
                 "categories": doc.get("categories", []),
                 "doc_type": doc.get("doc_type", "article"),
@@ -756,7 +758,23 @@ class ZIMIndexer:
                         skipped += 1
                         continue
 
-                    full_url = f"zim://{self.source_id}/{url}"
+                    # Build URLs - local_url for offline ZIM viewer, url for online
+                    local_url = f"/zim/{self.source_id}/{url}"
+
+                    # Online URL: use base_url from ZIM metadata if available
+                    # (e.g., https://en.bitcoin.it/wiki/ + Article_Name)
+                    base_url = zim_metadata.get("source_url", "") if zim_metadata else ""
+                    if base_url:
+                        # Clean up the base URL and article path
+                        if not base_url.endswith('/'):
+                            base_url += '/'
+                        # For wiki URLs, typically the article name is the last part
+                        article_name = url.split('/')[-1] if '/' in url else url
+                        online_url = f"{base_url}{article_name}"
+                    else:
+                        # No base URL available - use local URL as fallback
+                        online_url = local_url
+
                     doc_id = hashlib.md5(f"{self.source_id}:{url}".encode()).hexdigest()
 
                     if doc_id in seen_ids:
@@ -768,7 +786,8 @@ class ZIMIndexer:
                         "id": doc_id,
                         "content": text[:50000],
                         "title": title,
-                        "url": full_url,
+                        "url": online_url,  # Online URL for Pinecone
+                        "local_url": local_url,  # Local URL for ChromaDB
                         "source": self.source_id,
                         "categories": [],
                         "content_hash": hashlib.md5(text.encode()).hexdigest(),
@@ -967,11 +986,20 @@ class HTMLBackupIndexer:
                     skipped += 1
                     continue
 
+                # Build URLs - local_url for offline serving, url for online
+                local_url = f"/backup/{self.source_id}/{filename}"
+
+                # Online URL: use base_url + relative path
+                # base_url loaded later, so we store the relative URL in 'url'
+                # and construct online URL when base_url is known
+                online_url = url  # Will be updated below with base_url
+
                 documents.append({
                     "id": doc_id,
                     "content": text[:50000],
                     "title": title,
-                    "url": url,
+                    "url": online_url,  # Online URL (relative, combined with base_url below)
+                    "local_url": local_url,  # Local URL for offline serving
                     "source": self.source_id,
                     "categories": [],
                     "content_hash": hashlib.md5(text.encode()).hexdigest(),
@@ -1026,6 +1054,19 @@ class HTMLBackupIndexer:
                 base_url = manifest.get("base_url", "")
         except Exception:
             pass
+
+        # Update document URLs with base_url for online use
+        if base_url:
+            for doc in documents:
+                relative_url = doc.get("url", "")
+                # Construct full online URL from base_url + relative path
+                if relative_url and not relative_url.startswith(('http://', 'https://')):
+                    if base_url.endswith('/') and relative_url.startswith('/'):
+                        doc["url"] = base_url + relative_url[1:]
+                    elif not base_url.endswith('/') and not relative_url.startswith('/'):
+                        doc["url"] = base_url + '/' + relative_url
+                    else:
+                        doc["url"] = base_url + relative_url
 
         # Save all output files (v3 format)
         if count > 0:
@@ -1185,6 +1226,11 @@ class PDFIndexer:
                     skipped += 1
                     continue
 
+                # Build URLs - online points to API endpoint (served from R2), local to file
+                pdf_filename = pdf_path.name
+                online_url = f"/api/pdf/{self.source_id}/{pdf_filename}"
+                local_url = f"file://{pdf_path}"
+
                 # Chunk long PDFs
                 if len(text) > chunk_size:
                     chunks = [text[j:j+chunk_size] for j in range(0, len(text), chunk_size)]
@@ -1195,7 +1241,8 @@ class PDFIndexer:
                         documents.append({
                             "id": chunk_id,
                             "content": chunk,
-                            "url": f"file://{pdf_path}#chunk{idx}",
+                            "url": f"{online_url}#chunk-{idx}",  # Online URL for Pinecone
+                            "local_url": f"{local_url}#chunk-{idx}",  # Local file path
                             "title": f"{title} (Part {idx + 1}/{len(chunks)})",
                             "source": self.source_id,
                             "categories": [],
@@ -1207,7 +1254,8 @@ class PDFIndexer:
                     documents.append({
                         "id": doc_id,
                         "content": text,
-                        "url": f"file://{pdf_path}",
+                        "url": online_url,  # Online URL for Pinecone
+                        "local_url": local_url,  # Local file path
                         "title": title,
                         "source": self.source_id,
                         "categories": [],

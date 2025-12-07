@@ -21,7 +21,7 @@
 - Run entirely without internet using local vector database
 - Hybrid mode: local sources + cloud fallback
 
-### Local Admin Panel
+### Admin Panel Option for Advanced Users
 - 5-step Source Tools wizard for creating/editing sources
 - Status boxes show validation state (Config, Backup, Metadata, Embeddings, License)
 - Configure which sources to search
@@ -44,7 +44,7 @@
 | Layer | Purpose |
 |-------|---------|
 | Frontend | Web chat interface (FastAPI + Jinja2) |
-| Admin | Source management panel at /useradmin/ |
+| Optional Local Admin | Source management panel at /useradmin/ |
 | Search | Vector similarity search (ChromaDB local / Pinecone cloud) |
 | AI | Language model for answers (Claude or GPT) |
 | Storage | Source backups and metadata (Cloudflare R2) |
@@ -77,7 +77,7 @@ disaster-clippy/
 
 ---
 
-## Current State (v1.0)
+## Current State (v0.9 Pre-release)
 
 **Completed:**
 - Chat with source citations
@@ -94,29 +94,28 @@ disaster-clippy/
 - Pinecone sync functionality
 
 **In Progress:**
-- ADMIN_MODE gating for global-only features
-- Schema file naming updates
+- Final testing and validation
+- Documentation cleanup
 
 ---
 
 ## Roadmap Highlights
 
-### Near Term (v1.5)
-- ADMIN_MODE gating for global admin features
-- Schema file naming updates (_manifest.json, _vectors.json)
-- PDF collection system
-- Knowledge map visualization
+### Current (v0.9)
+- Final testing and documentation cleanup
+- Pipeline validation with real data sources
 
-### Medium Term (v2.0)
-- Community contributions (submit and vote on sources)
+### Next (v1.0 Official Release)
+- Stable public API
 - ZIM as primary distribution format
+- PDF collection system
 - Offline AI assistant (local LLMs)
 
-### Long Term (v3.0)
+### Future (v2.0+)
+- Community contributions and source voting
 - Mobile app with offline-first design
 - Source pack marketplace
 - Multi-user platform with accounts
-- Mesh networking for source sharing
 
 ---
 
@@ -124,6 +123,17 @@ disaster-clippy/
 
 - Public Repository: https://github.com/xyver/disaster-clippy-public
 - Live Demo: https://disaster-clippy.up.railway.app/
+
+---
+
+## Related Documentation
+
+| Document | Purpose |
+|----------|---------|
+| [README.md](README.md) | Quick start and project overview |
+| [DEVELOPER.md](DEVELOPER.md) | Technical details and CLI tools |
+| [CONTEXT.md](CONTEXT.md) | Architecture (AI onboarding) |
+| [ROADMAP.md](ROADMAP.md) | Future plans and testing |
 
 ---
 

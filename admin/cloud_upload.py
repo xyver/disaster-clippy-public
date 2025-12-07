@@ -2,7 +2,7 @@
 Cloud Backup Upload Routes
 API endpoints for uploading verified source backups to R2 cloud storage
 
-SECURITY: Upload endpoints require ADMIN_MODE=global to prevent
+SECURITY: Upload endpoints require VECTOR_DB_MODE=global to prevent
 unauthorized writes to the shared cloud storage.
 """
 
@@ -565,7 +565,7 @@ async def upload_backup_to_cloud(
     Only allows upload if source is complete (config + metadata + backup + verified license).
     Runs as a background job with progress tracking.
 
-    REQUIRES: ADMIN_MODE=global
+    REQUIRES: VECTOR_DB_MODE=global
     """
     # First verify the source is complete
     sources_response = await get_sources_for_upload()
@@ -853,7 +853,7 @@ async def pinecone_push(
     Push local ChromaDB changes to Pinecone.
     Uploads new and updated documents from local to remote.
 
-    REQUIRES: ADMIN_MODE=global
+    REQUIRES: VECTOR_DB_MODE=global
     """
     try:
         from dotenv import load_dotenv
@@ -931,7 +931,7 @@ async def pinecone_delete_namespace(_: bool = Depends(_require_global_admin)):
     Delete all vectors in the current Pinecone namespace.
     DANGER: This cannot be undone!
 
-    REQUIRES: ADMIN_MODE=global
+    REQUIRES: VECTOR_DB_MODE=global
     """
     try:
         from dotenv import load_dotenv
