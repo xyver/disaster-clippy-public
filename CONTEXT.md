@@ -34,6 +34,10 @@ User Question
 |-----------|----------|---------|
 | Chat API | `app.py` | Main FastAPI app, chat endpoints |
 | Admin Panel | `admin/` | Source management UI at /useradmin/ |
+| AI Service | `admin/ai_service.py` | Unified AI search/response with mode switching |
+| Connection Manager | `admin/connection_manager.py` | Smart connectivity detection |
+| Job Manager | `admin/job_manager.py` | Background job queue with checkpointing |
+| ZIM Server | `admin/zim_server.py` | ZIM content server for offline browsing |
 | Indexers | `offline_tools/indexer.py` | HTML, ZIM, PDF content indexing |
 | Scrapers | `offline_tools/scraper/` | Web content scrapers |
 | Vector Store | `offline_tools/vectordb/` | ChromaDB (local) and Pinecone (cloud) |
@@ -55,8 +59,11 @@ disaster-clippy/
 |-- admin/                    # Admin panel (/useradmin/)
 |   |-- app.py                # FastAPI routes + page routes
 |   |-- local_config.py       # User settings management
-|   |-- job_manager.py        # Background job queue
+|   |-- ai_service.py         # Unified AI search/response service
+|   |-- connection_manager.py # Smart connectivity detection
+|   |-- job_manager.py        # Background job queue with checkpoints
 |   |-- ollama_manager.py     # Portable Ollama management
+|   |-- zim_server.py         # ZIM content server for offline browsing
 |   |-- cloud_upload.py       # R2 upload endpoints
 |   |-- routes/               # API route modules
 |   |   |-- sources.py        # Source listing API
@@ -262,6 +269,9 @@ The codebase was recently consolidated from two repos (private + public):
 - Source filtering in chat UI
 - Chat UX improvements (links open in new tabs)
 - Unified AI Pipeline with streaming support
+- Job checkpoint/resume system (metadata + ZIM indexing)
+- Dashboard mode toggle (watches VECTOR_DB_MODE env var)
+- Jobs page with interrupted job resume functionality
 
 ### Security (Complete)
 
@@ -276,8 +286,9 @@ The codebase was recently consolidated from two repos (private + public):
 ### In Progress (v0.9)
 
 - Pipeline testing with real data sources
-- Documentation cleanup and consolidation
+- Documentation cleanup and consolidation (this update)
 - Final validation before v1.0 release
+- Known bug fixes: Document ID mismatch (fixed), progress count display (fixed)
 
 See [ROADMAP.md](ROADMAP.md) for full details.
 

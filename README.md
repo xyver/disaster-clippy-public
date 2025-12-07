@@ -86,9 +86,11 @@ All content is Creative Commons or Public Domain with full attribution.
 - **Admin Panel** - Full source management at /useradmin/
 - **5-Step Source Tools** - Wizard for creating and editing sources
 - **Status Boxes** - Visual validation (Config, Backup, Metadata, Embeddings, License)
+- **Job Management** - Background jobs with checkpoint/resume for long operations
 - **Web Scrapers** - MediaWiki, Fandom, static sites, PDF extraction
 - **CLI Tools** - Command-line tools for indexing, scraping, sync
 - **Offline Support** - Run without internet using local ChromaDB + ZIM files
+- **ZIM Browsing** - Offline viewing of Wikipedia and other ZIM archives
 
 ### For Organizations
 

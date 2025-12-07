@@ -182,11 +182,12 @@ Validate the 5-step wizard and file creation tools work correctly.
 
 Resume interrupted long-running jobs (metadata generation, indexing) instead of restarting from scratch.
 
-**Status:** IMPLEMENTED (Generate Metadata), ANALYZED (Others - see below)
+**Status:** IMPLEMENTED (Generate Metadata + Create Index for ZIM)
 
 **Implemented Features:**
 - Checkpoint infrastructure in `job_manager.py` (Checkpoint class, save/load/delete functions)
 - Generate Metadata saves checkpoints every 60 seconds OR every 2000 articles
+- Create Index (ZIM) saves checkpoints every 60 seconds OR every 500 documents
 - Full document backup in partial file (not just position)
 - Resume modal in Source Tools: "Incomplete job found - Resume / Start Fresh / Cancel"
 - Interrupted Jobs section on Jobs page with Resume/Discard buttons
@@ -205,7 +206,8 @@ BACKUP_PATH/_jobs/
 | Job Type | Checkpoint Data | Status |
 |----------|----------------|--------|
 | Generate Metadata | last_article_index, documents | IMPLEMENTED |
-| Create Index | N/A | NOT NEEDED - see Incremental Indexing below |
+| Create Index (ZIM) | indexed_doc_ids, last_article_index | IMPLEMENTED |
+| Create Index (HTML/PDF) | N/A | Uses Incremental Indexing |
 | Upload to Cloud | N/A | NOT NEEDED - atomic file operations |
 | Download from Cloud | N/A | ALREADY WORKS - smart skip by file size |
 
@@ -226,9 +228,10 @@ BACKUP_PATH/_jobs/
 **Files Changed:**
 - `admin/job_manager.py` - Added Checkpoint class and checkpoint functions
 - `offline_tools/source_manager.py` - Updated `_generate_zim_metadata()` with checkpointing
-- `admin/routes/source_tools.py` - Added checkpoint API endpoints
+- `offline_tools/indexer.py` - Updated `ZIMIndexer.index()` with checkpointing
+- `admin/routes/source_tools.py` - Added checkpoint API endpoints, resume parameter
 - `admin/templates/source_tools.html` - Added resume modal
-- `admin/templates/jobs.html` - Added Interrupted Jobs section
+- `admin/templates/jobs.html` - Added Interrupted Jobs section with Resume/Discard buttons
 
 **Future: Parallel Processing**
 The checkpoint system is prepared for parallel processing:
@@ -1001,6 +1004,20 @@ My Source Preferences:
 - Issue: EmbeddingService always tries to initialize OpenAI client even when EMBEDDING_MODE=local
 - Impact: Crashes without OPENAI_API_KEY even if user wants local embeddings
 - Fix: Check EMBEDDING_MODE before initializing OpenAI client
+
+### Fixed Bugs (Dec 2025)
+
+**Pinecone sync "Pushed: 0 documents" despite finding documents to push**
+- Location: `offline_tools/source_manager.py`, `offline_tools/packager.py`
+- Issue: Document IDs in `_metadata.json` didn't match IDs in ChromaDB
+- Cause: Metadata used `zim_0, zim_1...` format, indexer used `md5(source_id:url)` hash format
+- Fix: Updated metadata generation to use same hash ID format as indexer
+- Recovery: Regenerate metadata for affected sources, then retry Pinecone sync
+
+**Progress count showing "0 / 100 items" instead of actual counts**
+- Location: `offline_tools/indexer.py`
+- Issue: Progress callback received percentages (0-100) instead of actual item counts
+- Fix: Changed progress reporting to pass actual `(current, total, message)` values
 
 ### Testing
 

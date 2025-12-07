@@ -966,27 +966,32 @@ The `_get_display_url()` helper in `app.py` selects the appropriate URL:
 
 ---
 
-## Job Cancellation
+## Job Cancellation and Resume
 
-The Jobs page includes a "Stop" button to cancel running jobs. This is a **soft cancel** - it marks the job status as cancelled but doesn't forcibly kill the running thread.
+The Jobs page includes a "Stop" button to cancel running jobs. This is a **soft cancel** that saves progress for later resumption.
 
 **Current behavior:**
 - Job status updates to "cancelled" immediately in the UI
-- The background thread continues until it completes the current operation
-- Most jobs check for cancellation periodically and exit gracefully
+- The background thread checks for cancellation periodically
+- Progress is saved to checkpoint file before exiting
+- Interrupted jobs appear in the "Interrupted Jobs" section on the Jobs page
+- Users can click "Resume" to continue from where they left off
 
-**For true immediate cancellation**, long-running functions should check `is_cancelled()` periodically:
+**Jobs that support graceful cancellation with resume:**
+- Generate Metadata (ZIM) - checkpoints every 60 seconds or 2000 articles
+- Create Index (ZIM) - checkpoints every 60 seconds or 500 documents
+- HTML/PDF indexing uses incremental mode (automatically skips already-indexed docs)
 
+**Implementation:**
 ```python
 # Inside the indexing loop
-if job_manager.is_cancelled(job_id):
+if cancel_checker and cancel_checker():
+    # Save checkpoint before exiting
+    save_checkpoint(checkpoint)
+    with open(partial_path, 'w') as f:
+        json.dump({"indexed_doc_ids": list(indexed_doc_ids), ...}, f)
     return {"success": False, "cancelled": True, "indexed_count": indexed}
 ```
-
-**Jobs that support graceful cancellation:**
-- ZIM indexing (planned)
-- HTML scraping (planned)
-- Metadata generation (planned)
 
 ---
 
@@ -1063,7 +1068,7 @@ production_ready = is_valid AND:
 
 ## Job Checkpoint System
 
-**STATUS: IMPLEMENTED** (Generate Metadata) / ANALYZED (Others)
+**STATUS: IMPLEMENTED** (Generate Metadata + Create Index for ZIM)
 
 Long-running jobs save periodic checkpoints to allow resuming after interruption.
 
@@ -1072,7 +1077,8 @@ Long-running jobs save periodic checkpoints to allow resuming after interruption
 | Job Type | Checkpoint Data | Partial File | Status |
 |----------|----------------|--------------|--------|
 | Generate Metadata | `last_article_index` | `_metadata.partial.json` | IMPLEMENTED |
-| Create Index | N/A | N/A | NOT NEEDED - use Incremental Indexing |
+| Create Index (ZIM) | `indexed_doc_ids` | `_index.partial.json` | IMPLEMENTED |
+| Create Index (HTML/PDF) | N/A | N/A | Uses Incremental Indexing |
 | Upload to Cloud | N/A | N/A | NOT NEEDED - atomic file operations |
 | Download from Cloud | N/A | N/A | ALREADY WORKS - smart skip by size |
 | Scan Backup | N/A | N/A | NO (fast) |
@@ -1258,6 +1264,23 @@ def extract_text_lenient(html_content: str) -> str:
 1. Truncate by token count, not character count
 2. Chunk long documents into multiple embeddings
 3. Use local embeddings (no token limit)
+
+### Pinecone Sync "Pushed: 0 documents" (FIXED Dec 2025)
+
+**Problem:** After indexing, Pinecone sync shows "Pushed: 0 documents" despite finding thousands to push.
+
+**Cause:** Document ID mismatch between metadata generation and indexer:
+- Metadata used sequential IDs like `zim_0`, `zim_1`
+- Indexer used hash IDs like `md5(source_id:url)`
+- Sync tried to fetch `zim_0` from ChromaDB but ChromaDB had hash IDs
+
+**Fix:** Updated metadata generation to use same hash ID format as indexer:
+```python
+# source_manager.py and packager.py now use:
+doc_id = hashlib.md5(f"{source_id}:{url}".encode()).hexdigest()
+```
+
+**Recovery:** Regenerate metadata for affected sources, then retry Pinecone sync.
 
 ---
 
