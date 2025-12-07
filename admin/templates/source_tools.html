@@ -386,6 +386,40 @@
             .info-grid { grid-template-columns: 1fr; }
             .wizard-steps { flex-direction: column; }
         }
+
+        /* Sync mode modal */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.8);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+        }
+        .modal-overlay.show { display: flex; }
+        .modal-content {
+            background: #1a1a2e;
+            border: 1px solid #4ecca3;
+            border-radius: 8px;
+            padding: 1.5rem;
+            max-width: 500px;
+            width: 90%;
+        }
+        .modal-title {
+            color: #f9a825;
+            font-size: 1.1rem;
+            font-weight: 600;
+            margin-bottom: 1rem;
+        }
+        .modal-body { color: #ccc; font-size: 0.9rem; margin-bottom: 1.5rem; }
+        .modal-body strong { color: #4ecca3; }
+        .modal-body .count { color: #e94560; font-weight: 600; }
+        .modal-actions { display: flex; gap: 0.75rem; justify-content: flex-end; }
+        .modal-actions .btn { padding: 0.5rem 1rem; }
     </style>
 </head>
 <body>
@@ -672,7 +706,69 @@
 
                     <div class="tool-section">
                         <h3>2. Generate Metadata</h3>
-                        <p>Extract document titles, content, and create the metadata file.</p>
+                        <p>Extract document titles, content, and create the metadata file. For ZIM files, you can filter by language.</p>
+
+                        <div style="display: flex; gap: 1rem; align-items: flex-end; margin-bottom: 1rem; flex-wrap: wrap;">
+                            <div class="form-group" style="margin-bottom: 0; flex: 0 0 200px;">
+                                <label>Language Filter (ZIM)</label>
+                                <select id="metadataLanguageFilter">
+                                    <option value="">All Languages</option>
+                                    <optgroup label="Common">
+                                        <option value="en">English</option>
+                                        <option value="es">Spanish</option>
+                                        <option value="fr">French</option>
+                                        <option value="pt">Portuguese</option>
+                                        <option value="ar">Arabic</option>
+                                        <option value="zh">Chinese</option>
+                                    </optgroup>
+                                    <optgroup label="Humanitarian Priority">
+                                        <option value="ht">Haitian Creole</option>
+                                        <option value="sw">Swahili</option>
+                                        <option value="bn">Bengali</option>
+                                        <option value="ne">Nepali</option>
+                                        <option value="ur">Urdu</option>
+                                        <option value="hi">Hindi</option>
+                                        <option value="tl">Tagalog/Filipino</option>
+                                        <option value="id">Indonesian</option>
+                                    </optgroup>
+                                    <optgroup label="European">
+                                        <option value="de">German</option>
+                                        <option value="it">Italian</option>
+                                        <option value="nl">Dutch</option>
+                                        <option value="pl">Polish</option>
+                                        <option value="uk">Ukrainian</option>
+                                        <option value="ru">Russian</option>
+                                        <option value="ro">Romanian</option>
+                                        <option value="el">Greek</option>
+                                        <option value="tr">Turkish</option>
+                                    </optgroup>
+                                    <optgroup label="Asian">
+                                        <option value="ja">Japanese</option>
+                                        <option value="ko">Korean</option>
+                                        <option value="vi">Vietnamese</option>
+                                        <option value="th">Thai</option>
+                                        <option value="ms">Malay</option>
+                                        <option value="my">Burmese</option>
+                                        <option value="km">Khmer</option>
+                                        <option value="lo">Lao</option>
+                                    </optgroup>
+                                    <optgroup label="South Asian">
+                                        <option value="ta">Tamil</option>
+                                        <option value="te">Telugu</option>
+                                        <option value="si">Sinhala</option>
+                                    </optgroup>
+                                    <optgroup label="Middle East/Africa">
+                                        <option value="fa">Persian/Farsi</option>
+                                        <option value="he">Hebrew</option>
+                                        <option value="am">Amharic</option>
+                                    </optgroup>
+                                </select>
+                            </div>
+                            <p style="font-size: 0.8rem; color: #888; margin: 0; flex: 1 1 200px;">
+                                Filter multi-language ZIM files to English-only (or other language). Applies to both metadata and index creation below.
+                            </p>
+                        </div>
+
                         <div class="tool-actions">
                             <button class="btn btn-primary" id="btnGenerateMetadata" onclick="generateMetadata()">Generate Metadata</button>
                         </div>
@@ -680,7 +776,7 @@
 
                     <div class="tool-section">
                         <h3>3. Create Index</h3>
-                        <p>Generate vector embeddings for semantic search. This runs as a background job.</p>
+                        <p>Generate vector embeddings for semantic search. Uses the filtered document list from metadata (no re-scanning ZIM).</p>
 
                         <!-- Document count display (shown after metadata generation) -->
                         <div id="documentCountDisplay" style="display: none; background: #0f3460; border: 1px solid #4ecca3; border-radius: 6px; padding: 0.75rem 1rem; margin-bottom: 1rem; color: #4ecca3; font-weight: 500;">
@@ -692,26 +788,8 @@
                                 <label>Document Limit</label>
                                 <input type="number" id="indexLimit" value="1000" min="1" max="50000" placeholder="1000">
                             </div>
-                            <div class="form-group" style="margin-bottom: 0; flex: 0 0 180px;">
-                                <label>Language Filter (ZIM)</label>
-                                <select id="languageFilter">
-                                    <option value="">All Languages</option>
-                                    <option value="en">English</option>
-                                    <option value="es">Spanish</option>
-                                    <option value="fr">French</option>
-                                    <option value="de">German</option>
-                                    <option value="pt">Portuguese</option>
-                                    <option value="it">Italian</option>
-                                    <option value="ru">Russian</option>
-                                    <option value="zh">Chinese</option>
-                                    <option value="ja">Japanese</option>
-                                    <option value="ko">Korean</option>
-                                    <option value="ar">Arabic</option>
-                                    <option value="hi">Hindi</option>
-                                </select>
-                            </div>
                             <p style="font-size: 0.8rem; color: #888; margin: 0; flex: 1 1 200px;">
-                                Filter multi-language ZIM files to index only articles in the selected language. Use translation packs to maintain multilingual queries after searching.
+                                Maximum documents to embed. Language filtering already applied in Step 2.
                             </p>
                         </div>
                         <div class="tool-actions">
@@ -806,18 +884,18 @@
                     </div>
 
                     <div class="tool-section">
-                        <h3>Validate Source</h3>
-                        <p>Check if the source meets all requirements for distribution.</p>
-                        <div class="tool-actions">
-                            <button class="btn btn-primary" onclick="validateSource()">Run Validation</button>
-                        </div>
-                    </div>
-
-                    <div class="tool-section">
                         <h3>Cleanup Redundant Files</h3>
                         <p>Remove legacy v1 files if v2 files exist. Frees up disk space.</p>
                         <div class="tool-actions">
                             <button class="btn btn-secondary" onclick="cleanupFiles()">Cleanup Files</button>
+                        </div>
+                    </div>
+
+                    <div class="tool-section">
+                        <h3>Validate Source</h3>
+                        <p>Check if the source meets all requirements for distribution.</p>
+                        <div class="tool-actions">
+                            <button class="btn btn-primary" onclick="validateSource()">Run Validation</button>
                         </div>
                     </div>
 
@@ -826,14 +904,6 @@
                         <p>Upload this source to the global repository for others to use.</p>
                         <div class="tool-actions">
                             <button class="btn btn-primary" onclick="window.location.href='/useradmin/cloud'">Go to Cloud Upload</button>
-                        </div>
-                    </div>
-
-                    <div class="tool-section" style="border-color: #e94560;">
-                        <h3 style="color: #e94560;">Danger Zone</h3>
-                        <p>Delete this source completely (cannot be undone).</p>
-                        <div class="tool-actions">
-                            <button class="btn btn-danger" onclick="deleteSource()">Delete Source</button>
                         </div>
                     </div>
                 </div>
@@ -850,6 +920,17 @@
             <h2>Output Log</h2>
             <div id="outputLog" class="output-log">Ready. Select a source and run a tool to see output here.</div>
         </div>
+
+        <!-- Danger Zone - at very bottom under logs -->
+        <div class="section" id="dangerZoneSection" style="display: none;">
+            <div class="tool-section" style="border-color: #e94560; margin: 0;">
+                <h3 style="color: #e94560;">Danger Zone</h3>
+                <p>Delete this source completely (cannot be undone).</p>
+                <div class="tool-actions">
+                    <button class="btn btn-danger" onclick="deleteSource()">Delete Source</button>
+                </div>
+            </div>
+        </div>
     </div>
 
     <div id="toast" class="toast"></div>
@@ -859,6 +940,10 @@
         let currentSource = null;
         let currentStep = 1;
         let selectedSourceType = null;
+
+        // Pending index state for sync mode modal
+        let pendingIndexLimit = 1000;
+        let pendingIndexLanguageFilter = null;
 
         // Wizard Navigation
         function goToStep(step) {
@@ -920,6 +1005,7 @@
             document.getElementById('reviewContent').style.display = hasSource ? 'block' : 'none';
             document.getElementById('noSourceSelected5').style.display = hasSource ? 'none' : 'block';
             document.getElementById('validateTools').style.display = hasSource ? 'block' : 'none';
+            document.getElementById('dangerZoneSection').style.display = hasSource ? 'block' : 'none';
 
             // Enable/disable step 1 next button
             document.getElementById('step1Next').disabled = !hasSource;
@@ -1184,6 +1270,7 @@
 
             if (currentSource) {
                 populateEditForm();
+                populateTagsForm();
                 updateSourceInfo();
                 updateSourceBanners();
                 updateWizardUI();
@@ -1645,13 +1732,20 @@
             btn.disabled = true;
             btn.textContent = 'Starting...';
 
-            logOutput(`Generating metadata for ${currentSource.source_id}...`);
+            const languageFilter = document.getElementById('metadataLanguageFilter').value || null;
+            const langInfo = languageFilter ? ` (language: ${languageFilter})` : '';
+            logOutput(`Generating metadata for ${currentSource.source_id}${langInfo}...`);
 
             try {
+                const requestBody = { source_id: currentSource.source_id };
+                if (languageFilter) {
+                    requestBody.language_filter = languageFilter;
+                }
+
                 const response = await fetch('/useradmin/api/generate-metadata', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ source_id: currentSource.source_id })
+                    body: JSON.stringify(requestBody)
                 });
 
                 const data = await response.json();
@@ -1763,14 +1857,82 @@
             if (!currentSource) return;
 
             const limit = parseInt(document.getElementById('indexLimit').value) || 1000;
-            const languageFilter = document.getElementById('languageFilter').value || null;
+            const languageFilter = document.getElementById('metadataLanguageFilter').value || null;
 
             const btn = document.getElementById('btnCreateIndex');
             btn.disabled = true;
-            btn.textContent = 'Starting...';
+            btn.textContent = 'Checking...';
 
-            const langInfo = languageFilter ? `, language: ${languageFilter}` : '';
-            logOutput(`Creating embeddings for ${currentSource.source_id} (limit: ${limit}${langInfo}, force: ${forceReindex})...`);
+            // If force reindex, skip the check and go straight to replace mode
+            if (forceReindex) {
+                await doCreateIndex(true);
+                return;
+            }
+
+            try {
+                // Check if source already has vectors locally
+                const checkResponse = await fetch(`/useradmin/api/local-source-check/${currentSource.source_id}`);
+                const checkData = await checkResponse.json();
+
+                if (checkData.exists && checkData.vector_count > 0) {
+                    // Source has existing vectors - show modal to choose update or replace
+                    pendingIndexLimit = limit;
+                    pendingIndexLanguageFilter = languageFilter;
+
+                    document.getElementById('indexModalSourceId').textContent = currentSource.source_id;
+                    document.getElementById('indexModalVectorCount').textContent = checkData.vector_count.toLocaleString();
+                    document.getElementById('indexSyncModal').classList.add('show');
+                    btn.disabled = false;
+                    btn.textContent = 'Create Index';
+                    return;
+                }
+
+                // No existing vectors - proceed with normal index (update mode)
+                await doCreateIndex(false);
+            } catch (e) {
+                logOutput(`Error checking existing index: ${e.message}`, 'error');
+                // Fall back to normal index if check fails
+                await doCreateIndex(false);
+            }
+        }
+
+        function closeIndexModal() {
+            document.getElementById('indexSyncModal').classList.remove('show');
+        }
+
+        async function proceedWithIndex(mode) {
+            console.log('proceedWithIndex called with mode:', mode);
+            document.getElementById('indexSyncModal').classList.remove('show');
+            // mode: 'update' = skip existing, 'replace' = force reindex
+            try {
+                await doCreateIndex(mode === 'replace');
+            } catch (e) {
+                console.error('proceedWithIndex error:', e);
+                showToast('Error: ' + e.message, true);
+            }
+        }
+
+        async function doCreateIndex(forceReindex) {
+            if (!currentSource) {
+                console.error('doCreateIndex: No source selected');
+                showToast('No source selected', true);
+                return;
+            }
+
+            const limit = pendingIndexLimit || parseInt(document.getElementById('indexLimit').value) || 1000;
+            const languageFilter = pendingIndexLanguageFilter || document.getElementById('metadataLanguageFilter').value || null;
+
+            const btn = document.getElementById('btnCreateIndex');
+            if (!btn) {
+                console.error('doCreateIndex: Button not found');
+                return;
+            }
+            btn.disabled = true;
+            btn.textContent = forceReindex ? 'Replacing...' : 'Starting...';
+
+            const langInfo = languageFilter ? ` (language: ${languageFilter})` : '';
+            const modeInfo = forceReindex ? ' [REPLACE]' : ' [UPDATE]';
+            logOutput(`Creating embeddings for ${currentSource.source_id} (limit: ${limit})${langInfo}${modeInfo}...`);
 
             try {
                 const requestBody = {
@@ -1834,6 +1996,8 @@
                 if (response.ok) {
                     if (data.is_valid) {
                         logOutput('Validation passed! Source is ready for distribution.', 'success');
+                        // Show success banner with link to Cloud page
+                        showValidationSuccess();
                     } else {
                         logOutput('Validation failed. Issues found:', 'warning');
                         if (data.issues) {
@@ -1863,6 +2027,31 @@
                 logOutput(`Error: ${e.message}`, 'error');
                 showToast('Error: ' + e.message, true);
             }
+        }
+
+        function showValidationSuccess() {
+            // Show success banner with button to go to Cloud page
+            let banner = document.getElementById('validationSuccessBanner');
+            if (!banner) {
+                banner = document.createElement('div');
+                banner.id = 'validationSuccessBanner';
+                banner.style.cssText = 'background: #1a3a2a; border: 1px solid #4ecca3; border-radius: 6px; padding: 1rem; margin-top: 1rem; display: flex; align-items: center; justify-content: space-between; gap: 1rem;';
+                banner.innerHTML = `
+                    <div>
+                        <div style="color: #4ecca3; font-weight: 600;">Validation Successful!</div>
+                        <div style="color: #888; font-size: 0.85rem;">Source is ready for cloud upload</div>
+                    </div>
+                    <a href="/useradmin/cloud" class="btn btn-primary" style="text-decoration: none;">
+                        Go to Cloud Page
+                    </a>
+                `;
+                // Insert after the output log
+                const outputLog = document.getElementById('outputLog');
+                if (outputLog && outputLog.parentNode) {
+                    outputLog.parentNode.insertBefore(banner, outputLog.nextSibling);
+                }
+            }
+            banner.style.display = 'flex';
         }
 
         function applySuggestedTags() {
@@ -1927,13 +2116,24 @@
                 const data = await response.json();
 
                 if (response.ok && data.suggested_tags && data.suggested_tags.length > 0) {
+                    // New suggestions available - populate text box
                     window.suggestedTags = data.suggested_tags;
+                    document.getElementById('editTags').value = data.suggested_tags.join(', ');
                     document.getElementById('suggestedTagsList').textContent = data.suggested_tags.join(', ');
                     document.getElementById('suggestedTagsHint').style.display = 'block';
-                    logOutput(`Suggested tags: ${data.suggested_tags.join(', ')}`, 'success');
+                    logOutput(`Suggested tags applied: ${data.suggested_tags.join(', ')}`, 'success');
                 } else if (response.ok) {
-                    // Check for metadata issues
-                    if (!data.has_metadata) {
+                    // Check why no suggestions
+                    if (data.has_tags) {
+                        // Source already has tags - load them into text box
+                        const existingTags = currentSource.tags || [];
+                        if (existingTags.length > 0) {
+                            document.getElementById('editTags').value = existingTags.join(', ');
+                            logOutput(`Loaded ${existingTags.length} existing tags: ${existingTags.join(', ')}`, 'success');
+                        } else {
+                            logOutput('Source has tags in manifest. Edit tags below if needed.', 'info');
+                        }
+                    } else if (!data.has_metadata) {
                         logOutput('No tag suggestions - source needs to be indexed first (Step 3).', 'warning');
                     } else {
                         logOutput('No tag suggestions found. Try adding tags manually based on content type.', 'info');
@@ -2186,5 +2386,32 @@
 
     <!-- Job Monitor - shows active background jobs -->
     <script src="/admin/static/job-monitor.js"></script>
+
+    <!-- Index Sync Mode Modal -->
+    <div id="indexSyncModal" class="modal-overlay">
+        <div class="modal-content">
+            <div class="modal-title">Source Already Indexed</div>
+            <div class="modal-body">
+                <p>The source <strong id="indexModalSourceId"></strong> already has <span class="count" id="indexModalVectorCount">0</span> vectors in the local index.</p>
+                <p>How would you like to proceed?</p>
+                <ul style="margin: 1rem 0; padding-left: 1.5rem; color: #aaa; font-size: 0.85rem;">
+                    <li><strong>Update:</strong> Add new documents, skip already-indexed ones</li>
+                    <li><strong>Replace:</strong> Delete all existing vectors, then re-index from scratch</li>
+                </ul>
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" id="btnIndexCancel">Cancel</button>
+                <button class="btn btn-primary" id="btnIndexUpdate">Update</button>
+                <button class="btn btn-danger" id="btnIndexReplace">Replace</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Attach event listeners for modal buttons (CSP-compliant)
+        document.getElementById('btnIndexCancel').addEventListener('click', closeIndexModal);
+        document.getElementById('btnIndexUpdate').addEventListener('click', function() { proceedWithIndex('update'); });
+        document.getElementById('btnIndexReplace').addEventListener('click', function() { proceedWithIndex('replace'); });
+    </script>
 </body>
 </html>

@@ -92,6 +92,43 @@
             font-style: italic;
         }
         .loading { text-align: center; padding: 2rem; color: #888; }
+
+        /* Sync mode modal */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.8);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+        }
+        .modal-overlay.show { display: flex; }
+        .modal-content {
+            background: #1a1a2e;
+            border: 1px solid #4ecca3;
+            border-radius: 8px;
+            padding: 1.5rem;
+            max-width: 500px;
+            width: 90%;
+        }
+        .modal-title {
+            color: #f9a825;
+            font-size: 1.1rem;
+            font-weight: 600;
+            margin-bottom: 1rem;
+        }
+        .modal-body { color: #ccc; font-size: 0.9rem; margin-bottom: 1.5rem; }
+        .modal-body strong { color: #4ecca3; }
+        .modal-body .count { color: #e94560; font-weight: 600; }
+        .modal-actions { display: flex; gap: 0.75rem; justify-content: flex-end; }
+        .btn-update { background: #0f3460; border: 1px solid #4ecca3; }
+        .btn-update:hover { background: #1a4a7a; }
+        .btn-replace { background: #5c2030; border: 1px solid #e94560; }
+        .btn-replace:hover { background: #7a2a40; }
     </style>
 </head>
 <body>
@@ -183,6 +220,12 @@
         let allSources = [];
         let currentFilter = 'all';
 
+        // Pending install state for sync mode modal
+        let pendingInstallSourceId = null;
+        let pendingInstallIncludeBackup = false;
+        let pendingInstallButton = null;
+        let pendingInstallOriginalText = '';
+
         async function loadSources() {
             const container = document.getElementById('sourcesList');
             container.innerHTML = '<div class="loading">Loading sources...</div>';
@@ -214,18 +257,25 @@
                     const isInCloud = cloudIds.has(source.source_id);
                     allSources.push({
                         ...source,
-                        status: isInCloud ? 'installed' : 'local_only'
+                        status: isInCloud ? 'installed' : 'local_only',
+                        is_cloud: isInCloud,
+                        is_local: true
                     });
                 }
 
-                // Add cloud sources that aren't installed locally
+                // Add cloud sources (mark if installed locally)
                 for (const source of cloudSources) {
-                    if (!localIds.has(source.source_id)) {
+                    const isLocal = localIds.has(source.source_id);
+                    if (!isLocal) {
+                        // Not installed locally - add as available
                         allSources.push({
                             ...source,
-                            status: 'available'
+                            status: 'available',
+                            is_cloud: true,
+                            is_local: false
                         });
                     }
+                    // Note: installed cloud sources are already added above from localSources
                 }
 
                 renderSources();
@@ -294,7 +344,8 @@
             if (currentFilter === 'installed') {
                 filtered = allSources.filter(s => s.status === 'installed');
             } else if (currentFilter === 'available') {
-                filtered = allSources.filter(s => s.status === 'available');
+                // Show ALL cloud sources (both installed and not)
+                filtered = allSources.filter(s => s.is_cloud === true);
             } else if (currentFilter === 'local') {
                 filtered = allSources.filter(s => s.status === 'local_only');
             }
@@ -304,7 +355,7 @@
                 if (currentFilter === 'installed') {
                     message = 'No installed sources. Sources from the global cloud that you have locally appear here.';
                 } else if (currentFilter === 'available') {
-                    message = 'No available sources from the global cloud. Check your cloud connection.';
+                    message = 'No sources available from the global cloud. Check your cloud connection.';
                 } else if (currentFilter === 'local') {
                     message = 'No local-only sources. Custom sources you create that are not in the global cloud appear here.';
                 }
@@ -359,14 +410,18 @@
                     <div class="meta">
                         <div>${(source.document_count || 0).toLocaleString()} documents</div>
                         ${source.backup_type ? `<div>${source.backup_type} backup</div>` : ''}
-                        <div>${source.license || 'Unknown license'}</div>
+                        <div>${source.license && source.license !== 'Unknown' ? source.license : 'Unknown license'}</div>
                     </div>
                     ${statusBoxesHtml}
                     <div class="actions">
-                        ${source.status === 'available' ? `
-                            <button class="btn-small btn-install" onclick="installSource('${source.source_id}')">
-                                Install
+                        ${source.is_cloud ? `
+                            <button class="btn-small btn-install" onclick="installSource('${source.source_id}', false)" title="Download vectors only for search">
+                                Index Only
                             </button>
+                            <button class="btn-small btn-install" onclick="installSource('${source.source_id}', true)" style="background: #1a5f3c;" title="Download vectors + backup files for offline viewing">
+                                Full Install
+                            </button>
+                            ${source.is_local ? `<span style="color: #4ecca3; font-size: 0.7rem; margin-left: 0.5rem;">(installed)</span>` : ''}
                         ` : `
                             <button class="btn-small btn-edit" onclick="window.location.href='/useradmin/sources/tools?source=${source.source_id}'">
                                 Edit
@@ -384,19 +439,101 @@
             return div.innerHTML;
         }
 
-        async function installSource(sourceId) {
+        async function installSource(sourceId, includeBackup = false) {
             // Find the button and disable it
             const btn = event.target;
             const originalText = btn.textContent;
             btn.disabled = true;
-            btn.textContent = 'Starting...';
+            btn.textContent = 'Checking...';
             btn.style.opacity = '0.7';
+
+            try {
+                // Check if source already exists locally
+                const checkResponse = await fetch(`/useradmin/api/local-source-check/${sourceId}`);
+                const checkData = await checkResponse.json();
+
+                if (checkData.exists && checkData.vector_count > 0) {
+                    // Source exists locally - show modal to choose update or replace
+                    pendingInstallSourceId = sourceId;
+                    pendingInstallIncludeBackup = includeBackup;
+                    pendingInstallButton = btn;
+                    pendingInstallOriginalText = originalText;
+
+                    document.getElementById('modalSourceId').textContent = sourceId;
+                    document.getElementById('modalVectorCount').textContent = checkData.vector_count.toLocaleString();
+                    document.getElementById('syncModeModal').classList.add('show');
+                    return;
+                }
+
+                // Source doesn't exist locally - proceed with normal install
+                await doInstall(sourceId, includeBackup, 'update', btn, originalText);
+            } catch (e) {
+                alert('Error: ' + e.message);
+                btn.textContent = originalText;
+                btn.disabled = false;
+                btn.style.opacity = '1';
+            }
+        }
+
+        function closeSyncModal() {
+            document.getElementById('syncModeModal').classList.remove('show');
+            // Reset button state
+            if (pendingInstallButton) {
+                pendingInstallButton.textContent = pendingInstallOriginalText;
+                pendingInstallButton.disabled = false;
+                pendingInstallButton.style.opacity = '1';
+            }
+            pendingInstallSourceId = null;
+            pendingInstallIncludeBackup = false;
+            pendingInstallButton = null;
+            pendingInstallOriginalText = '';
+        }
+
+        async function proceedWithSync(syncMode) {
+            console.log('proceedWithSync called with:', syncMode);
+            console.log('pendingInstallSourceId:', pendingInstallSourceId);
+            console.log('pendingInstallButton:', pendingInstallButton);
+
+            document.getElementById('syncModeModal').classList.remove('show');
+
+            if (!pendingInstallSourceId || !pendingInstallButton) {
+                console.error('No pending install - state was cleared');
+                alert('Error: Install state was lost. Please try again.');
+                return;
+            }
+
+            try {
+                await doInstall(
+                    pendingInstallSourceId,
+                    pendingInstallIncludeBackup,
+                    syncMode,
+                    pendingInstallButton,
+                    pendingInstallOriginalText
+                );
+            } catch (e) {
+                console.error('proceedWithSync error:', e);
+                alert('Error: ' + e.message);
+            }
+
+            // Reset pending state
+            pendingInstallSourceId = null;
+            pendingInstallIncludeBackup = false;
+            pendingInstallButton = null;
+            pendingInstallOriginalText = '';
+        }
+
+        async function doInstall(sourceId, includeBackup, syncMode, btn, originalText) {
+            btn.textContent = syncMode === 'replace' ? 'Replacing...' : 'Starting...';
 
             try {
                 const response = await fetch('/useradmin/api/download-pack', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ source_id: sourceId })
+                    body: JSON.stringify({
+                        source_id: sourceId,
+                        include_backup: includeBackup,
+                        sync_mode: syncMode
+                    })
                 });
 
                 const data = await response.json();
@@ -471,5 +608,32 @@
         loadSources();
     </script>
     <script src="/admin/static/admin-common.js"></script>
+
+    <!-- Sync Mode Modal -->
+    <div id="syncModeModal" class="modal-overlay">
+        <div class="modal-content">
+            <div class="modal-title">Source Already Installed</div>
+            <div class="modal-body">
+                <p>The source <strong id="modalSourceId"></strong> already exists locally with <span class="count" id="modalVectorCount">0</span> vectors.</p>
+                <p>How would you like to proceed?</p>
+                <ul style="margin: 1rem 0; padding-left: 1.5rem; color: #aaa; font-size: 0.85rem;">
+                    <li><strong>Update:</strong> Add new vectors, keep existing ones</li>
+                    <li><strong>Replace:</strong> Delete old vectors first, then install fresh</li>
+                </ul>
+            </div>
+            <div class="modal-actions">
+                <button class="btn-small btn-update" id="btnSyncCancel">Cancel</button>
+                <button class="btn-small btn-update" id="btnSyncUpdate">Update</button>
+                <button class="btn-small btn-replace" id="btnSyncReplace">Replace</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Attach event listeners for modal buttons (CSP-compliant)
+        document.getElementById('btnSyncCancel').addEventListener('click', closeSyncModal);
+        document.getElementById('btnSyncUpdate').addEventListener('click', function() { proceedWithSync('update'); });
+        document.getElementById('btnSyncReplace').addEventListener('click', function() { proceedWithSync('replace'); });
+    </script>
 </body>
 </html>

@@ -438,6 +438,7 @@ Multi-language ZIM files (like Appropedia) contain articles in many languages. U
 
 **Detection Methods:**
 - URL path segments (e.g., `/en/`, `/es/`, `/french/`)
+- BCP 47 language codes with region (e.g., `/pt-br/`, `/zh-hans/`, `/zh-hant/`) - base language extracted
 - Title suffixes (e.g., `(Spanish)`, `(Chinese)`, `(Haitian Creole)`)
 - Language keywords after separators (e.g., `Solar cooker - Vietnamese`)
 
@@ -516,6 +517,20 @@ python cli/zim_inspect.py /path/to/file.zim --json
 - Sample articles with text previews
 - Recommendations for indexing parameters
 
+**Pinecone Sync API Endpoints (`/useradmin/api/pinecone-...`):**
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/pinecone-status` | GET | Get Pinecone connection status and stats |
+| `/pinecone-check-source/{source_id}` | GET | Check if source exists in Pinecone (returns vector count) |
+| `/pinecone-source/{source_id}` | DELETE | Delete all vectors for a source (global admin only) |
+| `/pinecone-compare` | POST | Compare local ChromaDB with Pinecone |
+| `/pinecone-sync` | POST | Sync local vectors to Pinecone |
+
+**Local Source Check API (`/useradmin/api/local-source-check/{source_id}`):**
+
+Returns info about existing local vectors for a source before install/index operations.
+
 ### Tag System
 
 Sources can be tagged for categorization and search filtering. Tags are either:
@@ -545,6 +560,36 @@ A source is ready for distribution when it has 5 status boxes green:
 3. **Metadata** - `_metadata.json` exists
 4. **Embeddings** - `_vectors.json` created for search
 5. **License** - Specified and verified
+
+### Smart Sync (Update vs Replace)
+
+When installing, indexing, or publishing a source that already exists, the system shows a modal asking how to handle the existing vectors:
+
+| Action | Update Mode | Replace Mode |
+|--------|-------------|--------------|
+| **Install from Cloud** (sources.html) | Add new vectors, keep existing | Delete old vectors first, then install fresh |
+| **Local Indexing** (source_tools.html) | Skip already-indexed documents | Force re-index all documents |
+| **Publish to Pinecone** (cloud_upload.html) | Upsert new/changed vectors | Delete all source vectors, then push |
+
+**When to use each mode:**
+
+- **Update** (default): Faster, preserves existing work. Use when adding new content or fixing a few documents.
+- **Replace**: Clean slate. Use when the source structure changed significantly, or to fix indexing issues.
+
+**Technical implementation:**
+
+1. Before action, system calls check endpoint to get existing vector count:
+   - Local: `/useradmin/api/local-source-check/{source_id}`
+   - Pinecone: `/useradmin/api/pinecone-check-source/{source_id}`
+
+2. If vectors exist, modal displays count and offers Update/Replace choice
+
+3. For Replace mode, `delete_by_source()` is called before adding new vectors:
+   ```python
+   # VectorStore and PineconeStore both implement this
+   result = store.delete_by_source(source_id)
+   # Returns: {"deleted_count": 1234, "batches": 2}
+   ```
 
 ### File Structure in BACKUP_PATH
 

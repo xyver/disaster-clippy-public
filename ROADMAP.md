@@ -111,16 +111,22 @@ Expanded topic keywords for better automatic tag suggestions.
 
 ### Language Filtering for Multi-Language ZIMs
 
-Filter articles by language during ZIM indexing.
+Filter articles by language during metadata generation to deduplicate multi-language content.
 
 **Status:** COMPLETED (Dec 2025)
 
 **Implemented:**
-- Language filter dropdown in Source Tools Step 3 (Create Index)
-- 30+ languages supported including: English, Spanish, French, German, Portuguese, Italian, Russian, Chinese, Japanese, Korean, Arabic, Hindi, Vietnamese, Thai, Indonesian, Malay, Tagalog, Swahili, Haitian Creole, Bengali, Nepali, Urdu, Persian, Turkish, Polish, Dutch, Ukrainian, Romanian, Greek, Hebrew, Amharic, Sinhala, Tamil, Telugu, Burmese, Khmer, Lao
+- Language filter dropdown in Source Tools Step 2 (Generate Metadata)
+- 39 languages supported across 6 regional groups:
+  - Common: English, Spanish, French, Portuguese, Arabic, Chinese
+  - Humanitarian Priority: Haitian Creole, Swahili, Bengali, Nepali, Urdu, Hindi, Tagalog, Indonesian
+  - European: German, Italian, Dutch, Polish, Ukrainian, Russian, Romanian, Greek, Turkish
+  - Asian: Japanese, Korean, Vietnamese, Thai, Malay, Burmese, Khmer, Lao
+  - South Asian: Tamil, Telugu, Sinhala
+  - Middle East/Africa: Persian/Farsi, Hebrew, Amharic
 - Detection via URL patterns (/en/, /es/), title suffixes ((Spanish), (Chinese)), and separators (Title - Vietnamese)
-- Force reindex clears existing ChromaDB documents before re-indexing with new filter
-- Debug logging added for troubleshooting filter and delete issues
+- Filter applied at metadata generation so metadata and index stay in sync
+- Eliminates duplicate search results from same content in multiple languages
 
 ---
 
@@ -301,6 +307,53 @@ Add FEMA, Cal Fire, EPA sources.
 - PDF scraper for downloadable reports
 - Static site scraper for HTML guides
 - Auto-detect Public Domain license
+
+---
+
+### Language Packs
+
+Downloadable translation packs for multi-language support without duplicating content.
+
+**Status:** Planning (after indexing/chat functions stable)
+
+**Problem:**
+- Multi-language ZIMs contain the same content in 39+ languages
+- Storing all translations = gigabytes of duplicated information
+- Current approach: keep English canonical, filter other languages at index time
+
+**Solution: Offline Translation Packs**
+- Keep one canonical language (English) in the index
+- Downloadable translation packs (~50MB each) for offline use
+- Multi-lingual dictionaries for word/phrase lookup
+- "Preferred language" selector in chat interface
+- Translate on-demand from English to user's preferred language
+
+**Pack Structure:**
+```
+language_packs/
+  es_spanish.pack       # ~50MB Spanish translation data
+  fr_french.pack        # ~50MB French translation data
+  ar_arabic.pack        # ~50MB Arabic translation data
+```
+
+**User Experience:**
+1. User downloads base content (English) + language pack
+2. Selects preferred language in chat settings
+3. Search happens in English (canonical)
+4. Results displayed/translated in preferred language
+5. Works fully offline with downloaded pack
+
+**Benefits:**
+- Storage: 1 copy of content + small language packs vs N copies in N languages
+- Search quality: Single consistent index instead of fragmented language indexes
+- Distribution: Smaller base download, optional language packs
+- Offline: Full translation capability without internet
+
+**UI Placeholders:**
+- Source pages already have language pack download placeholders
+- Chat settings will add "Preferred Language" dropdown
+
+**Note:** Prioritizing offline translation over online browser translation tools since the core use case is disaster preparedness without internet access.
 
 ---
 

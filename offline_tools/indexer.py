@@ -449,6 +449,9 @@ LANGUAGE_PATTERNS = {
     'lo': ['lo', 'lao', 'laotian'],
 }
 
+# Set of known base language codes for quick lookup
+KNOWN_LANGUAGE_CODES = set(LANGUAGE_PATTERNS.keys())
+
 # Title suffixes that indicate language
 # Extended to match common patterns in ZIM files
 LANGUAGE_TITLE_SUFFIXES = {
@@ -518,6 +521,15 @@ def detect_article_language(url: str, title: str = "") -> Optional[str]:
             if url_lower.endswith(f'/{pattern}') or f'_{pattern}/' in url_lower:
                 return lang_code
 
+    # Smart detection for hyphenated BCP 47 language codes like pt-br, zh-hans, zh-hant
+    # Extract base language code from hyphenated patterns and check against known codes
+    import re
+    hyphenated_match = re.search(r'/([a-z]{2,3})-[a-z]{2,}/', url_lower)
+    if hyphenated_match:
+        base_code = hyphenated_match.group(1)
+        if base_code in KNOWN_LANGUAGE_CODES:
+            return base_code
+
     # Check title suffixes in parentheses
     for lang_code, suffixes in LANGUAGE_TITLE_SUFFIXES.items():
         for suffix in suffixes:
@@ -526,7 +538,6 @@ def detect_article_language(url: str, title: str = "") -> Optional[str]:
 
     # Also check for language keywords at end of title or after dash/colon
     # e.g., "Solar cooker - Vietnamese", "Water filter: Thai version"
-    import re
     for lang_code, patterns in LANGUAGE_PATTERNS.items():
         for pattern in patterns:
             # Check for language name at end of title after separator
@@ -631,18 +642,55 @@ class ZIMIndexer:
 
         return metadata
 
+    def _build_online_url(self, zim_path: str, zim_metadata: Optional[Dict] = None) -> str:
+        """
+        Build online URL from ZIM path.
+
+        ZIM files often store paths with full domains (e.g., www.ready.gov/be-informed).
+        This method detects such paths and converts them to proper https:// URLs.
+
+        Fallback order:
+        1. If path looks like a full URL (www.*, contains domain), prepend https://
+        2. If zim_metadata has source_url, use base_url + article name
+        3. Return None (caller should use local_url)
+        """
+        import re
+
+        # Check if ZIM path contains a full URL (common in ZIM files)
+        # Match patterns like: www.example.com/..., subdomain.domain.tld/...
+        url_pattern = r'^(www\.|[a-z0-9-]+\.(gov|com|org|net|edu|io|co|info|wiki)[/\.])'
+        if re.match(url_pattern, zim_path, re.IGNORECASE):
+            # Path is a full URL, just add protocol
+            return f"https://{zim_path}"
+
+        # Try base_url from ZIM metadata
+        base_url = zim_metadata.get("source_url", "") if zim_metadata else ""
+        if base_url:
+            if not base_url.endswith('/'):
+                base_url += '/'
+            # For wiki-style URLs, use last path segment as article name
+            article_name = zim_path.split('/')[-1] if '/' in zim_path else zim_path
+            return f"{base_url}{article_name}"
+
+        # No online URL available
+        return None
+
     def index(self, limit: int = 1000, progress_callback: Optional[Callable] = None,
               language_filter: Optional[str] = None,
               clear_existing: bool = False) -> Dict:
         """
         Index content from ZIM file into vector database.
 
+        If _metadata.json exists (from Generate Metadata step), uses that document
+        list instead of re-scanning the entire ZIM. This is faster and ensures
+        consistency with any language filtering applied during metadata generation.
+
         Args:
             limit: Maximum number of articles to index
             progress_callback: Function(current, total, message) for progress updates
             language_filter: ISO language code to filter by (e.g., 'en', 'es').
-                           Only articles matching this language will be indexed.
-                           None = index all languages.
+                           Only used if _metadata.json doesn't exist.
+                           If metadata exists, its filtering is already applied.
             clear_existing: If True, delete all existing documents for this source
                           from ChromaDB before indexing (for force reindex).
 
@@ -679,6 +727,27 @@ class ZIMIndexer:
         else:
             print(f"[ZIMIndexer] Skip existing mode - not clearing documents")
 
+        # Check for existing _metadata.json - use it if available
+        from .schemas import get_metadata_file
+        metadata_path = self.output_folder / get_metadata_file()
+        use_metadata = metadata_path.exists()
+        metadata_docs = {}
+
+        if use_metadata:
+            try:
+                with open(metadata_path, 'r', encoding='utf-8') as f:
+                    metadata_data = json.load(f)
+                metadata_docs = metadata_data.get("documents", {})
+                if metadata_docs:
+                    print(f"[ZIMIndexer] Using existing _metadata.json with {len(metadata_docs)} documents")
+                    print(f"[ZIMIndexer] Language filtering was applied during metadata generation")
+                else:
+                    use_metadata = False
+                    print(f"[ZIMIndexer] _metadata.json exists but is empty, falling back to full scan")
+            except Exception as e:
+                use_metadata = False
+                print(f"[ZIMIndexer] Could not read _metadata.json: {e}, falling back to full scan")
+
         try:
             # Progress is split: 0-50% extraction, 50-100% embeddings
             def report_extraction_progress(current, total, message):
@@ -697,118 +766,183 @@ class ZIMIndexer:
 
             zim = ZIMFile(str(self.zim_path), 'utf-8')
             article_count = zim.header_fields.get('articleCount', 0)
-            print(f"ZIM file contains {article_count} articles")
+            print(f"ZIM file contains {article_count} articles total")
 
             # Extract ZIM metadata from header_fields
             zim_metadata = self._extract_zim_metadata(zim.header_fields)
-
-            target_count = min(limit, article_count)
-            report_extraction_progress(0, target_count, f"Found {article_count} articles in ZIM")
 
             indexed = 0
             skipped = 0
             language_filtered = 0
             seen_ids = set()
 
-            if language_filter:
-                print(f"Language filter: {language_filter} (only indexing {language_filter} articles)")
+            if use_metadata:
+                # === FAST PATH: Use existing metadata ===
+                # Only fetch content for documents already in _metadata.json
+                docs_to_process = list(metadata_docs.items())[:limit]
+                target_count = len(docs_to_process)
+                report_extraction_progress(0, target_count, f"Processing {target_count} documents from metadata...")
 
-            for i in range(article_count):
-                if indexed >= limit:
-                    break
+                for idx, (doc_id, doc_info) in enumerate(docs_to_process):
+                    try:
+                        zim_index = doc_info.get("zim_index")
+                        if zim_index is None:
+                            # No zim_index stored - skip this document
+                            skipped += 1
+                            continue
 
-                try:
-                    article = zim.get_article_by_id(i)
-                    if article is None:
-                        skipped += 1
+                        article = zim.get_article_by_id(zim_index)
+                        if article is None:
+                            skipped += 1
+                            continue
+
+                        content = article.data
+                        if isinstance(content, bytes):
+                            content = content.decode('utf-8', errors='ignore')
+
+                        if not content or len(content) < 100:
+                            skipped += 1
+                            continue
+
+                        # Use metadata for title/url, extract fresh content
+                        title = doc_info.get("title", "")
+                        zim_url = doc_info.get("zim_url", doc_info.get("url", ""))
+
+                        text = extract_text_from_html(content)
+                        if len(text) < 50:
+                            skipped += 1
+                            continue
+
+                        # Build URLs - local for offline viewer, online for Pinecone
+                        local_url = f"/zim/{self.source_id}/{zim_url}"
+                        online_url = self._build_online_url(zim_url, zim_metadata) or local_url
+
+                        # Use consistent doc_id
+                        final_doc_id = hashlib.md5(f"{self.source_id}:{zim_url}".encode()).hexdigest()
+
+                        if final_doc_id in seen_ids:
+                            skipped += 1
+                            continue
+                        seen_ids.add(final_doc_id)
+
+                        documents.append({
+                            "id": final_doc_id,
+                            "content": text[:50000],
+                            "title": title,
+                            "url": online_url,
+                            "local_url": local_url,
+                            "source": self.source_id,
+                            "categories": [],
+                            "content_hash": hashlib.md5(text.encode()).hexdigest(),
+                            "scraped_at": datetime.now().isoformat(),
+                            "char_count": len(text),
+                            "doc_type": "article",
+                        })
+
+                        indexed += 1
+
+                        if indexed % 10 == 0:
+                            report_extraction_progress(indexed, target_count,
+                                            f"Extracting: {title[:50]}...")
+
+                    except Exception as e:
+                        errors.append(f"Error processing article {zim_index}: {str(e)}")
                         continue
 
-                    # Only want HTML articles
-                    mimetype = getattr(article, 'mimetype', '')
-                    if 'text/html' not in str(mimetype).lower():
-                        skipped += 1
+                print(f"[ZIMIndexer] Extracted {len(documents)} articles using metadata (skipped {skipped})")
+
+            else:
+                # === LEGACY PATH: Full ZIM scan (fallback if no metadata) ===
+                target_count = min(limit, article_count)
+                report_extraction_progress(0, target_count, f"Found {article_count} articles in ZIM")
+
+                if language_filter:
+                    print(f"Language filter: {language_filter} (only indexing {language_filter} articles)")
+
+                for i in range(article_count):
+                    if indexed >= limit:
+                        break
+
+                    try:
+                        article = zim.get_article_by_id(i)
+                        if article is None:
+                            skipped += 1
+                            continue
+
+                        # Only want HTML articles
+                        mimetype = getattr(article, 'mimetype', '')
+                        if 'text/html' not in str(mimetype).lower():
+                            skipped += 1
+                            continue
+
+                        content = article.data
+                        if isinstance(content, bytes):
+                            content = content.decode('utf-8', errors='ignore')
+
+                        if not content or len(content) < 100:
+                            skipped += 1
+                            continue
+
+                        url = getattr(article, 'url', '') or f"article_{i}"
+                        title = getattr(article, 'title', '') or get_title_from_html(content, url)
+
+                        # Filter by language if specified
+                        # Enable debug for first 10 filtered articles to see what's being excluded
+                        if language_filter and not should_include_article(
+                            url, title, language_filter, debug=(language_filtered < 10)
+                        ):
+                            language_filtered += 1
+                            continue
+
+                        # Skip special pages
+                        if any(x in url.lower() for x in ['special:', 'file:', 'category:', 'template:', 'mediawiki:', '-/', 'favicon']):
+                            skipped += 1
+                            continue
+
+                        text = extract_text_from_html(content)
+                        if len(text) < 50:
+                            skipped += 1
+                            continue
+
+                        # Build URLs - local for offline viewer, online for Pinecone
+                        local_url = f"/zim/{self.source_id}/{url}"
+                        online_url = self._build_online_url(url, zim_metadata) or local_url
+
+                        doc_id = hashlib.md5(f"{self.source_id}:{url}".encode()).hexdigest()
+
+                        if doc_id in seen_ids:
+                            skipped += 1
+                            continue
+                        seen_ids.add(doc_id)
+
+                        documents.append({
+                            "id": doc_id,
+                            "content": text[:50000],
+                            "title": title,
+                            "url": online_url,  # Online URL for Pinecone
+                            "local_url": local_url,  # Local URL for ChromaDB
+                            "source": self.source_id,
+                            "categories": [],
+                            "content_hash": hashlib.md5(text.encode()).hexdigest(),
+                            "scraped_at": datetime.now().isoformat(),
+                            "char_count": len(text),
+                            "doc_type": "article",
+                        })
+
+                        indexed += 1
+
+                        if indexed % 10 == 0:
+                            report_extraction_progress(indexed, target_count,
+                                            f"Extracting: {title[:50]}...")
+
+                    except Exception as e:
+                        errors.append(f"Error processing article {i}: {str(e)}")
                         continue
 
-                    content = article.data
-                    if isinstance(content, bytes):
-                        content = content.decode('utf-8', errors='ignore')
-
-                    if not content or len(content) < 100:
-                        skipped += 1
-                        continue
-
-                    url = getattr(article, 'url', '') or f"article_{i}"
-                    title = getattr(article, 'title', '') or get_title_from_html(content, url)
-
-                    # Filter by language if specified
-                    # Enable debug for first 10 filtered articles to see what's being excluded
-                    if language_filter and not should_include_article(
-                        url, title, language_filter, debug=(language_filtered < 10)
-                    ):
-                        language_filtered += 1
-                        continue
-
-                    # Skip special pages
-                    if any(x in url.lower() for x in ['special:', 'file:', 'category:', 'template:', 'mediawiki:', '-/', 'favicon']):
-                        skipped += 1
-                        continue
-
-                    text = extract_text_from_html(content)
-                    if len(text) < 50:
-                        skipped += 1
-                        continue
-
-                    # Build URLs - local_url for offline ZIM viewer, url for online
-                    local_url = f"/zim/{self.source_id}/{url}"
-
-                    # Online URL: use base_url from ZIM metadata if available
-                    # (e.g., https://en.bitcoin.it/wiki/ + Article_Name)
-                    base_url = zim_metadata.get("source_url", "") if zim_metadata else ""
-                    if base_url:
-                        # Clean up the base URL and article path
-                        if not base_url.endswith('/'):
-                            base_url += '/'
-                        # For wiki URLs, typically the article name is the last part
-                        article_name = url.split('/')[-1] if '/' in url else url
-                        online_url = f"{base_url}{article_name}"
-                    else:
-                        # No base URL available - use local URL as fallback
-                        online_url = local_url
-
-                    doc_id = hashlib.md5(f"{self.source_id}:{url}".encode()).hexdigest()
-
-                    if doc_id in seen_ids:
-                        skipped += 1
-                        continue
-                    seen_ids.add(doc_id)
-
-                    documents.append({
-                        "id": doc_id,
-                        "content": text[:50000],
-                        "title": title,
-                        "url": online_url,  # Online URL for Pinecone
-                        "local_url": local_url,  # Local URL for ChromaDB
-                        "source": self.source_id,
-                        "categories": [],
-                        "content_hash": hashlib.md5(text.encode()).hexdigest(),
-                        "scraped_at": datetime.now().isoformat(),
-                        "char_count": len(text),
-                        "doc_type": "article",
-                    })
-
-                    indexed += 1
-
-                    if indexed % 10 == 0:
-                        report_extraction_progress(indexed, target_count,
-                                        f"Extracting: {title[:50]}...")
-
-                except Exception as e:
-                    errors.append(f"Error processing article {i}: {str(e)}")
-                    continue
+                lang_info = f", {language_filtered} filtered by language" if language_filtered > 0 else ""
+                print(f"Extracted {len(documents)} articles from ZIM (skipped {skipped}{lang_info})")
 
             zim.close()
-            lang_info = f", {language_filtered} filtered by language" if language_filtered > 0 else ""
-            print(f"Extracted {len(documents)} articles from ZIM (skipped {skipped}{lang_info})")
 
             if not documents:
                 return {

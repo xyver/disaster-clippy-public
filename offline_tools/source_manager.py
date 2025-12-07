@@ -1152,7 +1152,8 @@ class SourceManager:
     # METADATA GENERATION
     # =========================================================================
 
-    def generate_metadata(self, source_id: str, progress_callback: Callable = None) -> Dict[str, Any]:
+    def generate_metadata(self, source_id: str, progress_callback: Callable = None,
+                          language_filter: str = None) -> Dict[str, Any]:
         """
         Generate metadata for a source from its backup files.
 
@@ -1163,6 +1164,8 @@ class SourceManager:
         Args:
             source_id: Source identifier
             progress_callback: Function(current, total, message) for progress
+            language_filter: ISO language code to filter (e.g., 'en', 'es').
+                           Only applies to ZIM files. None = include all languages.
 
         Returns:
             Dict with success status and document count
@@ -1179,7 +1182,7 @@ class SourceManager:
         source_path = self.get_source_path(source_id)
 
         if source_type == "zim":
-            return self._generate_zim_metadata(source_id, source_path, progress_callback)
+            return self._generate_zim_metadata(source_id, source_path, progress_callback, language_filter)
         elif source_type == "html":
             return self._generate_html_metadata(source_id, source_path, progress_callback)
         elif source_type == "pdf":
@@ -1192,9 +1195,11 @@ class SourceManager:
             }
 
     def _generate_zim_metadata(self, source_id: str, source_path: Path,
-                               progress_callback: Callable = None) -> Dict[str, Any]:
+                               progress_callback: Callable = None,
+                               language_filter: str = None) -> Dict[str, Any]:
         """Generate metadata from ZIM file."""
         from .schemas import get_metadata_file
+        from .indexer import should_include_article
 
         zim_files = list(source_path.glob("*.zim"))
         if not zim_files:
@@ -1214,9 +1219,14 @@ class SourceManager:
         documents = {}
         article_count = zim.header_fields.get('articleCount', 0)
         processed = 0
+        language_filtered = 0
 
+        lang_msg = f" (language: {language_filter})" if language_filter else ""
         if progress_callback:
-            progress_callback(0, article_count, "Extracting ZIM metadata...")
+            progress_callback(0, article_count, f"Extracting ZIM metadata{lang_msg}...")
+
+        if language_filter:
+            print(f"Language filter: {language_filter} (only including {language_filter} articles in metadata)")
 
         # Extract text from HTML helper
         def extract_text(html):
@@ -1245,6 +1255,13 @@ class SourceManager:
                 if url.startswith(('-/', 'X/', 'M/')):
                     continue
 
+                # Apply language filter if specified
+                if language_filter and not should_include_article(
+                    url, title, language_filter, debug=(language_filtered < 10)
+                ):
+                    language_filtered += 1
+                    continue
+
                 content = article.data
                 if isinstance(content, bytes):
                     content = content.decode('utf-8', errors='ignore')
@@ -1266,7 +1283,8 @@ class SourceManager:
                 processed += 1
 
                 if progress_callback and processed % 100 == 0:
-                    progress_callback(processed, article_count, f"Processed {processed} articles...")
+                    lang_info = f", {language_filtered} filtered" if language_filtered > 0 else ""
+                    progress_callback(processed, article_count, f"Processed {processed} articles{lang_info}...")
 
             except Exception:
                 continue
@@ -1281,18 +1299,23 @@ class SourceManager:
         metadata = {
             "source_id": source_id,
             "document_count": len(documents),
+            "language_filter": language_filter,
+            "language_filtered_count": language_filtered,
             "documents": documents
         }
 
         with open(metadata_file, 'w', encoding='utf-8') as f:
             json.dump(metadata, f, indent=2)
 
+        lang_info = f", {language_filtered} filtered by language" if language_filtered > 0 else ""
         if progress_callback:
-            progress_callback(article_count, article_count, "Metadata generation complete")
+            progress_callback(article_count, article_count, f"Metadata generation complete{lang_info}")
 
         return {
             "success": True,
             "document_count": len(documents),
+            "language_filter": language_filter,
+            "language_filtered_count": language_filtered,
             "metadata_file": str(metadata_file)
         }
 
@@ -1722,6 +1745,7 @@ class SourceManager:
 
         # Check tags - check source_config first, then _collection.json for PDF sources
         tags = source_config.get("tags", []) or source_config.get("topics", [])
+        print(f"[validate] Tags from config: {tags} (type: {type(tags).__name__})")
 
         # For PDF sources, also check _collection.json topics
         if not tags and source_type == "pdf":
@@ -1736,12 +1760,15 @@ class SourceManager:
 
         if tags:
             result.has_tags = True
+            print(f"[validate] Source already has tags: {tags}")
         else:
             result.has_tags = False
             result.warnings.append("No tags specified")
+            print(f"[validate] No tags found, calling suggest_tags()")
 
             # Suggest tags
             suggested = self.suggest_tags(source_id)
+            print(f"[validate] suggest_tags returned: {suggested}")
             if suggested:
                 result.suggested_tags = suggested
                 result.warnings.append(f"Suggested tags: {', '.join(suggested)}")
@@ -1941,6 +1968,8 @@ class SourceManager:
         from .schemas import get_metadata_file
 
         source_path = self.get_source_path(source_id)
+        print(f"[suggest_tags] Called for source: {source_id}")
+        print(f"[suggest_tags] Backup path: {self.backup_path}")
         print(f"[suggest_tags] Looking for metadata in: {source_path}")
         suggested = set()
 
@@ -2099,3 +2128,506 @@ class SourceManager:
             "manifest": manifest,
             "validation": asdict(validation)
         }
+
+
+# =============================================================================
+# CLOUD SOURCE MANAGEMENT - Install sources from R2
+# =============================================================================
+
+MASTER_METADATA_KEY = "backups/_master.json"
+
+
+def list_cloud_sources() -> Dict[str, Any]:
+    """
+    List available sources from R2 cloud storage.
+
+    Reads the master metadata file (backups/_master.json) for efficiency.
+    Falls back to scanning if master file doesn't exist.
+
+    Returns:
+        Dict with:
+        - sources: List of source info dicts
+        - total: Total source count
+        - error: Error message if any
+    """
+    from .cloud.r2 import get_backups_storage
+    import tempfile
+
+    result = {"sources": [], "total": 0, "error": None}
+
+    try:
+        r2 = get_backups_storage()
+        if not r2.is_configured():
+            result["error"] = "R2 storage not configured"
+            return result
+
+        # Try to download master metadata file
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as tmp:
+            tmp_path = tmp.name
+
+        try:
+            if r2.download_file(MASTER_METADATA_KEY, tmp_path):
+                with open(tmp_path, 'r', encoding='utf-8') as f:
+                    master_data = json.load(f)
+
+                # Convert master data to source list format
+                sources = []
+                for source_id, source_info in master_data.get("sources", {}).items():
+                    sources.append({
+                        "source_id": source_id,
+                        "name": source_info.get("name", source_id),
+                        "description": source_info.get("description", ""),
+                        "license": source_info.get("license", "Unknown"),
+                        "license_verified": source_info.get("license_verified", False),
+                        "tags": source_info.get("tags", []),
+                        "document_count": source_info.get("total_docs", source_info.get("count", 0)),
+                        "total_docs": source_info.get("total_docs", source_info.get("count", 0)),
+                        "total_chars": source_info.get("total_chars", 0),
+                        "version": source_info.get("version", "1.0.0"),
+                        "has_vectors": source_info.get("has_vectors", True),
+                        "has_backup": source_info.get("has_backup", False),
+                        "backup_type": "cloud",
+                        "total_size_bytes": source_info.get("total_size_bytes", 0),
+                        "total_size_mb": source_info.get("total_size_mb", 0),
+                        "last_updated": source_info.get("last_updated", "")
+                    })
+
+                result["sources"] = sources
+                result["total"] = len(sources)
+                return result
+            else:
+                print("[list_cloud_sources] Master metadata not found, falling back to scan")
+        finally:
+            import os as os_module
+            if os.path.exists(tmp_path):
+                os_module.unlink(tmp_path)
+
+        # Fallback: scan for _manifest.json files (slower but works without master file)
+        result = _scan_cloud_sources_fallback(r2)
+
+    except Exception as e:
+        result["error"] = str(e)
+
+    return result
+
+
+def _scan_cloud_sources_fallback(r2) -> Dict[str, Any]:
+    """Fallback method: scan R2 for _manifest.json files (slower)."""
+    import tempfile
+
+    result = {"sources": [], "total": 0, "error": None}
+    files = r2.list_files("backups/")
+    manifest_files = [f for f in files if f["key"].endswith("/_manifest.json")]
+
+    sources = []
+    for manifest_info in manifest_files:
+        key = manifest_info["key"]
+        parts = key.split("/")
+        if len(parts) >= 3:
+            source_id = parts[1]
+
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as tmp:
+                tmp_path = tmp.name
+
+            if r2.download_file(key, tmp_path):
+                try:
+                    with open(tmp_path, 'r', encoding='utf-8') as f:
+                        manifest = json.load(f)
+
+                    sources.append({
+                        "source_id": source_id,
+                        "name": manifest.get("name", source_id),
+                        "description": manifest.get("description", ""),
+                        "license": manifest.get("license", "Unknown"),
+                        "license_verified": manifest.get("license_verified", False),
+                        "tags": manifest.get("tags", []),
+                        "document_count": manifest.get("total_docs", 0),
+                        "total_docs": manifest.get("total_docs", 0),
+                        "version": manifest.get("version", "1.0.0"),
+                        "has_vectors": manifest.get("has_vectors", False),
+                        "has_backup": manifest.get("has_backup", False),
+                        "backup_type": "cloud",
+                        "last_updated": manifest.get("last_indexed", "")
+                    })
+                except Exception as e:
+                    print(f"[scan_fallback] Error parsing manifest for {source_id}: {e}")
+                finally:
+                    import os as os_module
+                    os_module.unlink(tmp_path)
+
+    result["sources"] = sources
+    result["total"] = len(sources)
+    return result
+
+
+def update_cloud_master_metadata(source_id: str, source_info: Dict[str, Any]) -> bool:
+    """
+    Update the master metadata file in R2 with a new/updated source.
+
+    Called after uploading a source pack to R2.
+
+    Args:
+        source_id: Source ID being added/updated
+        source_info: Source metadata to add
+
+    Returns:
+        True if successful
+    """
+    from .cloud.r2 import get_backups_storage
+    import tempfile
+
+    try:
+        r2 = get_backups_storage()
+        if not r2.is_configured():
+            print("[update_master] R2 not configured")
+            return False
+
+        # Download existing master or start fresh
+        master_data = {"sources": {}, "last_updated": ""}
+
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as tmp:
+            tmp_path = tmp.name
+
+        try:
+            if r2.download_file(MASTER_METADATA_KEY, tmp_path):
+                with open(tmp_path, 'r', encoding='utf-8') as f:
+                    master_data = json.load(f)
+        except Exception:
+            pass  # Start with empty master
+
+        # Update with new source info
+        master_data["sources"][source_id] = {
+            "name": source_info.get("name", source_id),
+            "description": source_info.get("description", ""),
+            "license": source_info.get("license", "Unknown"),
+            "license_verified": source_info.get("license_verified", False),
+            "tags": source_info.get("tags", []),
+            "total_docs": source_info.get("total_docs", 0),
+            "count": source_info.get("total_docs", 0),  # Alias for compatibility
+            "total_chars": source_info.get("total_chars", 0),
+            "version": source_info.get("version", "1.0.0"),
+            "has_vectors": source_info.get("has_vectors", True),
+            "has_backup": source_info.get("has_backup", False),
+            "total_size_bytes": source_info.get("total_size_bytes", 0),
+            "total_size_mb": source_info.get("total_size_mb", 0),
+            "last_updated": datetime.now().isoformat()
+        }
+        master_data["last_updated"] = datetime.now().isoformat()
+
+        # Write updated master
+        with open(tmp_path, 'w', encoding='utf-8') as f:
+            json.dump(master_data, f, indent=2)
+
+        success = r2.upload_file(tmp_path, MASTER_METADATA_KEY)
+        if success:
+            print(f"[update_master] Updated master metadata with {source_id}")
+        return success
+
+    except Exception as e:
+        print(f"[update_master] Error: {e}")
+        return False
+
+
+def download_source_pack(
+    source_id: str,
+    dest_path: Optional[Path] = None,
+    include_backup: bool = False,
+    progress_callback: Optional[Callable[[str, int, int], None]] = None
+) -> Dict[str, Any]:
+    """
+    Download a source pack from R2 cloud storage.
+
+    Args:
+        source_id: Source ID to download
+        dest_path: Destination path (defaults to BACKUP_PATH/{source_id})
+        include_backup: Whether to download backup files (pages/, ZIM, etc.)
+        progress_callback: Optional callback(filename, current, total)
+
+    Returns:
+        Dict with:
+        - success: bool
+        - source_id: str
+        - dest_path: str
+        - files_downloaded: list
+        - error: str if any
+    """
+    from .cloud.r2 import get_backups_storage
+
+    result = {
+        "success": False,
+        "source_id": source_id,
+        "dest_path": "",
+        "files_downloaded": [],
+        "error": None
+    }
+
+    try:
+        r2 = get_backups_storage()
+        if not r2.is_configured():
+            result["error"] = "R2 storage not configured"
+            return result
+
+        # Determine destination path
+        if dest_path is None:
+            backup_path = os.getenv("BACKUP_PATH", "")
+            if not backup_path:
+                result["error"] = "BACKUP_PATH not configured"
+                return result
+            dest_path = Path(backup_path) / source_id
+
+        dest_path = Path(dest_path)
+        dest_path.mkdir(parents=True, exist_ok=True)
+        result["dest_path"] = str(dest_path)
+
+        # List files in source folder
+        source_prefix = f"backups/{source_id}/"
+        files = r2.list_files(source_prefix)
+
+        if not files:
+            result["error"] = f"Source '{source_id}' not found in cloud storage"
+            return result
+
+        # Filter files to download
+        files_to_download = []
+        for f in files:
+            filename = f["key"].replace(source_prefix, "")
+
+            # Always download schema files
+            if filename.startswith("_"):
+                files_to_download.append(f)
+            # Optionally download backup files
+            elif include_backup:
+                files_to_download.append(f)
+
+        total_files = len(files_to_download)
+        total_bytes = sum(f.get("size", 0) for f in files_to_download)
+        downloaded = []
+        skipped = []
+        bytes_downloaded = 0
+
+        for i, file_info in enumerate(files_to_download):
+            key = file_info["key"]
+            filename = key.replace(source_prefix, "")
+            local_path = dest_path / filename
+            remote_size = file_info.get("size", 0)
+
+            # Create subdirectories if needed
+            local_path.parent.mkdir(parents=True, exist_ok=True)
+
+            # Smart download: skip if file exists with matching size
+            if local_path.exists():
+                local_size = local_path.stat().st_size
+                if local_size == remote_size and remote_size > 0:
+                    skipped.append(filename)
+                    bytes_downloaded += remote_size
+                    if progress_callback:
+                        progress_callback(f"Skipped {filename} (exists)", i + 1, total_files)
+                    continue
+
+            if progress_callback:
+                size_mb = remote_size / (1024*1024) if remote_size else 0
+                progress_callback(f"Downloading {filename} ({size_mb:.1f} MB)", i + 1, total_files)
+
+            if r2.download_file(key, str(local_path)):
+                downloaded.append(filename)
+                bytes_downloaded += remote_size
+            else:
+                print(f"[download_source_pack] Failed to download: {key}")
+
+        result["files_skipped"] = skipped
+        result["total_size_mb"] = round(total_bytes / (1024*1024), 2)
+
+        result["files_downloaded"] = downloaded
+        # Success if we downloaded or skipped files (skipped = already had them)
+        result["success"] = len(downloaded) > 0 or len(skipped) > 0
+
+    except Exception as e:
+        result["error"] = str(e)
+
+    return result
+
+
+def install_source_to_chromadb(
+    source_id: str,
+    source_path: Optional[Path] = None,
+    progress_callback: Optional[Callable[[int, int], None]] = None
+) -> Dict[str, Any]:
+    """
+    Import vectors from a downloaded source pack into local ChromaDB.
+
+    Reads _vectors.json and _index.json to add documents to ChromaDB.
+
+    Args:
+        source_id: Source ID to install
+        source_path: Path to source folder (defaults to BACKUP_PATH/{source_id})
+        progress_callback: Optional callback(current, total)
+
+    Returns:
+        Dict with:
+        - success: bool
+        - source_id: str
+        - documents_added: int
+        - error: str if any
+    """
+    from .vectordb import get_vector_store
+
+    result = {
+        "success": False,
+        "source_id": source_id,
+        "documents_added": 0,
+        "error": None
+    }
+
+    try:
+        # Determine source path
+        if source_path is None:
+            backup_path = os.getenv("BACKUP_PATH", "")
+            if not backup_path:
+                result["error"] = "BACKUP_PATH not configured"
+                return result
+            source_path = Path(backup_path) / source_id
+
+        source_path = Path(source_path)
+
+        # Check required files exist
+        vectors_file = source_path / get_vectors_file()
+        index_file = source_path / get_index_file()
+
+        if not vectors_file.exists():
+            result["error"] = f"Vectors file not found: {vectors_file}"
+            return result
+
+        if not index_file.exists():
+            result["error"] = f"Index file not found: {index_file}"
+            return result
+
+        # Load vectors and index
+        print(f"[install_source] Loading vectors from {vectors_file}")
+        with open(vectors_file, 'r', encoding='utf-8') as f:
+            vectors_data = json.load(f)
+
+        print(f"[install_source] Loading index from {index_file}")
+        with open(index_file, 'r', encoding='utf-8') as f:
+            index_data = json.load(f)
+
+        vectors = vectors_data.get("vectors", {})
+        documents = index_data.get("documents", {})
+
+        if not vectors:
+            result["error"] = "No vectors found in vectors file"
+            return result
+
+        print(f"[install_source] Found {len(vectors)} vectors, {len(documents)} documents")
+
+        # Get local ChromaDB store (force local mode)
+        store = get_vector_store(mode="local")
+
+        # Prepare documents for import
+        docs_to_add = []
+        embeddings = []
+
+        total = len(vectors)
+        for i, (doc_id, vector) in enumerate(vectors.items()):
+            doc_info = documents.get(doc_id, {})
+
+            if not doc_info:
+                print(f"[install_source] Warning: No document info for {doc_id}")
+                continue
+
+            doc = {
+                "id": doc_id,
+                "content": doc_info.get("content", ""),
+                "title": doc_info.get("title", "Unknown"),
+                "url": doc_info.get("url", ""),
+                "source": source_id,
+                "categories": doc_info.get("categories", []),
+                "doc_type": doc_info.get("doc_type", "article"),
+                "content_hash": doc_info.get("content_hash", ""),
+                "scraped_at": doc_info.get("scraped_at", "")
+            }
+
+            docs_to_add.append(doc)
+            embeddings.append(vector)
+
+            if progress_callback and (i + 1) % 100 == 0:
+                progress_callback(i + 1, total)
+
+        # Add to ChromaDB
+        if docs_to_add:
+            print(f"[install_source] Adding {len(docs_to_add)} documents to ChromaDB")
+            added = store.add_documents(docs_to_add, embeddings=embeddings)
+            result["documents_added"] = added
+            result["success"] = True
+            print(f"[install_source] Successfully added {added} documents")
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        result["error"] = str(e)
+
+    return result
+
+
+def install_source_from_cloud(
+    source_id: str,
+    include_backup: bool = False,
+    progress_callback: Optional[Callable[[str, int, int], None]] = None
+) -> Dict[str, Any]:
+    """
+    Full pipeline: Download source pack from R2 and install to local ChromaDB.
+
+    Args:
+        source_id: Source ID to install
+        include_backup: Whether to download backup files
+        progress_callback: Optional callback(stage, current, total)
+
+    Returns:
+        Dict with:
+        - success: bool
+        - source_id: str
+        - download_result: dict
+        - install_result: dict
+        - error: str if any
+    """
+    result = {
+        "success": False,
+        "source_id": source_id,
+        "download_result": None,
+        "install_result": None,
+        "error": None
+    }
+
+    # Stage 1: Download
+    def download_progress(filename, current, total):
+        if progress_callback:
+            progress_callback(f"Downloading {filename}", current, total)
+
+    download_result = download_source_pack(
+        source_id=source_id,
+        include_backup=include_backup,
+        progress_callback=download_progress
+    )
+    result["download_result"] = download_result
+
+    if not download_result["success"]:
+        result["error"] = download_result.get("error", "Download failed")
+        return result
+
+    # Stage 2: Install to ChromaDB
+    def install_progress(current, total):
+        if progress_callback:
+            progress_callback("Installing vectors", current, total)
+
+    install_result = install_source_to_chromadb(
+        source_id=source_id,
+        source_path=Path(download_result["dest_path"]),
+        progress_callback=install_progress
+    )
+    result["install_result"] = install_result
+
+    if not install_result["success"]:
+        result["error"] = install_result.get("error", "Install failed")
+        return result
+
+    result["success"] = True
+    return result

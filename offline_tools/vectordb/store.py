@@ -57,6 +57,10 @@ class VectorStore:
         # Embedding service for queries
         self.embedding_service = EmbeddingService()
 
+        # Metadata index for sync operations - reads from backup folder JSON files
+        from .metadata import MetadataIndex
+        self.metadata_index = MetadataIndex()
+
     def add_documents(self, documents: List[Dict[str, Any]],
                       embeddings: Optional[List[List[float]]] = None,
                       progress_callback=None,
@@ -293,11 +297,26 @@ class VectorStore:
         Returns:
             Number of documents deleted
         """
+        result = self.delete_by_source(source_id)
+        return result.get("deleted_count", 0)
+
+    def delete_by_source(self, source_id: str) -> Dict[str, Any]:
+        """
+        Delete all vectors for a specific source.
+
+        This method matches the PineconeStore interface for unified handling.
+
+        Args:
+            source_id: The source identifier to delete
+
+        Returns:
+            Dict with deletion stats: {deleted_count, batches}
+        """
         try:
             # Debug: Show what sources exist
             stats = self.get_stats()
-            print(f"[delete_source] Current sources in DB: {list(stats.get('sources', {}).keys())}")
-            print(f"[delete_source] Looking for source: '{source_id}'")
+            print(f"[VectorStore] Current sources in DB: {list(stats.get('sources', {}).keys())}")
+            print(f"[VectorStore] Looking for source: '{source_id}'")
 
             # Get all document IDs for this source
             result = self.collection.get(
@@ -305,20 +324,39 @@ class VectorStore:
                 include=[]
             )
             ids_to_delete = result.get("ids", [])
-            print(f"[delete_source] Found {len(ids_to_delete)} documents to delete")
+            print(f"[VectorStore] Found {len(ids_to_delete)} documents to delete")
 
             if ids_to_delete:
                 self.collection.delete(ids=ids_to_delete)
-                print(f"[delete_source] Deleted {len(ids_to_delete)} documents from source '{source_id}'")
-                return len(ids_to_delete)
+                print(f"[VectorStore] Deleted {len(ids_to_delete)} documents from source '{source_id}'")
+                return {"deleted_count": len(ids_to_delete), "batches": 1}
             else:
-                print(f"[delete_source] No documents found for source '{source_id}'")
+                print(f"[VectorStore] No documents found for source '{source_id}'")
 
-            return 0
+            return {"deleted_count": 0, "batches": 0}
         except Exception as e:
-            print(f"[delete_source] Error deleting source {source_id}: {e}")
+            print(f"[VectorStore] Error deleting source {source_id}: {e}")
             import traceback
             traceback.print_exc()
+            return {"deleted_count": 0, "batches": 0, "error": str(e)}
+
+    def get_source_vector_count(self, source_id: str) -> int:
+        """
+        Get count of vectors for a specific source.
+
+        This method matches the PineconeStore interface for unified handling.
+
+        Returns:
+            Number of vectors for this source
+        """
+        try:
+            result = self.collection.get(
+                where={"source": source_id},
+                include=[]
+            )
+            return len(result.get("ids", []))
+        except Exception as e:
+            print(f"[VectorStore] Error counting source {source_id}: {e}")
             return 0
 
     def get_metadata_stats(self) -> Dict[str, Any]:

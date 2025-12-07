@@ -45,6 +45,11 @@ class SourceIdRequest(BaseModel):
     source_id: str
 
 
+class GenerateMetadataRequest(BaseModel):
+    source_id: str
+    language_filter: Optional[str] = None  # ISO code like 'en', 'es' to filter ZIM articles
+
+
 class CreateIndexRequest(BaseModel):
     source_id: str
     limit: int = 1000
@@ -113,9 +118,10 @@ async def get_local_sources():
                                 "license": source_data.get("license", "Unknown"),
                                 "base_url": source_data.get("base_url", ""),
                                 "license_verified": source_data.get("license_verified", False),
+                                "tags": source_data.get("tags", []),
                             }
                         except Exception:
-                            sources_config[source_id] = {"name": source_id}
+                            sources_config[source_id] = {"name": source_id, "tags": []}
 
                     # Check for pages folder or any content
                     elif (source_folder / "pages").exists() or list(source_folder.glob("*.html")):
@@ -135,6 +141,7 @@ async def get_local_sources():
             "license": config_data.get("license", "Unknown"),
             "license_verified": config_data.get("license_verified", False),
             "base_url": config_data.get("base_url", ""),
+            "tags": config_data.get("tags", []),
             "has_config": True,
             "has_metadata": False,
             "has_backup": False,
@@ -583,26 +590,38 @@ async def scan_backup(request: SourceIdRequest):
 
 
 @router.post("/generate-metadata")
-async def generate_metadata(request: SourceIdRequest):
+async def generate_metadata(request: GenerateMetadataRequest):
     """
     Generate metadata from backup files.
     Runs as a background job since large sources can take a while.
+
+    For ZIM files, you can optionally filter by language (ISO code like 'en', 'es').
     """
     from admin.job_manager import get_job_manager
 
-    def _run_generate_metadata(source_id: str, progress_callback=None):
+    def _run_generate_metadata(source_id: str, language_filter: str = None, progress_callback=None):
         from offline_tools.source_manager import SourceManager
         manager = SourceManager()
-        result = manager.generate_metadata(source_id, progress_callback=progress_callback)
+        result = manager.generate_metadata(
+            source_id,
+            progress_callback=progress_callback,
+            language_filter=language_filter
+        )
 
         if not result.get("success", True):
             return {"status": "error", "error": result.get("error", "Metadata generation failed")}
+
+        lang_info = ""
+        if result.get("language_filtered_count", 0) > 0:
+            lang_info = f" ({result['language_filtered_count']} filtered by language)"
 
         return {
             "status": "success",
             "source_id": source_id,
             "document_count": result.get("document_count", 0),
-            "message": f"Generated metadata for {result.get('document_count', 0)} documents"
+            "language_filter": result.get("language_filter"),
+            "language_filtered_count": result.get("language_filtered_count", 0),
+            "message": f"Generated metadata for {result.get('document_count', 0)} documents{lang_info}"
         }
 
     manager = get_job_manager()
@@ -612,16 +631,19 @@ async def generate_metadata(request: SourceIdRequest):
             "metadata",
             request.source_id,
             _run_generate_metadata,
-            request.source_id
+            request.source_id,
+            request.language_filter
         )
     except ValueError as e:
         raise HTTPException(409, str(e))
 
+    lang_msg = f" (language: {request.language_filter})" if request.language_filter else ""
     return {
         "status": "submitted",
         "job_id": job_id,
         "source_id": request.source_id,
-        "message": "Metadata generation started"
+        "language_filter": request.language_filter,
+        "message": f"Metadata generation started{lang_msg}"
     }
 
 
@@ -691,6 +713,7 @@ async def validate_source(request: ValidateSourceRequest):
             "has_metadata": result.has_metadata,
             "has_embeddings": result.has_embeddings,
             "has_license": result.has_license,
+            "has_tags": result.has_tags,
             "license_verified": result.license_verified,
             "schema_version": result.schema_version,
             "issues": result.issues,
@@ -1073,4 +1096,249 @@ async def index_zim_file(request: ZIMIndexRequest):
         "zim_path": str(zim_path),
         "limit": request.limit,
         "message": f"ZIM indexing started for {source_id}"
+    }
+
+
+# =============================================================================
+# CLOUD SOURCE MANAGEMENT - List and install sources from R2
+# =============================================================================
+
+@router.get("/cloud-sources")
+async def list_cloud_sources():
+    """
+    List available sources from R2 cloud storage.
+
+    Returns sources that can be installed locally.
+    """
+    from offline_tools.source_manager import list_cloud_sources as _list_cloud_sources
+
+    result = _list_cloud_sources()
+
+    if result.get("error"):
+        raise HTTPException(500, result["error"])
+
+    return result
+
+
+class InstallSourceRequest(BaseModel):
+    source_id: str
+    include_backup: bool = False
+    sync_mode: str = "update"  # "update" (add/merge) or "replace" (delete old vectors first)
+
+
+def _run_install_job(source_id: str, include_backup: bool, sync_mode: str = "update", progress_callback=None):
+    """Background job function for source installation"""
+    from offline_tools.source_manager import install_source_from_cloud
+    from offline_tools.vectordb.metadata import MetadataIndex
+    from offline_tools.vectordb import get_vector_store
+
+    deleted_count = 0
+
+    # If replace mode, delete existing vectors first
+    if sync_mode == "replace":
+        if progress_callback:
+            progress_callback(5, f"Deleting old vectors for {source_id}...")
+
+        try:
+            store = get_vector_store(mode="local")
+            delete_result = store.delete_by_source(source_id)
+            deleted_count = delete_result.get("deleted_count", 0)
+            print(f"[install] Deleted {deleted_count} old vectors for {source_id}")
+        except Exception as e:
+            print(f"[install] Warning: Failed to delete old vectors: {e}")
+
+    def progress_wrapper(stage, current, total):
+        if progress_callback:
+            # Job manager expects (percent, message) not (current, total)
+            # Offset by 10% if we did a delete first
+            base = 10 if sync_mode == "replace" else 0
+            percent = base + int((current / max(total, 1)) * (100 - base))
+            progress_callback(percent, stage)
+            print(f"[install] {stage}: {current}/{total} ({percent}%)")
+
+    result = install_source_from_cloud(
+        source_id=source_id,
+        include_backup=include_backup,
+        progress_callback=progress_wrapper
+    )
+
+    # Add deletion stats to result
+    if result.get("success"):
+        result["sync_mode"] = sync_mode
+        result["deleted_count"] = deleted_count
+
+    # Verify metadata index can read the new source
+    if result.get("success"):
+        try:
+            # Creating new MetadataIndex reads fresh _master.json from disk
+            metadata_index = MetadataIndex()
+            stats = metadata_index.get_stats()
+            print(f"[install] Metadata index updated: {stats.get('total_documents', 0)} total documents")
+        except Exception as e:
+            print(f"[install] Warning: Failed to verify metadata index: {e}")
+
+    return result
+
+
+@router.post("/install-source")
+async def install_source_from_cloud(request: InstallSourceRequest):
+    """
+    Download and install a source from R2 cloud storage.
+
+    Downloads the source pack files and imports vectors into local ChromaDB.
+    Runs as a background job.
+
+    Args:
+        sync_mode: "update" (add/merge) or "replace" (delete old vectors first)
+    """
+    from admin.job_manager import get_job_manager
+
+    source_id = request.source_id.strip().lower()
+    manager = get_job_manager()
+
+    try:
+        job_id = manager.submit(
+            "install_source",
+            source_id,
+            _run_install_job,
+            source_id,
+            request.include_backup,
+            request.sync_mode  # "update" or "replace"
+        )
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+
+    mode_text = "Replacing" if request.sync_mode == "replace" else "Installing"
+    return {
+        "status": "submitted",
+        "job_id": job_id,
+        "source_id": source_id,
+        "include_backup": request.include_backup,
+        "sync_mode": request.sync_mode,
+        "message": f"{mode_text} source '{source_id}' from cloud"
+    }
+
+
+# Alias for sources.html compatibility
+@router.post("/download-pack")
+async def download_pack(request: InstallSourceRequest):
+    """
+    Alias for /install-source - used by sources.html UI.
+    Downloads source pack from R2 and installs to local ChromaDB.
+    """
+    return await install_source_from_cloud(request)
+
+
+@router.post("/install-source-sync")
+async def install_source_sync(request: InstallSourceRequest):
+    """
+    Synchronously install a source from R2 (for small sources).
+
+    Use /install-source for large sources that need background processing.
+    """
+    from offline_tools.source_manager import install_source_from_cloud
+
+    source_id = request.source_id.strip().lower()
+
+    result = install_source_from_cloud(
+        source_id=source_id,
+        include_backup=request.include_backup
+    )
+
+    if not result["success"]:
+        raise HTTPException(500, result.get("error", "Installation failed"))
+
+    return {
+        "status": "success",
+        "source_id": source_id,
+        "documents_added": result.get("install_result", {}).get("documents_added", 0),
+        "files_downloaded": result.get("download_result", {}).get("files_downloaded", [])
+    }
+
+
+@router.get("/local-source-check/{source_id}")
+async def check_local_source(source_id: str):
+    """
+    Check if a source already exists in local ChromaDB.
+
+    Returns info about existing vectors for conflict detection before install.
+    """
+    from offline_tools.vectordb import get_vector_store
+
+    source_id = source_id.strip().lower()
+
+    try:
+        store = get_vector_store(mode="local")
+        vector_count = store.get_source_vector_count(source_id)
+
+        if vector_count > 0:
+            return {
+                "exists": True,
+                "source_id": source_id,
+                "vector_count": vector_count,
+                "message": f"Source '{source_id}' has {vector_count} vectors in local ChromaDB"
+            }
+        else:
+            return {
+                "exists": False,
+                "source_id": source_id,
+                "vector_count": 0,
+                "message": f"Source '{source_id}' not found in local ChromaDB"
+            }
+    except Exception as e:
+        return {"exists": False, "error": str(e)}
+
+
+@router.delete("/local-source/{source_id}")
+async def delete_local_source(source_id: str, delete_files: bool = False):
+    """
+    Delete a source from local ChromaDB.
+
+    Args:
+        source_id: Source to delete
+        delete_files: If True, also delete the source folder from disk
+    """
+    from offline_tools.vectordb import get_vector_store
+    from admin.local_config import get_local_config
+
+    source_id = source_id.strip().lower()
+
+    # Get local ChromaDB store
+    store = get_vector_store(mode="local")
+
+    # Get documents for this source
+    try:
+        # ChromaDB doesn't have a direct "delete by metadata" so we query first
+        collection = store.collection
+        results = collection.get(
+            where={"source": source_id},
+            include=[]
+        )
+
+        if results["ids"]:
+            collection.delete(ids=results["ids"])
+            deleted_count = len(results["ids"])
+        else:
+            deleted_count = 0
+
+    except Exception as e:
+        raise HTTPException(500, f"Failed to delete from ChromaDB: {e}")
+
+    # Optionally delete files
+    files_deleted = False
+    if delete_files:
+        config = get_local_config()
+        backup_folder = config.get_backup_folder()
+        if backup_folder:
+            source_path = Path(backup_folder) / source_id
+            if source_path.exists():
+                import shutil
+                shutil.rmtree(source_path)
+                files_deleted = True
+
+    return {
+        "status": "success",
+        "source_id": source_id,
+        "documents_deleted": deleted_count,
+        "files_deleted": files_deleted
     }

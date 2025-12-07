@@ -18,6 +18,83 @@ from offline_tools.embeddings import EmbeddingService
 from .metadata import MetadataIndex
 
 
+class PineconeMetadataWrapper:
+    """
+    Wrapper that provides MetadataIndex-like interface but queries Pinecone directly.
+    Used for sync operations to get actual cloud state, not local file state.
+    """
+
+    def __init__(self, pinecone_store):
+        self.store = pinecone_store
+        self._id_cache = None
+        self._source_cache = {}
+
+    def get_ids(self, source: str = None) -> set:
+        """Get document IDs from Pinecone (expensive - use sparingly)"""
+        # Query Pinecone for IDs with the given source filter
+        try:
+            # Use a dummy vector to fetch with metadata filter
+            if source:
+                # Fetch IDs by querying with source filter
+                # Note: Pinecone list() is more efficient but may not support filtering
+                results = self.store.index.query(
+                    vector=[0.0] * 1536,
+                    top_k=10000,  # Max allowed
+                    filter={"source": source},
+                    include_metadata=False
+                )
+                return {m.id for m in results.matches}
+            else:
+                # No filter - get stats to see namespaces, then query each
+                stats = self.store.index.describe_index_stats()
+                if stats.total_vector_count == 0:
+                    return set()
+                # Query without filter to get IDs
+                results = self.store.index.query(
+                    vector=[0.0] * 1536,
+                    top_k=10000,
+                    include_metadata=False
+                )
+                return {m.id for m in results.matches}
+        except Exception as e:
+            print(f"[PineconeMetadataWrapper] Error querying IDs: {e}")
+            return set()
+
+    def get_titles(self, source: str = None) -> set:
+        """Get titles from Pinecone"""
+        try:
+            filter_dict = {"source": source} if source else None
+            results = self.store.index.query(
+                vector=[0.0] * 1536,
+                top_k=10000,
+                filter=filter_dict,
+                include_metadata=True
+            )
+            return {m.metadata.get("title", "") for m in results.matches if m.metadata}
+        except Exception:
+            return set()
+
+    def list_sources(self) -> list:
+        """List unique sources in Pinecone"""
+        # This is expensive - would need to query and extract unique sources
+        # For now, return empty - sync will handle this differently
+        return []
+
+    def add_documents(self, documents: list):
+        """No-op - Pinecone metadata is managed by the store itself"""
+        # The actual vectors are added via PineconeStore.add_documents()
+        # This wrapper just needs to not throw an error
+        pass
+
+    def get_stats(self):
+        """Get stats from Pinecone"""
+        stats = self.store.index.describe_index_stats()
+        return {
+            "total_documents": stats.total_vector_count,
+            "sources": {}
+        }
+
+
 class PineconeStore:
     """Pinecone-based vector store for article embeddings"""
 
@@ -53,8 +130,9 @@ class PineconeStore:
         # Embedding service for queries
         self.embedding_service = EmbeddingService()
 
-        # Metadata index for fast lookups (local cache)
-        self.metadata_index = MetadataIndex()
+        # Metadata index wrapper that queries Pinecone directly
+        # (not local files - those reflect local state, not cloud state)
+        self.metadata_index = PineconeMetadataWrapper(self)
 
     def _ensure_index(self):
         """Create index if it doesn't exist"""
@@ -293,6 +371,10 @@ class PineconeStore:
         if not sources and stats.total_vector_count > 0:
             sources = self._get_sources_from_r2()
 
+        # If still no sources but Pinecone has vectors, query Pinecone directly
+        if not sources and stats.total_vector_count > 0:
+            sources = self._get_sources_from_pinecone()
+
         return {
             "total_documents": stats.total_vector_count,
             "index_name": self.index_name,
@@ -301,6 +383,33 @@ class PineconeStore:
             "sources": sources,
             "last_updated": metadata_stats.get("last_updated")
         }
+
+    def _get_sources_from_pinecone(self) -> Dict[str, int]:
+        """
+        Query Pinecone directly to discover unique sources.
+        This is expensive but works without R2 or local metadata.
+        """
+        try:
+            # Sample vectors to discover sources
+            results = self.index.query(
+                vector=[0.0] * 1536,
+                top_k=10000,  # Max allowed
+                include_metadata=True,
+                namespace=self.namespace
+            )
+
+            # Count sources from results
+            source_counts = {}
+            for match in results.matches:
+                if match.metadata and "source" in match.metadata:
+                    source = match.metadata["source"]
+                    source_counts[source] = source_counts.get(source, 0) + 1
+
+            print(f"[PineconeStore] Discovered {len(source_counts)} sources from Pinecone query")
+            return source_counts
+        except Exception as e:
+            print(f"[PineconeStore] Error querying sources from Pinecone: {e}")
+            return {}
 
     def _get_sources_from_r2(self) -> Dict[str, int]:
         """
@@ -367,6 +476,76 @@ class PineconeStore:
         """Delete specific documents by ID"""
         if ids:
             self.index.delete(ids=ids, namespace=self.namespace)
+
+    def delete_by_source(self, source_id: str) -> Dict[str, Any]:
+        """
+        Delete all vectors for a specific source.
+
+        Queries Pinecone to find all vectors with source metadata matching source_id,
+        then deletes them in batches.
+
+        Returns:
+            Dict with deletion stats: {deleted_count, batches}
+        """
+        print(f"[PineconeStore] Finding vectors for source: {source_id}")
+
+        # Query to find all vectors with this source
+        # Use a zero vector query with filter - Pinecone requires a vector for queries
+        all_ids = []
+
+        try:
+            # Query with metadata filter for source
+            # We need to paginate since top_k max is 10000
+            results = self.index.query(
+                vector=[0.0] * 1536,  # Dummy vector for metadata-only query
+                top_k=10000,
+                include_metadata=True,
+                filter={"source": {"$eq": source_id}},
+                namespace=self.namespace
+            )
+
+            for match in results.matches:
+                all_ids.append(match.id)
+
+            print(f"[PineconeStore] Found {len(all_ids)} vectors to delete for source {source_id}")
+
+            if not all_ids:
+                return {"deleted_count": 0, "batches": 0}
+
+            # Delete in batches of 1000 (Pinecone limit)
+            batch_size = 1000
+            batches = 0
+            for i in range(0, len(all_ids), batch_size):
+                batch_ids = all_ids[i:i + batch_size]
+                self.index.delete(ids=batch_ids, namespace=self.namespace)
+                batches += 1
+                print(f"[PineconeStore] Deleted batch {batches} ({len(batch_ids)} vectors)")
+
+            return {"deleted_count": len(all_ids), "batches": batches}
+
+        except Exception as e:
+            print(f"[PineconeStore] Error deleting source {source_id}: {e}")
+            raise
+
+    def get_source_vector_count(self, source_id: str) -> int:
+        """
+        Get count of vectors for a specific source in Pinecone.
+
+        Returns:
+            Number of vectors for this source
+        """
+        try:
+            results = self.index.query(
+                vector=[0.0] * 1536,
+                top_k=10000,
+                include_metadata=False,
+                filter={"source": {"$eq": source_id}},
+                namespace=self.namespace
+            )
+            return len(results.matches)
+        except Exception as e:
+            print(f"[PineconeStore] Error counting source {source_id}: {e}")
+            return 0
 
     def get_metadata_stats(self) -> Dict[str, Any]:
         """Get fast stats from local metadata index"""

@@ -238,6 +238,8 @@ async def get_sources_for_upload():
 
 class UploadBackupRequest(BaseModel):
     source_id: str
+    publish_mode: bool = False  # True = global admin publish to production, False = submit for review
+    sync_mode: str = "update"  # "update" (add/merge) or "replace" (delete old vectors first)
 
 
 def _run_upload_backup(source_id: str, source_info: dict, progress_callback=None):
@@ -555,6 +557,352 @@ def _upload_submission_metadata_sync(storage, submission_folder: str, source_id:
     return uploaded_files
 
 
+# =============================================================================
+# GLOBAL ADMIN: Publish to Production
+# =============================================================================
+
+def _run_publish_to_production(source_id: str, source_info: dict, sync_mode: str = "update", progress_callback=None):
+    """
+    Background worker for global admin: publish source directly to production.
+
+    This:
+    1. Uploads source pack to backups R2 bucket (not submissions)
+    2. Updates _master.json in R2 with new source
+    3. Syncs vectors to Pinecone for cloud search
+
+    Args:
+        sync_mode: "update" (add/merge new vectors) or "replace" (delete old vectors first)
+        progress_callback: Callback for progress updates (added by job manager)
+
+    REQUIRES: VECTOR_DB_MODE=global
+    """
+    from dotenv import load_dotenv
+    load_dotenv()
+
+    if progress_callback:
+        progress_callback(2, "Connecting to backups storage...")
+
+    # Get backups storage (separate bucket from submissions)
+    from offline_tools.cloud.r2 import get_backups_storage
+    storage = get_backups_storage()
+
+    if not storage.is_configured():
+        raise Exception("R2 backups storage not configured")
+
+    # Test connection
+    conn_status = storage.test_connection()
+    if not conn_status["connected"]:
+        raise Exception(f"R2 connection failed: {conn_status.get('error', 'Unknown error')}")
+
+    if progress_callback:
+        progress_callback(5, "Preparing source files for upload...")
+
+    # Upload based on backup type
+    backup_path = source_info["backup_path"]
+    backup_type = source_info["backup_type"]
+
+    # Upload to backups/{source_id}/ folder (not submissions/)
+    remote_folder = f"backups/{source_id}"
+    uploaded_files = []
+    total_size = 0
+
+    if backup_type == "zim":
+        if progress_callback:
+            progress_callback(10, f"Uploading ZIM file ({source_info.get('backup_size_mb', 0)} MB)...")
+
+        # Upload ZIM file
+        remote_key = f"{remote_folder}/{source_id}.zim"
+        success = storage.upload_file(backup_path, remote_key)
+
+        if not success:
+            raise Exception(f"Upload failed: {storage.get_last_error()}")
+
+        uploaded_files.append(f"{source_id}.zim")
+        total_size = source_info["backup_size_mb"]
+
+    elif backup_type == "html":
+        # Create zip of HTML folder and upload
+        import tempfile
+        import zipfile
+
+        html_path = Path(backup_path)
+
+        if progress_callback:
+            progress_callback(10, "Creating zip archive...")
+
+        with tempfile.NamedTemporaryFile(suffix='.zip', delete=False) as tmp:
+            tmp_path = tmp.name
+
+        try:
+            with zipfile.ZipFile(tmp_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+                all_files = list(html_path.rglob('*'))
+                file_count = len([f for f in all_files if f.is_file()])
+                for i, file_path in enumerate(all_files):
+                    if file_path.is_file():
+                        arcname = file_path.relative_to(html_path)
+                        zf.write(file_path, arcname)
+                        if progress_callback and file_count > 0:
+                            percent = 10 + int((i / file_count) * 30)
+                            progress_callback(percent, f"Zipping files... ({i+1}/{file_count})")
+
+            if progress_callback:
+                progress_callback(40, "Uploading zip file...")
+
+            remote_key = f"{remote_folder}/{source_id}-html.zip"
+            success = storage.upload_file(tmp_path, remote_key)
+
+            if not success:
+                raise Exception(f"Upload failed: {storage.get_last_error()}")
+
+            uploaded_files.append(f"{source_id}-html.zip")
+            total_size = os.path.getsize(tmp_path) / (1024*1024)
+        finally:
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+
+    elif backup_type == "pdf":
+        # Create zip of PDF folder and upload
+        import tempfile
+        import zipfile
+
+        pdf_path = Path(backup_path)
+
+        if progress_callback:
+            progress_callback(10, "Creating zip archive...")
+
+        with tempfile.NamedTemporaryFile(suffix='.zip', delete=False) as tmp:
+            tmp_path = tmp.name
+
+        try:
+            with zipfile.ZipFile(tmp_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+                all_files = list(pdf_path.rglob('*'))
+                file_count = len([f for f in all_files if f.is_file()])
+                for i, file_path in enumerate(all_files):
+                    if file_path.is_file():
+                        arcname = file_path.relative_to(pdf_path)
+                        zf.write(file_path, arcname)
+                        if progress_callback and file_count > 0:
+                            percent = 10 + int((i / file_count) * 30)
+                            progress_callback(percent, f"Zipping files... ({i+1}/{file_count})")
+
+            if progress_callback:
+                progress_callback(40, "Uploading zip file...")
+
+            remote_key = f"{remote_folder}/{source_id}-pdf.zip"
+            success = storage.upload_file(tmp_path, remote_key)
+
+            if not success:
+                raise Exception(f"Upload failed: {storage.get_last_error()}")
+
+            uploaded_files.append(f"{source_id}-pdf.zip")
+            total_size = os.path.getsize(tmp_path) / (1024*1024)
+        finally:
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+    else:
+        raise Exception(f"Unknown backup type: {backup_type}")
+
+    # Upload schema files (manifest, metadata, index, vectors)
+    if progress_callback:
+        progress_callback(50, "Uploading metadata files...")
+
+    from .local_config import get_local_config
+    config = get_local_config()
+    backup_folder = config.get_backup_folder()
+
+    if backup_folder:
+        source_folder = Path(backup_folder) / source_id
+
+        schema_files = [
+            get_manifest_file(),
+            get_metadata_file(),
+            get_index_file(),
+            get_vectors_file(),
+            get_backup_manifest_file(),
+        ]
+
+        for filename in schema_files:
+            file_path = source_folder / filename
+            if file_path.exists():
+                remote_key = f"{remote_folder}/{filename}"
+                if storage.upload_file(str(file_path), remote_key):
+                    uploaded_files.append(filename)
+                    total_size += file_path.stat().st_size / (1024*1024)
+
+    # Update _master.json in R2
+    if progress_callback:
+        progress_callback(60, "Updating master index in R2...")
+
+    _update_r2_master_json(storage, source_id, source_info, backup_folder)
+
+    # Sync to Pinecone
+    if progress_callback:
+        mode_text = "Replacing" if sync_mode == "replace" else "Syncing"
+        progress_callback(70, f"{mode_text} vectors in Pinecone...")
+
+    pinecone_result = _sync_source_to_pinecone(source_id, progress_callback, sync_mode=sync_mode)
+
+    if progress_callback:
+        progress_callback(100, "Publish complete")
+
+    return {
+        "status": "success",
+        "source_id": source_id,
+        "mode": "publish",
+        "bucket": "backups",
+        "size_mb": round(total_size, 2),
+        "file_count": len(uploaded_files),
+        "files": uploaded_files,
+        "pinecone": pinecone_result,
+        "message": f"Published {source_id} to production ({len(uploaded_files)} files, Pinecone synced)"
+    }
+
+
+def _update_r2_master_json(storage, source_id: str, source_info: dict, backup_folder: str):
+    """
+    Download _master.json from R2, add/update source entry, re-upload.
+    """
+    import tempfile
+
+    # Download existing master.json (or create new)
+    with tempfile.NamedTemporaryFile(suffix='.json', delete=False) as tmp:
+        tmp_path = tmp.name
+
+    master_data = {"version": 2, "sources": {}, "total_documents": 0, "total_chars": 0}
+
+    try:
+        # Try to download existing master.json
+        if storage.download_file("backups/_master.json", tmp_path):
+            with open(tmp_path, 'r', encoding='utf-8') as f:
+                master_data = json.load(f)
+    except Exception:
+        pass  # Use default empty master
+
+    # Load source metadata for counts and manifest for license/name/etc
+    doc_count = 0
+    total_chars = 0
+    manifest_data = {}
+
+    if backup_folder:
+        metadata_path = Path(backup_folder) / source_id / get_metadata_file()
+        manifest_path = Path(backup_folder) / source_id / get_manifest_file()
+
+        if metadata_path.exists():
+            try:
+                with open(metadata_path, 'r', encoding='utf-8') as f:
+                    meta = json.load(f)
+                doc_count = meta.get("document_count", len(meta.get("documents", {})))
+                total_chars = meta.get("total_chars", 0)
+            except Exception:
+                pass
+
+        if manifest_path.exists():
+            try:
+                with open(manifest_path, 'r', encoding='utf-8') as f:
+                    manifest_data = json.load(f)
+            except Exception:
+                pass
+
+    # Update master with this source - include all important fields from manifest
+    if "sources" not in master_data:
+        master_data["sources"] = {}
+
+    from datetime import datetime
+    master_data["sources"][source_id] = {
+        "name": manifest_data.get("name", source_id),
+        "description": manifest_data.get("description", ""),
+        "license": manifest_data.get("license", "Unknown"),
+        "license_verified": manifest_data.get("license_verified", False),
+        "tags": manifest_data.get("tags", []),
+        "total_docs": doc_count,
+        "count": doc_count,  # Alias for compatibility
+        "total_chars": total_chars,
+        "chars": total_chars,  # Alias for compatibility
+        "version": manifest_data.get("version", "1.0.0"),
+        "has_vectors": manifest_data.get("has_vectors", True),
+        "has_backup": manifest_data.get("has_backup", True),
+        "total_size_bytes": manifest_data.get("total_size_bytes", 0),
+        "total_size_mb": manifest_data.get("total_size_bytes", 0) / (1024*1024) if manifest_data.get("total_size_bytes") else 0,
+        "base_url": manifest_data.get("base_url", ""),
+        "source_type": manifest_data.get("source_type", "unknown"),
+        "published_at": datetime.now().isoformat()
+    }
+
+    # Recalculate totals
+    master_data["total_documents"] = sum(s.get("count", 0) for s in master_data["sources"].values())
+    master_data["total_chars"] = sum(s.get("chars", 0) for s in master_data["sources"].values())
+    master_data["last_updated"] = datetime.now().isoformat()
+
+    # Write updated master and upload
+    try:
+        with open(tmp_path, 'w', encoding='utf-8') as f:
+            json.dump(master_data, f, indent=2)
+
+        if not storage.upload_file(tmp_path, "backups/_master.json"):
+            raise Exception(f"Failed to upload _master.json: {storage.get_last_error()}")
+
+    finally:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+
+
+def _sync_source_to_pinecone(source_id: str, progress_callback=None, sync_mode: str = "update") -> dict:
+    """
+    Sync a specific source's vectors to Pinecone.
+
+    Args:
+        source_id: The source to sync
+        progress_callback: Optional callback for progress updates
+        sync_mode: "update" (add/update only) or "replace" (delete old vectors first)
+
+    Returns dict with sync stats.
+    """
+    try:
+        api_key = os.getenv("PINECONE_API_KEY")
+        if not api_key:
+            return {"status": "skipped", "reason": "PINECONE_API_KEY not configured"}
+
+        from offline_tools.vectordb import VectorStore, PineconeStore
+        from offline_tools.vectordb.sync import SyncManager
+
+        local = VectorStore()
+        remote = PineconeStore()
+
+        deleted_count = 0
+
+        # If replace mode, delete existing vectors first
+        if sync_mode == "replace":
+            if progress_callback:
+                progress_callback(75, f"Deleting old vectors for {source_id}...")
+
+            delete_result = remote.delete_by_source(source_id)
+            deleted_count = delete_result.get("deleted_count", 0)
+            print(f"[sync] Deleted {deleted_count} old vectors for {source_id}")
+
+        sync = SyncManager(local, remote)
+        diff = sync.compare(source=source_id)
+
+        if progress_callback:
+            progress_callback(80, f"Pushing {len(diff.to_push)} vectors to Pinecone...")
+
+        # Do the push (not dry run)
+        stats = sync.push(diff, dry_run=False, update=True, force=False)
+
+        return {
+            "status": "success",
+            "sync_mode": sync_mode,
+            "deleted": deleted_count,
+            "pushed": stats.get("pushed", 0),
+            "updated": stats.get("updated", 0),
+            "errors": stats.get("errors", 0)
+        }
+
+    except ImportError as e:
+        return {"status": "skipped", "reason": f"Missing dependency: {str(e)}"}
+    except Exception as e:
+        return {"status": "error", "reason": str(e)}
+
+
 @router.post("/api/upload-backup")
 async def upload_backup_to_cloud(
     request: UploadBackupRequest,
@@ -564,6 +912,10 @@ async def upload_backup_to_cloud(
     Upload a source's backup file to R2 cloud storage.
     Only allows upload if source is complete (config + metadata + backup + verified license).
     Runs as a background job with progress tracking.
+
+    Two modes based on publish_mode flag:
+    - publish_mode=False (default): Submit to submissions bucket for review
+    - publish_mode=True: Publish directly to backups bucket + update master.json + sync Pinecone
 
     REQUIRES: VECTOR_DB_MODE=global
     """
@@ -588,11 +940,19 @@ async def upload_backup_to_cloud(
     try:
         from dotenv import load_dotenv
         load_dotenv()
-        from offline_tools.cloud.r2 import get_r2_storage
-        storage = get_r2_storage()
+
+        if request.publish_mode:
+            # Global admin: use backups bucket
+            from offline_tools.cloud.r2 import get_backups_storage
+            storage = get_backups_storage()
+        else:
+            # Local admin: use submissions bucket
+            from offline_tools.cloud.r2 import get_submissions_storage
+            storage = get_submissions_storage()
 
         if not storage.is_configured():
-            raise HTTPException(500, "R2 cloud storage not configured")
+            bucket_type = "backups" if request.publish_mode else "submissions"
+            raise HTTPException(500, f"R2 {bucket_type} storage not configured")
 
     except ImportError:
         raise HTTPException(500, "Storage module not available. Install boto3.")
@@ -602,13 +962,30 @@ async def upload_backup_to_cloud(
     manager = get_job_manager()
 
     try:
-        job_id = manager.submit(
-            "upload",
-            request.source_id,
-            _run_upload_backup,
-            request.source_id,
-            source_info
-        )
+        if request.publish_mode:
+            # Global admin: publish to production
+            # sync_mode: "update" (add/merge) or "replace" (delete old vectors first)
+            job_id = manager.submit(
+                "upload",
+                request.source_id,
+                _run_publish_to_production,
+                request.source_id,
+                source_info,
+                request.sync_mode  # "update" or "replace"
+            )
+            mode_text = "Replacing" if request.sync_mode == "replace" else "Publishing"
+            message = f"{mode_text} {request.source_id} in production..."
+        else:
+            # Submit for review
+            job_id = manager.submit(
+                "upload",
+                request.source_id,
+                _run_upload_backup,
+                request.source_id,
+                source_info
+            )
+            message = f"Submitting {request.source_id} for review..."
+
     except ValueError as e:
         # Job already running for this source
         raise HTTPException(409, str(e))
@@ -617,7 +994,8 @@ async def upload_backup_to_cloud(
         "status": "submitted",
         "job_id": job_id,
         "source_id": request.source_id,
-        "message": f"Upload job started for {request.source_id}"
+        "publish_mode": request.publish_mode,
+        "message": message
     }
 
 
@@ -788,6 +1166,91 @@ class PineconeSyncRequest(BaseModel):
     """Request model for Pinecone sync operations"""
     source_id: Optional[str] = None  # Filter to specific source
     dry_run: bool = True  # Default to dry run for safety
+    sync_mode: str = "update"  # "update" (add/update only) or "replace" (delete old first)
+
+
+@router.get("/api/pinecone-check-source/{source_id}")
+async def pinecone_check_source(source_id: str):
+    """
+    Check if a source already exists in Pinecone.
+
+    Returns info about existing vectors for conflict detection before upload.
+    """
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+
+        api_key = os.getenv("PINECONE_API_KEY")
+        if not api_key:
+            return {"exists": False, "configured": False, "error": "Pinecone not configured"}
+
+        from offline_tools.vectordb import PineconeStore
+        store = PineconeStore()
+
+        # Get count of vectors for this source
+        vector_count = store.get_source_vector_count(source_id)
+
+        if vector_count > 0:
+            return {
+                "exists": True,
+                "configured": True,
+                "source_id": source_id,
+                "vector_count": vector_count,
+                "message": f"Source '{source_id}' has {vector_count} vectors in Pinecone"
+            }
+        else:
+            return {
+                "exists": False,
+                "configured": True,
+                "source_id": source_id,
+                "vector_count": 0,
+                "message": f"Source '{source_id}' not found in Pinecone"
+            }
+
+    except Exception as e:
+        return {"exists": False, "configured": True, "error": str(e)}
+
+
+@router.delete("/api/pinecone-source/{source_id}")
+async def pinecone_delete_source(
+    source_id: str,
+    _: bool = Depends(_require_global_admin)
+):
+    """
+    Delete all vectors for a specific source from Pinecone.
+
+    REQUIRES: VECTOR_DB_MODE=global
+    """
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+
+        api_key = os.getenv("PINECONE_API_KEY")
+        if not api_key:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "PINECONE_API_KEY not configured"}
+            )
+
+        from offline_tools.vectordb import PineconeStore
+        store = PineconeStore()
+
+        # Delete vectors for this source
+        result = store.delete_by_source(source_id)
+
+        return {
+            "status": "success",
+            "source_id": source_id,
+            "deleted_count": result["deleted_count"],
+            "batches": result["batches"],
+            "message": f"Deleted {result['deleted_count']} vectors for source '{source_id}'"
+        }
+
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"error": str(e)}
+        )
 
 
 @router.post("/api/pinecone-compare")

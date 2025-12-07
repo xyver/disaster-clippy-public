@@ -113,6 +113,43 @@
         @media (max-width: 600px) {
             .container { padding: 1rem; }
         }
+
+        /* Sync mode modal */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.8);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+        }
+        .modal-overlay.show { display: flex; }
+        .modal-content {
+            background: #1a1a2e;
+            border: 1px solid #4ecca3;
+            border-radius: 8px;
+            padding: 1.5rem;
+            max-width: 500px;
+            width: 90%;
+        }
+        .modal-title {
+            color: #f9a825;
+            font-size: 1.1rem;
+            font-weight: 600;
+            margin-bottom: 1rem;
+        }
+        .modal-body { color: #ccc; font-size: 0.9rem; margin-bottom: 1.5rem; }
+        .modal-body strong { color: #4ecca3; }
+        .modal-body .count { color: #e94560; font-weight: 600; }
+        .modal-actions { display: flex; gap: 0.75rem; justify-content: flex-end; }
+        .btn-update { background: #0f3460; border: 1px solid #4ecca3; }
+        .btn-update:hover { background: #1a4a7a; }
+        .btn-replace { background: #5c2030; border: 1px solid #e94560; }
+        .btn-replace:hover { background: #7a2a40; }
     </style>
 </head>
 <body>
@@ -387,7 +424,7 @@
                                     <button class="btn ${isUploaded ? 'btn-uploaded' : 'btn-primary'}"
                                             onclick="uploadSource('${source.source_id}')"
                                             ${!cloudConnected || isUploaded ? 'disabled' : ''}>
-                                        ${isUploaded ? 'Submitted' : 'Submit for Review'}
+                                        ${isUploaded ? (isGlobalAdmin ? 'Published' : 'Submitted') : (isGlobalAdmin ? 'Publish to Production' : 'Submit for Review')}
                                     </button>
                                 ` : `
                                     <button class="btn btn-primary" disabled>
@@ -404,6 +441,9 @@
             }
         }
 
+        // Track pending upload for modal
+        let pendingUploadSourceId = null;
+
         // Upload a source
         async function uploadSource(sourceId) {
             if (!cloudConnected) {
@@ -417,20 +457,75 @@
                 return;
             }
 
-            showToast(`Starting upload for ${sourceId}...`);
+            // Global admin: publish to production (backups bucket + master.json + Pinecone)
+            // Local admin: submit for review (submissions bucket)
+            const publishMode = isGlobalAdmin;
+
+            // For global admin, check if source already exists in Pinecone
+            if (publishMode) {
+                try {
+                    const checkResponse = await fetch(`/useradmin/api/pinecone-check-source/${sourceId}`);
+                    const checkData = await checkResponse.json();
+
+                    if (checkData.exists && checkData.vector_count > 0) {
+                        // Source exists - show modal to choose update or replace
+                        pendingUploadSourceId = sourceId;
+                        document.getElementById('modalSourceId').textContent = sourceId;
+                        document.getElementById('modalVectorCount').textContent = checkData.vector_count;
+                        document.getElementById('syncModeModal').classList.add('show');
+                        return;
+                    }
+                } catch (e) {
+                    console.log('Could not check Pinecone status:', e);
+                    // Continue with default update mode
+                }
+            }
+
+            // Proceed with upload (default: update mode)
+            await doUpload(sourceId, 'update');
+        }
+
+        // Close modal
+        function closeSyncModal() {
+            document.getElementById('syncModeModal').classList.remove('show');
+            pendingUploadSourceId = null;
+        }
+
+        // Proceed with sync after modal choice
+        async function proceedWithSync(syncMode) {
+            const sourceId = pendingUploadSourceId;  // Save before closing modal
+            closeSyncModal();
+            if (sourceId) {
+                await doUpload(sourceId, syncMode);
+            }
+        }
+
+        // Actual upload function
+        async function doUpload(sourceId, syncMode) {
+            const publishMode = isGlobalAdmin;
+            const actionText = syncMode === 'replace' ? 'Replacing' : (publishMode ? 'Publishing' : 'Submitting');
+
+            showToast(`${actionText} ${sourceId}...`);
 
             try {
                 const response = await fetch('/useradmin/api/upload-backup', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ source_id: sourceId })
+                    body: JSON.stringify({
+                        source_id: sourceId,
+                        publish_mode: publishMode,
+                        sync_mode: syncMode
+                    })
                 });
 
                 const data = await response.json();
 
                 if (response.ok && data.status === 'submitted') {
                     // Job submitted - it will run in background
-                    showToast(`Upload job started - check progress below`);
+                    const jobMsg = publishMode
+                        ? 'Publishing to production - check Jobs page for progress'
+                        : 'Submitting for review - check Jobs page for progress';
+                    showToast(jobMsg);
 
                     // Trigger job monitor refresh
                     if (window.jobMonitor) {
@@ -442,6 +537,9 @@
                                 uploadedSources.add(sourceId);
                                 loadSources();
                                 loadCloudBackups();
+                                if (publishMode) {
+                                    showToast(`${sourceId} published to production!`);
+                                }
                             }
                         });
                     }
@@ -450,7 +548,10 @@
                 } else if (response.ok && data.status === 'success') {
                     // Synchronous completion (fallback)
                     uploadedSources.add(sourceId);
-                    showToast(`Submitted ${sourceId} for review (${data.size_mb} MB)`);
+                    const msg = publishMode
+                        ? `Published ${sourceId} to production (${data.size_mb} MB)`
+                        : `Submitted ${sourceId} for review (${data.size_mb} MB)`;
+                    showToast(msg);
                     loadSources();
                     loadCloudBackups();
                 } else {
@@ -542,31 +643,65 @@
 
         // Update page title and Pinecone visibility based on admin mode
         function updateAdminView() {
-            // Use backend admin mode, with localStorage toggle for UI preview only
-            const uiPreview = localStorage.getItem('adminMode') === 'true';
-            const showAsAdmin = isGlobalAdmin || uiPreview;
+            // Use backend admin mode (isGlobalAdmin from API) for actual permissions
+            // Test mode toggle is for UI preview only
+            const testMode = localStorage.getItem('testMode') || 'local';
+            const showAsAdmin = isGlobalAdmin || testMode === 'global';
 
             const title = document.getElementById('pageTitle');
             const subtitle = document.getElementById('pageSubtitle');
             const pineconeLink = document.querySelector('a[href="/useradmin/pinecone"]');
 
-            if (showAsAdmin) {
-                title.textContent = 'Global Admin';
-                subtitle.textContent = 'Manage global cloud backups and user submissions';
+            if (isGlobalAdmin) {
+                title.textContent = 'Cloud Storage (Global Admin)';
+                subtitle.textContent = 'Publish sources to production: R2 backups + master.json + Pinecone';
             } else {
-                title.textContent = 'Local Admin';
-                subtitle.textContent = 'Upload verified source backups to R2 cloud storage';
+                title.textContent = 'Cloud Storage (Local)';
+                subtitle.textContent = 'Submit sources for review before global distribution';
             }
 
             if (pineconeLink) {
-                pineconeLink.style.display = showAsAdmin ? '' : 'none';
+                pineconeLink.style.opacity = showAsAdmin ? '1' : '0.5';
             }
+
+            // Re-render sources to update button text
+            loadSources();
         }
+
+        // Listen for test mode changes
+        window.addEventListener('testModeChanged', updateAdminView);
+
         updateAdminView();
 
     </script>
     <script src="/admin/static/admin-common.js"></script>
-    <script src="/admin/static/mode-toggle.js"></script>
     <script src="/admin/static/job-monitor.js"></script>
+
+    <!-- Sync Mode Modal -->
+    <div id="syncModeModal" class="modal-overlay">
+        <div class="modal-content">
+            <div class="modal-title">Source Already Exists in Pinecone</div>
+            <div class="modal-body">
+                <p><strong id="modalSourceId"></strong> already has <span class="count" id="modalVectorCount"></span> vectors in Pinecone.</p>
+                <p style="margin-top: 1rem;">How would you like to proceed?</p>
+                <ul style="margin-top: 0.5rem; padding-left: 1.5rem; color: #888;">
+                    <li><strong>Update</strong> - Add new vectors, update existing (faster)</li>
+                    <li><strong>Replace</strong> - Delete all old vectors first, then add new (clean slate)</li>
+                </ul>
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" id="btnCloudSyncCancel">Cancel</button>
+                <button class="btn btn-update" id="btnCloudSyncUpdate">Update</button>
+                <button class="btn btn-replace" id="btnCloudSyncReplace">Replace</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Attach event listeners for modal buttons (CSP-compliant)
+        document.getElementById('btnCloudSyncCancel').addEventListener('click', closeSyncModal);
+        document.getElementById('btnCloudSyncUpdate').addEventListener('click', function() { proceedWithSync('update'); });
+        document.getElementById('btnCloudSyncReplace').addEventListener('click', function() { proceedWithSync('replace'); });
+    </script>
 </body>
 </html>
