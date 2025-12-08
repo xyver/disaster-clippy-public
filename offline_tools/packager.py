@@ -15,7 +15,8 @@ import os
 
 from .schemas import (
     get_manifest_file, get_metadata_file, get_index_file,
-    get_vectors_file, get_backup_manifest_file, CURRENT_SCHEMA_VERSION
+    get_vectors_file, get_backup_manifest_file, CURRENT_SCHEMA_VERSION,
+    html_filename_to_url
 )
 
 
@@ -120,18 +121,13 @@ def detect_backup_status(source_id: str, backup_folder: Optional[Path] = None) -
     if not source_folder.exists():
         return result
 
-    # Check ZIM file - first inside source folder, then root (legacy)
+    # Check ZIM file inside source folder
     zim_path = source_folder / f"{source_id}.zim"
     if not zim_path.exists():
         # Also check for any .zim file in the source folder
         zim_files = list(source_folder.glob("*.zim"))
         if zim_files:
             zim_path = zim_files[0]
-        else:
-            # Legacy: check root folder
-            legacy_zim = Path(backup_folder) / f"{source_id}.zim"
-            if legacy_zim.exists():
-                zim_path = legacy_zim
 
     if zim_path.exists():
         result["has_backup"] = True
@@ -399,11 +395,8 @@ def get_source_sync_status(source_id: str) -> Dict[str, Any]:
 
     source_folder = backup_path / source_id
 
-    # Get indexed URLs from metadata (v3 or legacy)
+    # Get indexed URLs from metadata
     metadata_file = source_folder / get_metadata_file()
-    if not metadata_file.exists():
-        metadata_file = source_folder / f"{source_id}_metadata.json"
-
     if metadata_file.exists():
         try:
             with open(metadata_file, 'r', encoding='utf-8') as f:
@@ -416,13 +409,8 @@ def get_source_sync_status(source_id: str) -> Dict[str, Any]:
         except Exception:
             pass
 
-    # Get backed up URLs from backup manifest (v3 or legacy)
+    # Get backed up URLs from backup manifest
     manifest_file = source_folder / get_backup_manifest_file()
-    if not manifest_file.exists():
-        manifest_file = source_folder / f"{source_id}_backup_manifest.json"
-    if not manifest_file.exists():
-        manifest_file = source_folder / "manifest.json"
-
     if manifest_file.exists():
         try:
             with open(manifest_file, 'r', encoding='utf-8') as f:
@@ -452,7 +440,7 @@ def generate_metadata_from_html(
     Scan an HTML backup folder and generate metadata.
 
     Args:
-        backup_path: Path to the HTML backup folder
+        backup_path: Path to the HTML backup folder (typically the pages/ subfolder)
         source_id: Source identifier
         save: Whether to save the metadata file
 
@@ -464,6 +452,25 @@ def generate_metadata_from_html(
     html_path = Path(backup_path)
     if not html_path.exists() or not html_path.is_dir():
         raise ValueError(f"Backup path does not exist: {backup_path}")
+
+    # Check for backup_manifest.json in parent folder (source folder)
+    # The manifest has URL-to-filename mapping
+    source_folder = html_path.parent if html_path.name == "pages" else html_path
+    manifest_path = source_folder / get_backup_manifest_file()
+    url_mapping = {}  # filename -> url path
+
+    if manifest_path.exists():
+        try:
+            with open(manifest_path, 'r', encoding='utf-8') as f:
+                manifest_data = json.load(f)
+            # Build reverse lookup: filename -> url_path
+            for url_path, page_info in manifest_data.get("pages", {}).items():
+                filename = page_info.get("filename", "")
+                if filename:
+                    url_mapping[filename] = url_path
+            print(f"Loaded {len(url_mapping)} URL mappings from backup manifest")
+        except Exception as e:
+            print(f"Warning: Could not load backup manifest: {e}")
 
     documents = {}
     total_chars = 0
@@ -493,18 +500,31 @@ def generate_metadata_from_html(
             # Generate content hash
             content_hash = hashlib.md5(text.encode()).hexdigest()[:12]
 
-            # Relative path as URL
+            # Get filename relative to html_path
             rel_path = html_file.relative_to(html_path)
-            url = str(rel_path).replace('\\', '/')
+            filename = str(rel_path).replace('\\', '/')
+
+            # Look up proper URL from backup manifest, or construct from filename
+            if filename in url_mapping:
+                url = url_mapping[filename]
+            else:
+                # Fallback: use centralized filename conversion
+                url = html_filename_to_url(filename)
+
+            # Build local_url for offline serving
+            local_url = f"/backup/{source_id}/{filename}"
 
             # Use same ID format as indexer: MD5 hash of source_id:url
             doc_id = hashlib.md5(f"{source_id}:{url}".encode()).hexdigest()
             documents[doc_id] = {
                 "title": title,
                 "url": url,
+                "local_url": local_url,
                 "content_hash": content_hash,
                 "scraped_at": datetime.now().isoformat(),
-                "char_count": char_count
+                "char_count": char_count,
+                "categories": [],
+                "doc_type": "article"
             }
 
         except Exception as e:
@@ -516,7 +536,7 @@ def generate_metadata_from_html(
 
     # Create metadata structure
     metadata = {
-        "version": 2,
+        "schema_version": 3,
         "source_id": source_id,
         "source_type": "html",
         "last_updated": datetime.now().isoformat(),
@@ -766,20 +786,13 @@ def remove_from_master(source_id: str) -> bool:
 
 
 def load_metadata(source_id: str) -> Optional[Dict[str, Any]]:
-    """Load metadata for a source from backup folder (v3 or legacy)"""
+    """Load metadata for a source from backup folder"""
     backup_dir = get_backup_path()
     source_dir = backup_dir / source_id
 
-    # Try v3 format first
     metadata_path = source_dir / get_metadata_file()
     if metadata_path.exists():
         with open(metadata_path, 'r', encoding='utf-8') as f:
-            return json.load(f)
-
-    # Try legacy format
-    legacy_path = source_dir / f"{source_id}_metadata.json"
-    if legacy_path.exists():
-        with open(legacy_path, 'r', encoding='utf-8') as f:
             return json.load(f)
 
     return None

@@ -202,11 +202,13 @@ Open your browser:
 | `admin/ai_service.py` | Unified AI search and response service |
 | `admin/connection_manager.py` | Smart connectivity detection and mode switching |
 | `admin/zim_server.py` | ZIM content server for offline browsing |
+| `admin/backup_server.py` | HTML backup content server for offline browsing |
 | `offline_tools/source_manager.py` | Unified source creation interface |
 | `offline_tools/packager.py` | Metadata and index generation |
 | `offline_tools/indexer.py` | Indexers for HTML, ZIM, PDF |
 | `offline_tools/zim_utils.py` | ZIM inspection and metadata utilities |
-| `offline_tools/backup/` | HTML and Substack backup tools |
+| `offline_tools/backup/html.py` | HTML website scraper with BFS crawling |
+| `offline_tools/backup/substack.py` | Substack newsletter backup |
 | `offline_tools/scraper/` | Web scrapers (MediaWiki, Fandom, static sites) |
 | `offline_tools/vectordb/` | Vector store implementations |
 | `offline_tools/cloud/r2.py` | Cloudflare R2 client |
@@ -443,6 +445,35 @@ Multi-language ZIM files (like Appropedia) contain articles in many languages. U
 - Language keywords after separators (e.g., `Solar cooker - Vietnamese`)
 
 Note: Articles with no detectable language marker are included by default (they may be in the target language without explicit marking).
+
+### HTML Backup Offline Browsing
+
+The HTML backup server (`admin/backup_server.py`) enables offline browsing of HTML backup content. When users click on a search result from an HTML source, they browse the archived content locally.
+
+**Routes:**
+
+| Endpoint | Purpose |
+|----------|---------|
+| `/backup/{source_id}/{path}` | Serve HTML page from backup |
+| `/backup/{source_id}` | Serve source index page or listing |
+| `/backup/api/sources` | List all available HTML backup sources |
+
+**Features:**
+
+- **Internal Link Rewriting**: Converts relative and absolute links to `/backup/` URLs
+- **Dead Site Handling**: Rewrites absolute URLs matching `base_url` to local backup URLs
+- **Navigation Button**: Floating "Back to Search" button in bottom-right corner
+- **MIME Type Detection**: Serves HTML, images, CSS with correct content types
+- **Auto-Index Generation**: Creates a listing page if no index.html exists
+
+**Link Rewriting Examples:**
+
+```
+href="/path/page.html"           -> href="/backup/{source_id}/path/page.html"
+href="../page.html"              -> href="/backup/{source_id}/page.html"
+src="/images/foo.png"            -> src="/backup/{source_id}/images/foo.png"
+href="https://example.com/page"  -> href="/backup/{source_id}/page" (if base_url matches)
+```
 
 ### ZIM Offline Browsing
 
@@ -731,18 +762,125 @@ Recommended starter ZIMs:
 
 ### Creating HTML Backups
 
-**Option 1: Browser Save**
+**Option 1: Admin Panel Scraper (Recommended)**
+
+The Source Tools page includes a built-in web scraper with link following. This is the easiest way to backup static websites.
+
+1. Go to `/useradmin/` -> Source Tools
+2. Select or create a source with `backup_type: html`
+3. Enter the site's base URL or sitemap URL
+4. Configure scrape settings (see below)
+5. Click "Start Scrape"
+
+**Option 2: Browser Save**
 - Visit any page and use "Save As" -> "Webpage, Complete"
 - Organize saved pages into folders by source
 
-**Option 2: Use the built-in scrapers**
+**Option 3: CLI Scrapers**
 ```bash
 python cli/ingest.py scrape mediawiki --url https://wiki.example.org --output ./backups/mywiki
 ```
 
-**Option 3: HTTrack / wget**
+**Option 4: HTTrack / wget**
 - Use [HTTrack](https://www.httrack.com/) to mirror websites
 - Or use wget: `wget -r -l 2 -p https://example.com`
+
+### HTML Backup Scraper (Admin Panel)
+
+The built-in scraper (`offline_tools/backup/html.py`) supports intelligent crawling of static websites.
+
+#### Scrape Settings
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| **Page Limit** | 100 | Maximum pages to download |
+| **Max Depth** | 3 | How many link levels deep to crawl (0 = only starting pages) |
+| **Delay (sec)** | 0.5 | Wait time between requests (be nice to servers) |
+| **Follow Links** | Yes | Discover new pages by following links on downloaded pages |
+| **Include Assets** | No | Download images/CSS (slower, uses more space) |
+
+#### URL Discovery Methods
+
+The scraper tries multiple methods to find pages:
+
+1. **XML Sitemap** (`/sitemap.xml`) - Standard XML format with `<url><loc>` tags
+2. **Sitemap Index** - Handles multi-sitemap sites automatically
+3. **HTML Sitemap Pages** - Extracts links from HTML pages (e.g., `/SiteMap.htm`)
+4. **Link Following** - Discovers new pages by parsing links from downloaded content
+
+**Tip:** Use "Check Sitemap" button to preview page count before starting a full scrape.
+
+#### Breadth-First Crawling
+
+The scraper uses breadth-first search (BFS):
+- Downloads all depth-0 pages first (from sitemap/start page)
+- Then all depth-1 pages (links found on depth-0 pages)
+- Then depth-2, depth-3, etc.
+
+This ensures broad coverage before going deep into any single branch.
+
+#### Resume Support
+
+The scraper tracks what's already backed up:
+- Checks `backup_manifest.json` for existing pages
+- Skips already-downloaded pages automatically
+- Shows "Existing manifest has X pages backed up" on start
+
+To continue a partial scrape, just run again with the same source - it picks up where it left off.
+
+#### Completion Summary
+
+When a scrape finishes, you'll see:
+```
+--- Scrape Complete ---
+New pages saved: 500
+Total pages backed up: 1000
+Assets downloaded: 715
+Errors: 3
+URLs still in queue: 402 (set limit to 1402 to get all)
+```
+
+The "URLs still in queue" tells you how many discovered pages weren't downloaded due to the page limit. Use this to set the limit for your next run.
+
+#### API Usage
+
+```python
+from offline_tools.backup.html import run_backup
+
+result = run_backup(
+    backup_path="D:/disaster-backups",
+    source_id="mysite",
+    base_url="https://example.com",
+    scraper_type="static",  # or "mediawiki"
+    page_limit=500,
+    include_assets=False,
+    follow_links=True,
+    max_depth=3,
+    request_delay=0.5,
+    sitemap_url="https://example.com/sitemap.xml"  # optional
+)
+
+# Result includes:
+# - pages_saved: New pages downloaded this run
+# - total_backed_up: Total pages in manifest
+# - queued_remaining: URLs discovered but not downloaded
+# - errors: List of failed URLs
+```
+
+#### Output Structure
+
+```
+BACKUP_PATH/mysite/
+|-- backup_manifest.json    # URL-to-file mapping
+|-- index.html              # Auto-generated browse page
+|-- pages/                  # Downloaded HTML files
+|   |-- Projects_Solar.html
+|   |-- Projects_Water.html
+|   +-- ...
++-- assets/                 # Images, CSS (if enabled)
+    |-- logo.png
+    +-- style.css
+```
 
 ---
 
@@ -846,42 +984,32 @@ To recover:
 
 ---
 
-## Legacy Migration Code (DELETE AFTER MIGRATIONS COMPLETE)
+## Legacy Migration Code
 
-The following locations contain legacy file format handling that can be deleted once all sources have been migrated to the current schema. Search for "LEGACY" or "legacy" to find these.
+Most legacy fallback code has been removed. The following locations still contain legacy handling that may be useful:
 
-**Files with legacy fallback code to remove:**
+**Remaining legacy code (intentionally kept):**
 
-| File | Lines | Description |
-|------|-------|-------------|
-| `offline_tools/backup/html.py` | 61-87 | Legacy manifest paths and migration logic |
-| `offline_tools/indexer.py` | 555-556 | Legacy backup manifest path fallbacks |
-| `offline_tools/packager.py` | 123-134 | Legacy ZIM location check |
-| `offline_tools/packager.py` | 402-424 | Legacy metadata/manifest fallback reads |
-| `offline_tools/packager.py` | 582-598 | `load_metadata()` legacy format fallback |
-| `offline_tools/source_manager.py` | 78-97 | `SourceHealth` legacy fields |
-| `offline_tools/source_manager.py` | 547-650 | `cleanup_redundant_files()` - keep function but simplify |
-| `offline_tools/source_manager.py` | 1185-1189 | Legacy manifest path check |
-| `offline_tools/source_manager.py` | 1391-1413 | Legacy embeddings format checks |
-| `offline_tools/source_manager.py` | 1472-1504 | Legacy file detection in health check |
-| `offline_tools/source_manager.py` | 1597-1642 | Legacy metadata/manifest fallbacks |
-| `offline_tools/source_manager.py` | 1713-1716 | Legacy metadata fallback |
-| `offline_tools/vectordb/pinecone_store.py` | 332 | Legacy _master.json path |
+| File | Lines (approx) | Description | Reason to Keep |
+|------|----------------|-------------|----------------|
+| `offline_tools/backup/html.py` | 61-88 | Auto-migrates old manifest formats | Handles old cloud downloads |
+| `offline_tools/backup/html.py` | 730-733 | Backup manifest path check | Used by resume detection |
+| `offline_tools/source_manager.py` | 673-771 | `cleanup_redundant_files()` | Actively cleans legacy files |
+| `offline_tools/source_manager.py` | 1735-1739 | Manifest path in get_sync_status | May handle edge cases |
+| `offline_tools/vectordb/pinecone_store.py` | 441 | Legacy _master.json path | Cloud compatibility |
 
-**Legacy file patterns being checked:**
-- `{source_id}_metadata.json` -> now `_metadata.json`
-- `{source_id}_backup_manifest.json` -> now `backup_manifest.json`
-- `{source_id}_source.json` -> now `_manifest.json`
-- `{source_id}_documents.json` -> now `_metadata.json`
-- `{source_id}_embeddings.json` -> now `_vectors.json`
-- `{source_id}_index.json` -> now `_index.json`
-- `{source_id}_manifest.json` -> merged into `_manifest.json`
+**Cleaned up (removed 2024-12):**
+- `source_manager.py`: `suggest_tags()`, `analyze_metadata_for_tags()`, `discover_novel_used_tags()`, `detect_license()`
+- `packager.py`: `load_metadata()`, `get_source_sync_status()`, ZIM root folder check
+- `indexer.py`: HTMLBackupIndexer manifest candidates
+- `vectordb/metadata.py`: `_get_source_file()` legacy path
 
-**To clean up after migrations:**
-1. Run `cleanup_redundant_files()` on all sources via Source Tools
-2. Verify no sources have legacy files remaining
-3. Delete the fallback code paths listed above
-4. Simplify `SourceHealth` dataclass to remove legacy fields
+**Current file naming (v3 schema):**
+- `_manifest.json` - source identity and config
+- `_metadata.json` - document metadata
+- `_index.json` - full content index
+- `_vectors.json` - embeddings
+- `backup_manifest.json` - URL to file mapping
 
 ---
 

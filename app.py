@@ -44,6 +44,9 @@ from admin.routes import sourcepacks_router
 # Import ZIM server for offline browsing
 from admin.zim_server import router as zim_router
 
+# Import HTML backup server for offline browsing
+from admin.backup_server import router as backup_router
+
 # Import unified AI service and connection manager
 from admin.ai_service import get_ai_service, SearchMethod, ResponseMethod
 from admin.connection_manager import get_connection_manager, sync_mode_from_config, ConnectionState
@@ -123,6 +126,9 @@ app.include_router(sourcepacks_router)
 
 # Include ZIM server for offline browsing
 app.include_router(zim_router)
+
+# Include HTML backup server for offline browsing
+app.include_router(backup_router)
 
 
 @app.on_event("startup")

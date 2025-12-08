@@ -257,7 +257,7 @@ The codebase was recently consolidated from two repos (private + public):
 - Status boxes for validation
 - Pinecone sync functionality
 - Route refactoring (extracted API into modular route files)
-- Removed all legacy/backwards compatibility code
+- Working on removing all legacy/backwards compatibility code
 
 ### Features (Complete)
 

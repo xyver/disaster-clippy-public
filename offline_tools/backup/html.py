@@ -25,11 +25,12 @@ class HTMLBackupScraper:
     Scrapes websites and saves raw HTML + assets for offline viewing.
     """
 
-    def __init__(self, backup_path, source_id, base_url, scraper_type="mediawiki"):
+    def __init__(self, backup_path, source_id, base_url, scraper_type="mediawiki", sitemap_url=None):
         self.backup_path = Path(backup_path)
         self.source_id = source_id
         self.base_url = base_url.rstrip("/")
         self.scraper_type = scraper_type
+        self.sitemap_url = sitemap_url  # Optional custom sitemap URL
 
         # Create output directories (flat structure - source_id folder directly in backup root)
         self.output_dir = self.backup_path / source_id
@@ -125,16 +126,40 @@ class HTMLBackupScraper:
         return safe_name + ".html"
 
     def _fetch_page(self, url):
-        """Fetch a page with error handling"""
+        """
+        Fetch a page with error handling.
+
+        Returns tuple: (html_content, error_type)
+        - (content, None) on success
+        - (None, "404") on 404 Not Found (dead link - expected)
+        - (None, "server") on 5xx, timeout, connection error (server issue)
+        """
         try:
             response = self.session.get(url, timeout=30)
             response.raise_for_status()
-            return response.text
+            return response.text, None
+        except requests.exceptions.HTTPError as e:
+            error_msg = f"Failed to fetch {url}: {str(e)}"
+            self.errors.append(error_msg)
+            print(f"  [ERROR] {error_msg}")
+            # 404 = dead link (expected), 5xx = server error
+            if response.status_code == 404:
+                return None, "404"
+            elif response.status_code >= 500:
+                return None, "server"
+            else:
+                # 403, 401, etc. - treat as dead link, not server issue
+                return None, "client"
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+            error_msg = f"Failed to fetch {url}: {str(e)}"
+            self.errors.append(error_msg)
+            print(f"  [ERROR] {error_msg}")
+            return None, "server"
         except Exception as e:
             error_msg = f"Failed to fetch {url}: {str(e)}"
             self.errors.append(error_msg)
             print(f"  [ERROR] {error_msg}")
-            return None
+            return None, "unknown"
 
     def _get_wiki_pages(self, limit=100):
         """Get list of wiki pages using MediaWiki API"""
@@ -178,7 +203,7 @@ class HTMLBackupScraper:
         """Fallback method to get wiki pages by scraping"""
         try:
             all_pages_url = f"{self.base_url}/wiki/Special:AllPages"
-            html = self._fetch_page(all_pages_url)
+            html, _ = self._fetch_page(all_pages_url)
             if html:
                 soup = BeautifulSoup(html, "html.parser")
                 for link in soup.select(".mw-allpages-body a, .allpageslist a"):
@@ -191,6 +216,235 @@ class HTMLBackupScraper:
                             break
         except Exception as e:
             self.errors.append(f"Fallback scrape error: {str(e)}")
+
+    def _get_sitemap_pages(self, limit=100, sitemap_path="/sitemap.xml"):
+        """Get list of pages from sitemap.xml for static sites"""
+        pages = []
+
+        # Use custom sitemap URL if provided, otherwise construct from base_url
+        if self.sitemap_url:
+            sitemap_url = self.sitemap_url
+        else:
+            sitemap_url = f"{self.base_url}{sitemap_path}"
+
+        try:
+            print(f"Fetching sitemap from {sitemap_url}")
+            response = self.session.get(sitemap_url, timeout=30)
+            response.raise_for_status()
+
+            # Try xml parser first
+            soup = BeautifulSoup(response.text, "xml")
+
+            # Check for sitemap index (multiple sitemaps)
+            sitemap_tags = soup.find_all("sitemap")
+            if sitemap_tags:
+                print(f"Found sitemap index with {len(sitemap_tags)} sub-sitemaps")
+                for sitemap in sitemap_tags:
+                    loc = sitemap.find("loc")
+                    if loc and len(pages) < limit:
+                        sub_pages = self._fetch_sub_sitemap(loc.text, limit - len(pages))
+                        pages.extend(sub_pages)
+            else:
+                # Regular sitemap - extract URLs
+                url_tags = soup.find_all("url")
+
+                # If xml parser found nothing, try html.parser
+                if len(url_tags) == 0:
+                    print("XML parser found 0 URLs, trying html.parser...")
+                    soup = BeautifulSoup(response.text, "html.parser")
+                    url_tags = soup.find_all("url")
+
+                # If still nothing, use regex fallback
+                if len(url_tags) == 0:
+                    print("BeautifulSoup found 0 URLs, using regex fallback...")
+                    import re
+                    loc_pattern = re.compile(r'<loc[^>]*>([^<]+)</loc>', re.IGNORECASE)
+                    loc_matches = loc_pattern.findall(response.text)
+                    print(f"Regex found {len(loc_matches)} <loc> tags")
+
+                    if len(loc_matches) > 0:
+                        # Found XML-style loc tags via regex
+                        for url in loc_matches:
+                            url = url.strip()
+                            lower_url = url.lower()
+                            if any(lower_url.endswith(ext) for ext in [
+                                '.jpg', '.jpeg', '.png', '.gif', '.pdf', '.zip',
+                                '.doc', '.docx', '.xls', '.xlsx', '.mp3', '.mp4'
+                            ]):
+                                continue
+
+                            parsed = urlparse(url)
+                            path = parsed.path.strip("/")
+                            title = path.split("/")[-1] if path else "Home"
+                            title = title.replace(".htm", "").replace(".html", "").replace("_", " ").replace("-", " ")
+                            if not title:
+                                title = "Home"
+
+                            pages.append({"title": title, "url": url})
+                            if len(pages) >= limit:
+                                break
+                    else:
+                        # No XML sitemap - check if it's an HTML page with links
+                        content_type = response.headers.get("Content-Type", "").lower()
+                        if "text/html" in content_type or response.text.strip().startswith("<!"):
+                            print("Detected HTML page, extracting links...")
+                            html_soup = BeautifulSoup(response.text, "html.parser")
+                            seen_urls = set()
+
+                            for link in html_soup.find_all("a", href=True):
+                                href = link["href"]
+                                full_url = urljoin(sitemap_url, href)
+
+                                # Only include internal links
+                                if not full_url.startswith(self.base_url):
+                                    continue
+
+                                # Skip anchors
+                                if "#" in full_url:
+                                    full_url = full_url.split("#")[0]
+
+                                lower_url = full_url.lower()
+                                if any(lower_url.endswith(ext) for ext in [
+                                    '.jpg', '.jpeg', '.png', '.gif', '.pdf', '.zip',
+                                    '.doc', '.docx', '.xls', '.xlsx', '.mp3', '.mp4', '.css', '.js'
+                                ]):
+                                    continue
+
+                                if full_url not in seen_urls:
+                                    seen_urls.add(full_url)
+                                    # Get title from link text or URL
+                                    link_text = link.get_text(strip=True)
+                                    if link_text and len(link_text) < 100:
+                                        title = link_text
+                                    else:
+                                        parsed = urlparse(full_url)
+                                        path = parsed.path.strip("/")
+                                        title = path.split("/")[-1] if path else "Home"
+                                        title = title.replace(".htm", "").replace(".html", "").replace("_", " ")
+
+                                    pages.append({"title": title, "url": full_url})
+                                    if len(pages) >= limit:
+                                        break
+
+                            print(f"Extracted {len(pages)} links from HTML page")
+                else:
+                    # Process url_tags from BeautifulSoup
+                    for url_tag in url_tags:
+                        loc = url_tag.find("loc")
+                        if loc:
+                            url = loc.text
+                            # Skip non-HTML content
+                            lower_url = url.lower()
+                            if any(lower_url.endswith(ext) for ext in [
+                                '.jpg', '.jpeg', '.png', '.gif', '.pdf', '.zip',
+                                '.doc', '.docx', '.xls', '.xlsx', '.mp3', '.mp4'
+                            ]):
+                                continue
+
+                            # Extract title from URL path
+                            parsed = urlparse(url)
+                            path = parsed.path.strip("/")
+                            title = path.split("/")[-1] if path else "Home"
+                            title = title.replace(".htm", "").replace(".html", "").replace("_", " ").replace("-", " ")
+                            if not title:
+                                title = "Home"
+
+                            pages.append({"title": title, "url": url})
+
+                            if len(pages) >= limit:
+                                break
+
+            print(f"Found {len(pages)} pages in sitemap")
+
+        except Exception as e:
+            error_msg = f"Sitemap error: {str(e)}"
+            self.errors.append(error_msg)
+            print(f"  [ERROR] {error_msg}")
+            # Fallback: crawl from homepage
+            print("Falling back to link crawling...")
+            pages = self._crawl_links(limit)
+
+        return pages[:limit]
+
+    def _fetch_sub_sitemap(self, sitemap_url, limit):
+        """Fetch URLs from a sub-sitemap"""
+        pages = []
+        try:
+            response = self.session.get(sitemap_url, timeout=30)
+            response.raise_for_status()
+
+            soup = BeautifulSoup(response.text, "xml")
+            for url_tag in soup.find_all("url"):
+                loc = url_tag.find("loc")
+                if loc:
+                    url = loc.text
+                    lower_url = url.lower()
+                    if any(lower_url.endswith(ext) for ext in [
+                        '.jpg', '.jpeg', '.png', '.gif', '.pdf', '.zip'
+                    ]):
+                        continue
+
+                    parsed = urlparse(url)
+                    path = parsed.path.strip("/")
+                    title = path.split("/")[-1] if path else "Home"
+                    title = title.replace(".htm", "").replace(".html", "").replace("_", " ")
+
+                    pages.append({"title": title, "url": url})
+                    if len(pages) >= limit:
+                        break
+
+        except Exception as e:
+            self.errors.append(f"Sub-sitemap error {sitemap_url}: {str(e)}")
+
+        return pages
+
+    def _crawl_links(self, limit=100):
+        """Crawl site by following links (fallback if no sitemap)"""
+        pages = []
+        visited = set()
+        to_visit = [self.base_url]
+
+        while to_visit and len(pages) < limit:
+            url = to_visit.pop(0)
+            if url in visited:
+                continue
+            visited.add(url)
+
+            html, _ = self._fetch_page(url)
+            if not html:
+                continue
+
+            # Extract title
+            soup = BeautifulSoup(html, "html.parser")
+            title_elem = soup.find("title")
+            title = title_elem.get_text(strip=True) if title_elem else url.split("/")[-1]
+
+            pages.append({"title": title, "url": url})
+
+            # Find links to follow
+            for link in soup.find_all("a", href=True):
+                href = link["href"]
+                full_url = urljoin(url, href)
+
+                # Only follow internal links
+                if not full_url.startswith(self.base_url):
+                    continue
+
+                # Skip anchors
+                if "#" in full_url:
+                    full_url = full_url.split("#")[0]
+
+                # Skip non-HTML
+                lower_url = full_url.lower()
+                if any(lower_url.endswith(ext) for ext in ['.jpg', '.png', '.pdf', '.zip']):
+                    continue
+
+                if full_url not in visited and full_url not in to_visit:
+                    to_visit.append(full_url)
+
+            time.sleep(0.3)  # Be nice
+
+        return pages
 
     def _download_asset(self, asset_url, include_assets=True):
         """Download an asset (image, CSS, JS) if not already downloaded"""
@@ -395,7 +649,7 @@ class HTMLBackupScraper:
 
             print(f"[{i+1}/{len(corrupted)}] Repairing: {title}")
 
-            html = self._fetch_page(url)
+            html, _ = self._fetch_page(url)
             if not html:
                 errors.append(f"Failed to fetch: {url}")
                 continue
@@ -435,7 +689,8 @@ class HTMLBackupScraper:
         }
 
     def backup(self, page_limit=100, include_assets=True, progress_callback=None, priority_urls=None,
-               max_consecutive_failures=5, stop_callback=None):
+               max_consecutive_failures=5, stop_callback=None, follow_links=True, max_depth=3,
+               request_delay=0.5):
         """
         Main backup method.
 
@@ -446,9 +701,16 @@ class HTMLBackupScraper:
             priority_urls: List of URLs to prioritize (e.g., already indexed pages)
             max_consecutive_failures: Stop after this many consecutive failures (default 5)
             stop_callback: Function() that returns True if backup should stop
+            follow_links: Whether to discover and follow links from downloaded pages (default True)
+            max_depth: Maximum link depth to follow (default 3, 0=only initial pages)
+            request_delay: Seconds to wait between requests (default 0.5)
         """
         print(f"Starting HTML backup of {self.source_id}")
         print(f"Output directory: {self.output_dir}")
+        print(f"Follow links: {follow_links}, Max depth: {max_depth}, Delay: {request_delay}s")
+
+        # Track URL depths for link following
+        url_depths = {}  # url -> depth level
 
         # Get list of pages
         if progress_callback:
@@ -457,8 +719,12 @@ class HTMLBackupScraper:
         if self.scraper_type == "mediawiki":
             pages = self._get_wiki_pages(limit=page_limit)
         else:
-            # For static sites, start from base URL and crawl
-            pages = [{"title": "Home", "url": self.base_url}]
+            # For static sites, use sitemap (with crawl fallback)
+            pages = self._get_sitemap_pages(limit=page_limit)
+
+        # Mark initial pages as depth 0
+        for p in pages:
+            url_depths[p["url"]] = 0
 
         if not pages:
             self.errors.append("No pages found to backup")
@@ -489,49 +755,136 @@ class HTMLBackupScraper:
             pages = pages[:page_limit]
 
         # Check how many are already backed up
-        already_backed_up = sum(1 for p in pages if p["url"] in self.manifest.get("pages", {}))
-        new_pages = [p for p in pages if p["url"] not in self.manifest.get("pages", {})]
+        manifest_pages = self.manifest.get("pages", {})
+        already_backed_up = sum(1 for p in pages if p["url"] in manifest_pages)
+        new_pages = [p for p in pages if p["url"] not in manifest_pages]
 
         # Count how many priority pages need backup
         priority_to_backup = sum(1 for p in new_pages if p.get("url") in (priority_urls or []))
 
-        print(f"Found {len(pages)} pages total")
-        print(f"Already backed up: {already_backed_up}")
-        print(f"New pages to download: {len(new_pages)}")
+        print(f"Found {len(pages)} pages from sitemap/start page")
+        print(f"Existing manifest has {len(manifest_pages)} pages backed up")
+        print(f"Of starting pages, {already_backed_up} already in manifest, {len(new_pages)} new")
         if priority_urls:
             print(f"Priority (indexed) pages to backup: {priority_to_backup}")
 
-        # Download each NEW page (skip already backed up)
+        # Use a queue for dynamic link discovery
+        from collections import deque
+        page_queue = deque(new_pages)
+        queued_urls = {p["url"] for p in new_pages}  # Track what's already in queue
+
+        # Load saved queue from previous scrape (resume support)
+        saved_queue = self.manifest.get("queued_urls", [])
+        if saved_queue:
+            loaded_count = 0
+            for item in saved_queue:
+                url = item.get("url") if isinstance(item, dict) else item
+                if url and url not in manifest_pages and url not in queued_urls:
+                    title = item.get("title", url.split("/")[-1]) if isinstance(item, dict) else url.split("/")[-1]
+                    page_queue.append({"title": title, "url": url})
+                    queued_urls.add(url)
+                    url_depths[url] = 1  # Assume depth 1 for resumed items
+                    loaded_count += 1
+            if loaded_count > 0:
+                print(f"Loaded {loaded_count} URLs from previous queue (resume)")
+            # Clear saved queue since we've loaded it
+            self.manifest["queued_urls"] = []
+            self.manifest["queued_count"] = 0
+
+        # If no new pages but we have backed up pages, re-scan them for link discovery
+        if len(page_queue) == 0 and follow_links and manifest_pages:
+            print(f"No new pages from sitemap - scanning {min(100, len(manifest_pages))} backed up pages for new links...")
+            rescan_count = 0
+            for url, info in list(manifest_pages.items())[:100]:
+                filename = info.get("filename")
+                if not filename:
+                    continue
+                filepath = self.pages_dir / filename
+                if not filepath.exists():
+                    continue
+
+                try:
+                    with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                        html = f.read()
+                    soup = BeautifulSoup(html, "html.parser")
+
+                    # Extract links from this page
+                    for link in soup.find_all("a", href=True):
+                        href = link["href"]
+                        full_url = urljoin(url, href)
+
+                        # Only internal links
+                        if not full_url.startswith(self.base_url):
+                            continue
+                        full_url = full_url.split("#")[0].split("?")[0]
+                        if not full_url or full_url == url:
+                            continue
+
+                        # Skip non-HTML
+                        lower_url = full_url.lower()
+                        if any(lower_url.endswith(ext) for ext in [
+                            '.jpg', '.jpeg', '.png', '.gif', '.pdf', '.zip',
+                            '.doc', '.docx', '.xls', '.xlsx', '.mp3', '.mp4', '.css', '.js'
+                        ]):
+                            continue
+
+                        # Add to queue if not already backed up or queued
+                        if full_url not in manifest_pages and full_url not in queued_urls:
+                            link_text = link.get_text(strip=True)
+                            link_title = link_text if link_text and len(link_text) < 100 else full_url.split("/")[-1]
+                            page_queue.append({"title": link_title, "url": full_url})
+                            queued_urls.add(full_url)
+                            url_depths[full_url] = 1
+                            rescan_count += 1
+                except Exception as e:
+                    continue
+
+            if rescan_count > 0:
+                print(f"    -> Found {rescan_count} new URLs from local page scan")
+
+        # Download pages from queue (with dynamic link discovery)
         consecutive_failures = 0
         stopped_early = False
+        pages_processed = 0
 
-        for i, page in enumerate(new_pages):
+        while page_queue and self.pages_saved < page_limit:
             # Check if we should stop
             if stop_callback and stop_callback():
                 print("Backup stopped by user")
                 stopped_early = True
                 break
 
+            page = page_queue.popleft()
             url = page["url"]
             title = page["title"]
+            current_depth = url_depths.get(url, 0)
 
             if url in self.visited_urls:
                 continue
 
+            pages_processed += 1
+
             if progress_callback:
-                progress_callback(i + 1, len(new_pages), f"Downloading: {title} ({already_backed_up + i + 1}/{len(pages)} total)")
+                progress_callback(self.pages_saved + 1, page_limit,
+                    f"Downloading: {title} (depth {current_depth}, {len(page_queue)} queued)")
 
-            print(f"[{i+1}/{len(pages)}] {title}")
+            print(f"[{self.pages_saved + 1}/{page_limit}] (d{current_depth}) {title}")
 
-            html = self._fetch_page(url)
+            html, error_type = self._fetch_page(url)
             if not html:
-                consecutive_failures += 1
-                if consecutive_failures >= max_consecutive_failures:
-                    error_msg = f"Stopping after {max_consecutive_failures} consecutive failures. Last errors: {self.errors[-3:]}"
-                    print(f"\n{error_msg}")
-                    self.errors.append(error_msg)
-                    stopped_early = True
-                    break
+                # Only count server errors (5xx, timeout) as consecutive failures
+                # 404s are expected dead links, not a sign the server is down
+                if error_type == "server":
+                    consecutive_failures += 1
+                    if consecutive_failures >= max_consecutive_failures:
+                        error_msg = f"Stopping after {max_consecutive_failures} consecutive server errors. Last errors: {self.errors[-3:]}"
+                        print(f"\n{error_msg}")
+                        self.errors.append(error_msg)
+                        stopped_early = True
+                        break
+                else:
+                    # 404, 403, etc. - dead link, reset consecutive failures
+                    consecutive_failures = 0
                 continue
 
             # Reset consecutive failures on success
@@ -554,18 +907,66 @@ class HTMLBackupScraper:
             self.manifest["pages"][url] = {
                 "title": title,
                 "filename": filename,
-                "saved_at": datetime.now().isoformat()
+                "saved_at": datetime.now().isoformat(),
+                "depth": current_depth
             }
 
+            # Discover and queue new links if follow_links is enabled
+            if follow_links and current_depth < max_depth and self.pages_saved < page_limit:
+                soup = BeautifulSoup(html, "html.parser")
+                links_added = 0
+
+                for link in soup.find_all("a", href=True):
+                    href = link["href"]
+                    full_url = urljoin(url, href)
+
+                    # Only follow internal links
+                    if not full_url.startswith(self.base_url):
+                        continue
+
+                    # Clean URL
+                    if "#" in full_url:
+                        full_url = full_url.split("#")[0]
+                    if "?" in full_url:
+                        full_url = full_url.split("?")[0]
+
+                    # Skip non-HTML
+                    lower_url = full_url.lower()
+                    if any(lower_url.endswith(ext) for ext in [
+                        '.jpg', '.jpeg', '.png', '.gif', '.pdf', '.zip',
+                        '.doc', '.docx', '.xls', '.xlsx', '.mp3', '.mp4', '.css', '.js'
+                    ]):
+                        continue
+
+                    # Add to queue if not seen
+                    if full_url not in self.visited_urls and full_url not in queued_urls:
+                        if full_url not in self.manifest.get("pages", {}):
+                            link_text = link.get_text(strip=True)
+                            link_title = link_text if link_text and len(link_text) < 100 else full_url.split("/")[-1]
+
+                            page_queue.append({"title": link_title, "url": full_url})
+                            queued_urls.add(full_url)
+                            url_depths[full_url] = current_depth + 1
+                            links_added += 1
+
+                if links_added > 0:
+                    print(f"    -> Discovered {links_added} new links (queue: {len(page_queue)})")
+
             # Be nice to servers
-            time.sleep(0.5)
+            if request_delay > 0:
+                time.sleep(request_delay)
 
             # Save manifest periodically
-            if i % 10 == 0:
+            if pages_processed % 10 == 0:
                 self._save_manifest()
 
         # Create index.html
         self._create_index()
+
+        # Save remaining queue URLs for future resume
+        remaining_queue = [{"url": p["url"], "title": p["title"]} for p in page_queue]
+        self.manifest["queued_urls"] = remaining_queue
+        self.manifest["queued_count"] = len(remaining_queue)
 
         # Final save
         self._save_manifest()
@@ -577,6 +978,7 @@ class HTMLBackupScraper:
         print(f"Total pages backed up: {total_backed_up}")
         print(f"Assets downloaded: {len(self.downloaded_assets)}")
         print(f"Errors: {len(self.errors)}")
+        print(f"URLs still in queue: {len(page_queue)}")
 
         # Show summary of errors if many failures
         if self.errors:
@@ -588,7 +990,7 @@ class HTMLBackupScraper:
                 if "403" in err:
                     error_types["403 Forbidden"] = error_types.get("403 Forbidden", 0) + 1
                 elif "404" in err:
-                    error_types["404 Not Found"] = error_types.get("404 Not Found", 0) + 1
+                    error_types["404 Dead links"] = error_types.get("404 Dead links", 0) + 1
                 elif "timeout" in err.lower() or "timed out" in err.lower():
                     error_types["Timeout"] = error_types.get("Timeout", 0) + 1
                 elif "connection" in err.lower():
@@ -611,6 +1013,9 @@ class HTMLBackupScraper:
         if len(self.errors) > 0 and self.pages_saved == 0 and total_backed_up == 0:
             success = False
 
+        # Calculate remaining queued URLs
+        queued_remaining = len(page_queue)
+
         return {
             "success": success,
             "pages_saved": self.pages_saved,
@@ -620,7 +1025,8 @@ class HTMLBackupScraper:
             "output_dir": str(self.output_dir),
             "errors": self.errors,
             "error_summary": error_types if self.errors else {},
-            "stopped_early": stopped_early
+            "stopped_early": stopped_early,
+            "queued_remaining": queued_remaining
         }
 
     def _create_index(self):
@@ -663,7 +1069,8 @@ class HTMLBackupScraper:
 
 def run_backup(backup_path, source_id, base_url, scraper_type="mediawiki",
                page_limit=100, include_assets=True, progress_callback=None, priority_urls=None,
-               max_consecutive_failures=5, stop_callback=None):
+               max_consecutive_failures=5, stop_callback=None, sitemap_url=None,
+               follow_links=True, max_depth=3, request_delay=0.5):
     """
     Convenience function to run a backup.
 
@@ -678,12 +1085,17 @@ def run_backup(backup_path, source_id, base_url, scraper_type="mediawiki",
         priority_urls: URLs to backup first (e.g., already indexed pages)
         max_consecutive_failures: Stop after this many consecutive failures (default 5)
         stop_callback: Function that returns True to stop backup
+        sitemap_url: Optional direct URL to sitemap (if not at /sitemap.xml)
+        follow_links: Whether to discover and follow links from downloaded pages (default True)
+        max_depth: Maximum link depth to follow (default 3, 0=only initial pages)
+        request_delay: Seconds to wait between requests (default 0.5)
 
     Returns dict with success status, pages saved, errors, etc.
     """
-    scraper = HTMLBackupScraper(backup_path, source_id, base_url, scraper_type)
+    scraper = HTMLBackupScraper(backup_path, source_id, base_url, scraper_type, sitemap_url)
     return scraper.backup(page_limit, include_assets, progress_callback, priority_urls,
-                         max_consecutive_failures, stop_callback)
+                         max_consecutive_failures, stop_callback, follow_links, max_depth,
+                         request_delay)
 
 
 def repair_backup(backup_path, source_id, base_url, scraper_type="mediawiki",
@@ -745,6 +1157,7 @@ def get_backup_status(backup_path, source_id):
             "has_backup": False,
             "backed_up_count": 0,
             "backed_up_urls": [],
+            "queued_count": 0,
             "last_updated": None
         }
 
@@ -755,6 +1168,7 @@ def get_backup_status(backup_path, source_id):
         "has_backup": True,
         "backed_up_count": len(manifest.get("pages", {})),
         "backed_up_urls": list(manifest.get("pages", {}).keys()),
+        "queued_count": manifest.get("queued_count", 0),
         "last_updated": manifest.get("last_updated"),
         "output_dir": str(backup_dir)
     }

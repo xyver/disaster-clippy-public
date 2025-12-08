@@ -195,6 +195,19 @@ async def get_local_sources():
         source_status["backup_type"] = backup_status["backup_type"]
         source_status["backup_size_mb"] = backup_status["backup_size_mb"]
 
+        # If no backup detected, try to get backup_type from manifest (for fresh scrape sources)
+        if not source_status["backup_type"] and backup_folder:
+            source_folder = Path(backup_folder) / source_id
+            manifest_file = source_folder / get_manifest_file()
+            if manifest_file.exists():
+                try:
+                    with open(manifest_file, 'r', encoding='utf-8') as f:
+                        manifest = json.load(f)
+                    if manifest.get("backup_type"):
+                        source_status["backup_type"] = manifest["backup_type"]
+                except Exception:
+                    pass
+
         if not backup_status["has_backup"]:
             source_status["missing"].append("backup file")
         elif backup_status["backup_size_mb"] < 0.1:
@@ -227,6 +240,46 @@ async def get_local_sources():
                             source_status["has_embeddings"] = True
                     except Exception:
                         pass
+
+            # Get counts for sync comparison: backup -> metadata -> index
+            backup_page_count = 0
+            metadata_doc_count = source_status.get("document_count", 0)
+            index_doc_count = 0
+
+            # Get backup page count from backup_manifest.json (HTML sources)
+            backup_manifest_path = source_folder / get_backup_manifest_file()
+            if backup_manifest_path.exists():
+                try:
+                    with open(backup_manifest_path, 'r', encoding='utf-8') as f:
+                        backup_manifest = json.load(f)
+                    backup_page_count = len(backup_manifest.get("pages", {}))
+                except Exception:
+                    pass
+
+            # Get index document count from _index.json
+            index_path = source_folder / get_index_file()
+            if index_path.exists():
+                try:
+                    with open(index_path, 'r', encoding='utf-8') as f:
+                        index_data = json.load(f)
+                    index_doc_count = len(index_data.get("documents", {}))
+                except Exception:
+                    pass
+
+            # Store counts
+            source_status["backup_page_count"] = backup_page_count
+            source_status["metadata_doc_count"] = metadata_doc_count
+            source_status["index_doc_count"] = index_doc_count
+
+            # Determine if stages need refresh (only for HTML sources with backup)
+            if backup_page_count > 0:
+                # Metadata needs refresh if backup has more pages than metadata
+                source_status["needs_metadata_refresh"] = backup_page_count > metadata_doc_count
+                # Index needs refresh if metadata has more docs than index
+                source_status["needs_index_refresh"] = metadata_doc_count > index_doc_count
+            else:
+                source_status["needs_metadata_refresh"] = False
+                source_status["needs_index_refresh"] = False
 
         if not source_status["has_embeddings"]:
             source_status["missing"].append("embeddings (for offline search)")
@@ -576,6 +629,360 @@ async def create_source(request: CreateSourceRequest):
 
 
 # =============================================================================
+# HTML SCRAPING
+# =============================================================================
+
+class CheckSitemapRequest(BaseModel):
+    url: str
+    source_id: str = None  # Optional - to get backup status
+
+
+@router.post("/check-sitemap")
+async def check_sitemap(request: CheckSitemapRequest):
+    """
+    Check a website's sitemap to see how many pages are available.
+    Returns page count and sample URLs.
+
+    Accepts either:
+    - Homepage URL (will search for /sitemap.xml)
+    - Direct sitemap URL (if ends with .xml or contains 'sitemap')
+    """
+    import requests
+    from bs4 import BeautifulSoup
+    from urllib.parse import urlparse
+
+    url = request.url.rstrip("/")
+
+    # Detect if URL is already a sitemap
+    is_sitemap_url = url.endswith('.xml') or 'sitemap' in url.lower()
+
+    if is_sitemap_url:
+        sitemap_url = url
+        # Extract base URL from sitemap URL
+        parsed = urlparse(url)
+        base_url = f"{parsed.scheme}://{parsed.netloc}"
+    else:
+        base_url = url
+        sitemap_url = f"{base_url}/sitemap.xml"
+
+    result = {
+        "url": base_url,
+        "sitemap_url": sitemap_url,
+        "has_sitemap": False,
+        "page_count": 0,
+        "sample_urls": [],
+        "sitemap_type": None,
+        "error": None,
+        "detected_as_sitemap": is_sitemap_url,
+        "backed_up_count": 0,  # How many pages already backed up
+        "queued_count": 0  # How many URLs still in queue from last scrape
+    }
+
+    # Get backup status if source_id provided
+    if request.source_id:
+        try:
+            from admin.local_config import get_local_config
+            from offline_tools.backup.html import get_backup_status
+
+            config = get_local_config()
+            backup_folder = config.get_backup_folder()
+            if backup_folder:
+                backup_status = get_backup_status(backup_folder, request.source_id)
+                result["backed_up_count"] = backup_status.get("backed_up_count", 0)
+                result["queued_count"] = backup_status.get("queued_count", 0)
+        except Exception as e:
+            print(f"[check-sitemap] Error getting backup status: {e}")
+
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        }
+        response = requests.get(sitemap_url, headers=headers, timeout=30)
+
+        if response.status_code == 200:
+            result["has_sitemap"] = True
+
+            # Debug: show first 500 chars of response
+            result["debug_response_preview"] = response.text[:500] if response.text else "(empty)"
+            result["debug_content_type"] = response.headers.get("Content-Type", "unknown")
+
+            # Try xml parser first, fall back to lxml or html.parser
+            try:
+                soup = BeautifulSoup(response.text, "xml")
+            except Exception:
+                soup = BeautifulSoup(response.text, "html.parser")
+
+            # Check for sitemap index (multiple sitemaps)
+            sitemap_tags = soup.find_all("sitemap")
+            if sitemap_tags:
+                result["sitemap_type"] = "index"
+                # Count URLs in all sub-sitemaps
+                total_urls = 0
+                all_sample_urls = []
+
+                for sitemap in sitemap_tags[:5]:  # Check first 5 sub-sitemaps
+                    loc = sitemap.find("loc")
+                    if loc:
+                        try:
+                            sub_response = requests.get(loc.text, headers=headers, timeout=30)
+                            sub_soup = BeautifulSoup(sub_response.text, "xml")
+                            urls = sub_soup.find_all("url")
+                            total_urls += len(urls)
+
+                            # Collect sample URLs
+                            for url_tag in urls[:3]:
+                                url_loc = url_tag.find("loc")
+                                if url_loc and len(all_sample_urls) < 10:
+                                    all_sample_urls.append(url_loc.text)
+                        except Exception:
+                            pass
+
+                # Estimate total if we only checked some sitemaps
+                if len(sitemap_tags) > 5:
+                    avg_per_sitemap = total_urls / 5
+                    result["page_count"] = int(avg_per_sitemap * len(sitemap_tags))
+                    result["page_count_estimated"] = True
+                else:
+                    result["page_count"] = total_urls
+
+                result["sub_sitemap_count"] = len(sitemap_tags)
+                result["sample_urls"] = all_sample_urls
+
+            else:
+                # Regular sitemap
+                result["sitemap_type"] = "standard"
+                urls = soup.find_all("url")
+
+                # If xml parser found nothing, try html.parser as fallback
+                if len(urls) == 0:
+                    soup = BeautifulSoup(response.text, "html.parser")
+                    urls = soup.find_all("url")
+
+                # If still nothing, use regex to extract URLs from <loc> tags
+                if len(urls) == 0:
+                    import re
+                    from urllib.parse import urljoin
+                    loc_pattern = re.compile(r'<loc[^>]*>([^<]+)</loc>', re.IGNORECASE)
+                    loc_matches = loc_pattern.findall(response.text)
+                    result["debug_regex_matches"] = len(loc_matches)
+
+                    if len(loc_matches) > 0:
+                        # Found XML-style loc tags via regex
+                        html_urls = []
+                        for url_text in loc_matches:
+                            url_text = url_text.strip()
+                            url_lower = url_text.lower()
+                            if not any(url_lower.endswith(ext) for ext in [
+                                '.jpg', '.jpeg', '.png', '.gif', '.pdf', '.zip',
+                                '.doc', '.docx', '.mp3', '.mp4'
+                            ]):
+                                html_urls.append(url_text)
+
+                        result["page_count"] = len(html_urls)
+                        result["sample_urls"] = html_urls[:10]
+                        result["debug_urls_found"] = 0
+                        result["debug_used_regex"] = True
+                    else:
+                        # No XML sitemap found - check if this is an HTML page with links
+                        content_type = response.headers.get("Content-Type", "").lower()
+                        if "text/html" in content_type or response.text.strip().startswith("<!"):
+                            result["sitemap_type"] = "html_links"
+                            html_soup = BeautifulSoup(response.text, "html.parser")
+
+                            # Extract all internal links
+                            html_urls = []
+                            seen_urls = set()
+                            for link in html_soup.find_all("a", href=True):
+                                href = link["href"]
+                                # Make absolute URL
+                                full_url = urljoin(sitemap_url, href)
+
+                                # Only include internal links
+                                if not full_url.startswith(base_url):
+                                    continue
+
+                                # Skip anchors, images, etc
+                                if "#" in full_url:
+                                    full_url = full_url.split("#")[0]
+
+                                url_lower = full_url.lower()
+                                if any(url_lower.endswith(ext) for ext in [
+                                    '.jpg', '.jpeg', '.png', '.gif', '.pdf', '.zip',
+                                    '.doc', '.docx', '.mp3', '.mp4', '.css', '.js'
+                                ]):
+                                    continue
+
+                                if full_url not in seen_urls:
+                                    seen_urls.add(full_url)
+                                    html_urls.append(full_url)
+
+                            result["page_count"] = len(html_urls)
+                            result["sample_urls"] = html_urls[:10]
+                            result["debug_urls_found"] = 0
+                            result["debug_used_html_links"] = True
+                else:
+                    # Filter to HTML pages only
+                    html_urls = []
+                    for url_tag in urls:
+                        loc = url_tag.find("loc")
+                        if loc:
+                            url_text = loc.text if loc.text else loc.get_text()
+                            url_lower = url_text.lower()
+                            if not any(url_lower.endswith(ext) for ext in [
+                                '.jpg', '.jpeg', '.png', '.gif', '.pdf', '.zip',
+                                '.doc', '.docx', '.mp3', '.mp4'
+                            ]):
+                                html_urls.append(url_text)
+
+                    result["page_count"] = len(html_urls)
+                    result["sample_urls"] = html_urls[:10]
+                    result["debug_urls_found"] = len(urls)
+
+        else:
+            result["error"] = f"Sitemap returned status {response.status_code}"
+
+            # Try to crawl homepage for link count estimate
+            try:
+                home_response = requests.get(base_url, headers=headers, timeout=30)
+                if home_response.status_code == 200:
+                    home_soup = BeautifulSoup(home_response.text, "html.parser")
+                    internal_links = set()
+                    for link in home_soup.find_all("a", href=True):
+                        href = link["href"]
+                        if href.startswith("/") or href.startswith(base_url):
+                            internal_links.add(href)
+                    result["homepage_links"] = len(internal_links)
+                    result["error"] = f"No sitemap found, but homepage has ~{len(internal_links)} internal links"
+            except Exception:
+                pass
+
+    except Exception as e:
+        result["error"] = str(e)
+
+    return result
+
+
+class StartScrapeRequest(BaseModel):
+    source_id: str
+    url: str
+    page_limit: int = 100
+    include_assets: bool = False
+    follow_links: bool = True
+    max_depth: int = 3
+    request_delay: float = 0.5
+
+
+@router.post("/start-scrape")
+async def start_scrape(request: StartScrapeRequest):
+    """
+    Start an HTML backup scrape job.
+    Runs as a background job since scraping can take a while.
+    """
+    from admin.job_manager import get_job_manager
+    from admin.local_config import get_local_config
+
+    config = get_local_config()
+    backup_folder = config.get_backup_folder()
+    if not backup_folder:
+        raise HTTPException(400, "No backup folder configured")
+
+    source_path = Path(backup_folder) / request.source_id
+    if not source_path.exists():
+        raise HTTPException(404, f"Source not found: {request.source_id}")
+
+    def _run_scrape_job(source_id: str, url: str, page_limit: int,
+                        include_assets: bool, follow_links: bool, max_depth: int,
+                        request_delay: float,
+                        progress_callback=None, cancel_checker=None):
+        from offline_tools.backup.html import run_backup
+        from urllib.parse import urlparse
+
+        def stop_checker():
+            if cancel_checker:
+                return cancel_checker()
+            return False
+
+        # Detect if URL is a sitemap - if so, extract base_url and pass sitemap_url
+        is_sitemap = url.endswith('.xml') or 'sitemap' in url.lower()
+        if is_sitemap:
+            sitemap_url = url
+            parsed = urlparse(url)
+            base_url = f"{parsed.scheme}://{parsed.netloc}"
+        else:
+            base_url = url
+            sitemap_url = None
+
+        result = run_backup(
+            backup_path=backup_folder,
+            source_id=source_id,
+            base_url=base_url,
+            scraper_type="static",
+            page_limit=page_limit,
+            include_assets=include_assets,
+            progress_callback=progress_callback,
+            stop_callback=stop_checker,
+            sitemap_url=sitemap_url,
+            follow_links=follow_links,
+            max_depth=max_depth,
+            request_delay=request_delay
+        )
+
+        if result.get("stopped_early"):
+            return {
+                "status": "cancelled",
+                "pages_saved": result.get("pages_saved", 0),
+                "total_backed_up": result.get("total_backed_up", 0),
+                "queued_remaining": result.get("queued_remaining", 0),
+                "message": "Scrape was stopped early"
+            }
+
+        if not result.get("success"):
+            return {
+                "status": "error",
+                "error": "; ".join(result.get("errors", ["Unknown error"])[:3]),
+                "pages_saved": result.get("pages_saved", 0),
+                "total_backed_up": result.get("total_backed_up", 0)
+            }
+
+        return {
+            "status": "success",
+            "source_id": source_id,
+            "pages_saved": result.get("pages_saved", 0),
+            "total_backed_up": result.get("total_backed_up", 0),
+            "assets_downloaded": result.get("assets_downloaded", 0),
+            "queued_remaining": result.get("queued_remaining", 0),
+            "error_count": len(result.get("errors", [])),
+            "message": f"Scraped {result.get('pages_saved', 0)} pages"
+        }
+
+    manager = get_job_manager()
+
+    try:
+        job_id = manager.submit(
+            "scrape",
+            request.source_id,
+            _run_scrape_job,
+            request.source_id,
+            request.url,
+            request.page_limit,
+            request.include_assets,
+            request.follow_links,
+            request.max_depth,
+            request.request_delay
+        )
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+
+    depth_info = f", depth {request.max_depth}" if request.follow_links else ", no link following"
+    delay_info = f", {request.request_delay}s delay" if request.request_delay != 0.5 else ""
+    return {
+        "job_id": job_id,
+        "source_id": request.source_id,
+        "message": f"Scrape job started for {request.source_id} ({request.page_limit} page limit{depth_info}{delay_info})"
+    }
+
+
+# =============================================================================
 # INDEXING TOOLS
 # =============================================================================
 
@@ -586,17 +993,32 @@ async def scan_backup(request: SourceIdRequest):
         from offline_tools.source_manager import SourceManager
 
         manager = SourceManager()
+
+        # Debug: print paths being checked
+        source_path = manager.get_source_path(request.source_id)
+        pages_path = source_path / "pages"
+        print(f"[scan-backup] Source path: {source_path}")
+        print(f"[scan-backup] Pages path: {pages_path}")
+        print(f"[scan-backup] Source exists: {source_path.exists()}")
+        print(f"[scan-backup] Pages exists: {pages_path.exists()}")
+        if pages_path.exists():
+            html_files = list(pages_path.glob("*.html")) + list(pages_path.glob("*.htm"))
+            print(f"[scan-backup] HTML files found: {len(html_files)}")
+
         result = manager.scan_backup(request.source_id)
 
         if not result.get("success", True):
             raise HTTPException(400, result.get("error", "Scan failed"))
 
+        # Different scan methods return page_count or file_count
+        count = result.get("page_count", result.get("file_count", 0))
+
         return {
             "status": "success",
             "source_id": request.source_id,
-            "file_count": result.get("file_count", 0),
+            "file_count": count,
             "backup_type": result.get("backup_type"),
-            "message": f"Scanned {result.get('file_count', 0)} files"
+            "message": f"Scanned {count} files"
         }
 
     except HTTPException:
@@ -1696,14 +2118,21 @@ async def test_source_links(source_id: str, test_base_url: Optional[str] = None)
                 clean_path = path_match.group(1)
                 article_name = clean_path.split("/")[-1] if "/" in clean_path else clean_path
 
-        # If testing a new base_url, reconstruct the URL
-        if test_base_url:
-            # Construct test URL using article name
-            if article_name:
-                test_url = test_base_url.rstrip("/") + "/" + article_name
+        # Construct the online URL using base_url + relative path
+        # For HTML sources, stored_url is already a relative path like /Projects/Cooling/Page
+        # For ZIM sources, we may need to use article_name
+        if base_url:
+            # Use stored_url for HTML (already has correct path structure)
+            # Use article_name for ZIM (may need path extraction)
+            if source_type == "html" and stored_url:
+                # stored_url is like /Projects/Cooling/Page - combine with base_url
+                rel_path = stored_url.lstrip("/")
+                constructed_url = base_url.rstrip("/") + "/" + rel_path
+            elif article_name:
+                # ZIM-style: use just the article name
+                constructed_url = base_url.rstrip("/") + "/" + article_name
             else:
-                test_url = stored_url  # Fallback to stored
-            constructed_url = test_url
+                constructed_url = stored_url
         else:
             constructed_url = stored_url
 

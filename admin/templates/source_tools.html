@@ -324,6 +324,21 @@
             font-weight: normal;
         }
 
+        .tool-section.warning {
+            border-color: #f9a825;
+        }
+
+        .tool-section.warning h3 {
+            color: #f9a825;
+        }
+
+        .tool-section.warning h3::after {
+            content: '[REFRESH]';
+            color: #f9a825;
+            font-size: 0.75rem;
+            font-weight: normal;
+        }
+
         .tool-section p {
             color: #888;
             font-size: 0.85rem;
@@ -588,6 +603,21 @@
                     <button class="btn btn-secondary" onclick="refreshSources()">Refresh</button>
                 </div>
 
+                <!-- Selected Source Info (shown when source is selected) -->
+                <div id="selectedSourceInfo" style="display: none; margin-top: 1rem; padding: 1rem; background: #0f3460; border-radius: 6px; border-left: 3px solid #4ecca3;">
+                    <div style="font-size: 0.8rem; color: #888; text-transform: uppercase; margin-bottom: 0.5rem;">Selected Source</div>
+                    <div style="display: grid; grid-template-columns: auto 1fr; gap: 0.25rem 1rem; font-size: 0.9rem;">
+                        <span style="color: #888;">Name:</span>
+                        <span id="selectedSourceName" style="color: #fff;">-</span>
+                        <span style="color: #888;">Slug (ID):</span>
+                        <span id="selectedSourceSlug" style="color: #4ecca3; font-family: monospace;">-</span>
+                        <span style="color: #888;">Type:</span>
+                        <span id="selectedSourceType" style="color: #e94560;">-</span>
+                        <span style="color: #888;">Base URL:</span>
+                        <span id="selectedSourceUrl" style="color: #4fc3f7; word-break: break-all;">-</span>
+                    </div>
+                </div>
+
                 <div style="text-align: center; margin: 1.5rem 0; color: #666;">- OR -</div>
 
                 <h3 style="color: #4ecca3; margin-bottom: 1rem;">Create New Source</h3>
@@ -632,7 +662,10 @@
                     </div>
                     <div class="form-group" id="scrapeUrlGroup" style="display: none;">
                         <label>Website URL to Scrape</label>
-                        <input type="url" id="scrapeUrl" placeholder="https://example.com">
+                        <input type="url" id="scrapeUrl" placeholder="https://example.com or https://example.com/sitemap.xml">
+                        <div style="font-size: 0.8rem; color: #888; margin-top: 0.25rem;">
+                            Enter the sitemap URL for best results, or the homepage (will search for sitemap.xml)
+                        </div>
                     </div>
                     <div class="form-group" id="importPathGroup" style="display: none;">
                         <label>Path to Import (relative to backup folder)</label>
@@ -718,8 +751,11 @@
                     <!-- Rename Section (Admin Only) -->
                     <div class="admin-only" id="renameSection" style="display: none; margin-top: 1.5rem; padding-top: 1.5rem; border-top: 1px solid #0f3460;">
                         <h3 style="color: #f9a825; margin-bottom: 0.75rem;">Rename Source (Admin Only)</h3>
-                        <p style="font-size: 0.85rem; color: #888; margin-bottom: 1rem;">
+                        <p style="font-size: 0.85rem; color: #888; margin-bottom: 0.5rem;">
                             Change the source ID. This will rename the folder and all associated files.
+                        </p>
+                        <p style="font-size: 0.85rem; color: #e74c3c; margin-bottom: 1rem; padding: 0.5rem; background: rgba(231, 76, 60, 0.1); border-radius: 4px; border-left: 3px solid #e74c3c;">
+                            WARNING: Changing the slug will break existing URLs, search results, and any external links pointing to this source. Only rename if absolutely necessary.
                         </p>
                         <div class="form-row">
                             <div class="form-group">
@@ -733,6 +769,73 @@
                         </div>
                         <div class="tool-actions">
                             <button class="btn btn-warning" onclick="renameSource()">Rename Source</button>
+                        </div>
+                    </div>
+
+                    <!-- Scrape Website Section (HTML sources with URL) -->
+                    <div class="tool-section" id="scrapeSection" style="margin-top: 1.5rem; padding-top: 1.5rem; border-top: 1px solid #0f3460; display: none;">
+                        <h3>Scrape Website</h3>
+                        <p>Download pages from the website to create an offline backup. Uses sitemap.xml to discover pages.</p>
+
+                        <!-- Check Sitemap -->
+                        <div style="margin-bottom: 1rem; padding: 1rem; background: #0f3460; border-radius: 6px;">
+                            <div style="display: flex; align-items: center; gap: 1rem; margin-bottom: 0.5rem;">
+                                <button class="btn btn-primary" id="btnCheckSitemap" onclick="checkSitemap()">Check Sitemap</button>
+                                <span id="sitemapStatus" style="color: #888;"></span>
+                            </div>
+                            <div id="sitemapInfo" style="display: none; margin-top: 1rem;">
+                                <div style="display: grid; grid-template-columns: auto 1fr; gap: 0.5rem 1rem; font-size: 0.9rem;">
+                                    <span style="color: #888;">Pages found:</span>
+                                    <span id="sitemapPageCount" style="color: #4ecca3; font-weight: 600;">-</span>
+                                    <span style="color: #888;">Sitemap type:</span>
+                                    <span id="sitemapType" style="color: #fff;">-</span>
+                                </div>
+                                <div id="sitemapSamples" style="margin-top: 0.75rem; font-size: 0.85rem; color: #888;">
+                                    <div style="margin-bottom: 0.25rem;">Sample URLs:</div>
+                                    <div id="sitemapSampleList" style="max-height: 100px; overflow-y: auto; padding-left: 1rem;"></div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="form-row" style="margin-bottom: 1rem;">
+                            <div class="form-group">
+                                <label>Page Limit</label>
+                                <input type="number" id="scrapePageLimit" value="100" min="1" max="5000" style="width: 100px;">
+                                <span id="pageLimitHint" style="color: #888; font-size: 0.8rem; margin-left: 0.5rem;"></span>
+                            </div>
+                            <div class="form-group">
+                                <label>Max Depth</label>
+                                <input type="number" id="scrapeMaxDepth" value="3" min="0" max="10" style="width: 80px;">
+                                <span style="color: #888; font-size: 0.8rem; margin-left: 0.5rem;">0 = initial pages only</span>
+                            </div>
+                            <div class="form-group">
+                                <label>Delay (sec)</label>
+                                <input type="number" id="scrapeRequestDelay" value="0.5" min="0" max="10" step="0.1" style="width: 80px;">
+                                <span style="color: #888; font-size: 0.8rem; margin-left: 0.5rem;">between requests</span>
+                            </div>
+                        </div>
+                        <div class="form-row" style="margin-bottom: 1rem;">
+                            <div class="form-group">
+                                <label style="display: flex; align-items: center; gap: 0.5rem;">
+                                    <input type="checkbox" id="scrapeFollowLinks" checked>
+                                    Follow links (discover more pages)
+                                </label>
+                            </div>
+                            <div class="form-group">
+                                <label style="display: flex; align-items: center; gap: 0.5rem;">
+                                    <input type="checkbox" id="scrapeIncludeAssets">
+                                    Include images/CSS (slower)
+                                </label>
+                            </div>
+                        </div>
+                        <div class="tool-actions">
+                            <button class="btn btn-primary" id="btnStartScrape" onclick="startScrape()">Start Scrape</button>
+                        </div>
+                        <div id="scrapeProgress" style="display: none; margin-top: 1rem;">
+                            <div style="background: #0f3460; border-radius: 4px; overflow: hidden; height: 20px;">
+                                <div id="scrapeProgressBar" style="background: #4ecca3; height: 100%; width: 0%; transition: width 0.3s;"></div>
+                            </div>
+                            <div id="scrapeProgressText" style="margin-top: 0.5rem; color: #888; font-size: 0.9rem;"></div>
                         </div>
                     </div>
 
@@ -1164,8 +1267,18 @@
         function markSectionPending(sectionId) {
             const section = document.getElementById(sectionId);
             if (section) {
-                section.classList.remove('completed', 'skipped');
+                section.classList.remove('completed', 'skipped', 'warning');
                 sectionState[sectionId] = 'pending';
+            }
+        }
+
+        // Mark a section as needing refresh (warning state - yellow)
+        function markSectionWarning(sectionId) {
+            const section = document.getElementById(sectionId);
+            if (section) {
+                section.classList.remove('pending', 'completed', 'skipped');
+                section.classList.add('warning');
+                sectionState[sectionId] = 'warning';
             }
         }
 
@@ -1233,8 +1346,10 @@
                 markSectionComplete('scanBackupSection');
             }
 
-            // Step 3: Metadata exists
-            if (source.has_metadata) {
+            // Step 3: Metadata exists (but show warning if backup has more pages)
+            if (source.needs_metadata_refresh) {
+                markSectionWarning('sectionGenerateMetadata');
+            } else if (source.has_metadata) {
                 markSectionComplete('sectionGenerateMetadata');
             }
 
@@ -1245,8 +1360,10 @@
                 markSectionSkipped('sectionBaseUrl');
             }
 
-            // Step 3: Index/vectors exist (check actual API fields)
-            if (source.has_embeddings || source.has_vectors_file) {
+            // Step 3: Index/vectors exist (but show warning if metadata has more docs)
+            if (source.needs_index_refresh) {
+                markSectionWarning('sectionCreateIndex');
+            } else if (source.has_embeddings || source.has_vectors_file) {
                 markSectionComplete('sectionCreateIndex');
             }
 
@@ -1554,7 +1671,16 @@
                 for (const source of sources) {
                     const option = document.createElement('option');
                     option.value = source.source_id;
-                    option.textContent = `${source.name || source.source_id} (${source.document_count || 0} docs)`;
+                    // Show backup count vs indexed count for HTML sources
+                    const backupCount = source.backup_page_count || 0;
+                    const indexedCount = source.document_count || 0;
+                    let countText;
+                    if (backupCount > 0 && backupCount !== indexedCount) {
+                        countText = `${backupCount} pages, ${indexedCount} indexed`;
+                    } else {
+                        countText = `${indexedCount} docs`;
+                    }
+                    option.textContent = `${source.name || source.source_id} (${countText})`;
                     select.appendChild(option);
                 }
 
@@ -1574,6 +1700,7 @@
 
         async function loadSourceDetails() {
             const sourceId = document.getElementById('sourceSelect').value;
+            const selectedInfoDiv = document.getElementById('selectedSourceInfo');
 
             if (!sourceId) {
                 currentSource = null;
@@ -1582,12 +1709,21 @@
                 // Hide document count when no source selected
                 document.getElementById('documentCountDisplay').style.display = 'none';
                 document.getElementById('btnIndexAll').style.display = 'none';
+                // Hide selected source info
+                selectedInfoDiv.style.display = 'none';
                 return;
             }
 
             currentSource = sources.find(s => s.source_id === sourceId);
 
             if (currentSource) {
+                // Show selected source info in Step 1
+                selectedInfoDiv.style.display = 'block';
+                document.getElementById('selectedSourceName').textContent = currentSource.name || currentSource.source_id;
+                document.getElementById('selectedSourceSlug').textContent = currentSource.source_id;
+                document.getElementById('selectedSourceType').textContent = currentSource.backup_type || 'Unknown';
+                document.getElementById('selectedSourceUrl').textContent = currentSource.base_url || '(not set)';
+
                 // Initialize section states based on what's already done for this source
                 initializeSectionStates(currentSource);
 
@@ -1595,6 +1731,7 @@
                 populateTagsForm();
                 updateSourceInfo();
                 updateSourceBanners();
+                updateScrapeSection();
                 updateWizardUI();
 
                 // Show document count if source has documents
@@ -1648,14 +1785,21 @@
                 </div>
                 <div class="checklist">
                     <span class="checklist-item ${s.has_config ? 'ok' : 'missing'}">${s.has_config ? '[OK]' : '[X]'} Config</span>
-                    <span class="checklist-item ${s.has_backup ? 'ok' : 'missing'}">${s.has_backup ? '[OK]' : '[X]'} Backup</span>
-                    <span class="checklist-item ${s.has_metadata ? 'ok' : 'missing'}">${s.has_metadata ? '[OK]' : '[X]'} Metadata</span>
-                    <span class="checklist-item ${s.has_embeddings ? 'ok' : 'warning'}">${s.has_embeddings ? '[OK]' : '[!]'} Embeddings</span>
+                    <span class="checklist-item ${s.has_backup ? 'ok' : 'missing'}">${s.has_backup ? '[OK]' : '[X]'} Backup ${s.backup_page_count ? `(${s.backup_page_count})` : ''}</span>
+                    <span class="checklist-item ${s.needs_metadata_refresh ? 'warning' : (s.has_metadata ? 'ok' : 'missing')}">${s.needs_metadata_refresh ? '[!]' : (s.has_metadata ? '[OK]' : '[X]')} Metadata ${s.metadata_doc_count ? `(${s.metadata_doc_count})` : ''}</span>
+                    <span class="checklist-item ${s.needs_index_refresh ? 'warning' : (s.has_embeddings ? 'ok' : 'warning')}">${s.needs_index_refresh ? '[!]' : (s.has_embeddings ? '[OK]' : '[!]')} Embeddings ${s.index_doc_count ? `(${s.index_doc_count})` : ''}</span>
                     <span class="checklist-item ${s.license && s.license !== 'Unknown' ? 'ok' : 'warning'}">${s.license && s.license !== 'Unknown' ? '[OK]' : '[!]'} License</span>
                     <span class="checklist-item ${s.license_verified ? 'ok' : 'warning'}">${s.license_verified ? '[OK]' : '[!]'} Verified</span>
                 </div>
+                ${s.needs_metadata_refresh || s.needs_index_refresh ? `
+                    <div style="margin-top: 0.75rem; padding: 0.75rem; background: #f9a82520; border-radius: 4px; color: #f9a825; font-size: 0.85rem;">
+                        <strong>Out of sync:</strong>
+                        ${s.needs_metadata_refresh ? `Backup has ${s.backup_page_count} pages, metadata has ${s.metadata_doc_count}. ` : ''}
+                        ${s.needs_index_refresh ? `Metadata has ${s.metadata_doc_count} docs, index has ${s.index_doc_count}.` : ''}
+                    </div>
+                ` : ''}
                 ${s.missing && s.missing.length > 0 ? `
-                    <div style="margin-top: 1rem; padding: 0.75rem; background: #e9456020; border-radius: 4px; color: #e94560; font-size: 0.85rem;">
+                    <div style="margin-top: 0.75rem; padding: 0.75rem; background: #e9456020; border-radius: 4px; color: #e94560; font-size: 0.85rem;">
                         <strong>Missing:</strong> ${s.missing.join(', ')}
                     </div>
                 ` : ''}
@@ -2341,6 +2485,268 @@
             } finally {
                 btn.disabled = false;
                 btn.textContent = 'Scan Backup';
+            }
+        }
+
+        // Check sitemap before scraping
+        async function checkSitemap() {
+            if (!currentSource || !currentSource.base_url) {
+                showToast('No base URL configured', true);
+                return;
+            }
+
+            const btn = document.getElementById('btnCheckSitemap');
+            const statusSpan = document.getElementById('sitemapStatus');
+            const infoDiv = document.getElementById('sitemapInfo');
+
+            btn.disabled = true;
+            btn.textContent = 'Checking...';
+            statusSpan.textContent = '';
+            infoDiv.style.display = 'none';
+
+            try {
+                const response = await fetch('/useradmin/api/check-sitemap', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        url: currentSource.base_url,
+                        source_id: currentSource.source_id
+                    })
+                });
+
+                const data = await response.json();
+
+                if (data.has_sitemap) {
+                    statusSpan.textContent = 'Sitemap found!';
+                    statusSpan.style.color = '#4ecca3';
+
+                    // Show info
+                    infoDiv.style.display = 'block';
+                    const countText = data.page_count_estimated
+                        ? `~${data.page_count.toLocaleString()} (estimated)`
+                        : data.page_count.toLocaleString();
+                    document.getElementById('sitemapPageCount').textContent = countText;
+
+                    let typeText = data.sitemap_type === 'index'
+                        ? `Index (${data.sub_sitemap_count} sub-sitemaps)`
+                        : data.sitemap_type === 'html_links'
+                        ? 'HTML page with links'
+                        : 'Standard XML';
+                    if (data.debug_used_regex) {
+                        typeText += ' (regex parser)';
+                    }
+                    if (data.debug_used_html_links) {
+                        typeText = 'HTML page with links';
+                    }
+                    document.getElementById('sitemapType').textContent = typeText;
+
+                    // Log debug info
+                    if (data.debug_content_type) {
+                        logOutput(`Sitemap debug: Content-Type: ${data.debug_content_type}`, 'info');
+                    }
+                    if (data.debug_response_preview) {
+                        logOutput(`Sitemap debug: Response preview: ${data.debug_response_preview.substring(0, 200)}...`, 'info');
+                    }
+                    if (data.debug_urls_found !== undefined) {
+                        logOutput(`Sitemap debug: BeautifulSoup found ${data.debug_urls_found} url tags`, 'info');
+                    }
+                    if (data.debug_regex_matches !== undefined) {
+                        logOutput(`Sitemap debug: Regex found ${data.debug_regex_matches} loc tags`, 'info');
+                    }
+
+                    // Show sample URLs
+                    const sampleList = document.getElementById('sitemapSampleList');
+                    if (data.sample_urls && data.sample_urls.length > 0) {
+                        sampleList.innerHTML = data.sample_urls
+                            .map(url => `<div style="color: #4fc3f7; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${url}</div>`)
+                            .join('');
+                    } else {
+                        sampleList.innerHTML = '<div>No samples available</div>';
+                    }
+
+                    // Update page limit hint with backup status
+                    const hint = document.getElementById('pageLimitHint');
+                    const backedUp = data.backed_up_count || 0;
+                    const queued = data.queued_count || 0;
+
+                    // Build hint text with backup and queue info
+                    let hintParts = [];
+                    if (backedUp > 0) hintParts.push(`${backedUp} backed up`);
+                    if (queued > 0) hintParts.push(`${queued} queued`);
+                    hintParts.push(`starting page has ${countText} links`);
+
+                    hint.textContent = `(${hintParts.join(', ')})`;
+                    hint.style.color = (backedUp > 0 || queued > 0) ? '#4ecca3' : '#888';
+
+                    // Auto-set page limit if under 500
+                    if (data.page_count <= 500) {
+                        document.getElementById('scrapePageLimit').value = data.page_count;
+                    }
+
+                    let logMsg = `Sitemap check: Found ${countText} pages`;
+                    if (backedUp > 0) {
+                        logMsg += ` (${backedUp} backed up`;
+                        if (queued > 0) logMsg += `, ${queued} in queue`;
+                        logMsg += ')';
+                    } else if (queued > 0) {
+                        logMsg += ` (${queued} in queue from previous scrape)`;
+                    }
+                    logOutput(logMsg, 'success');
+                } else {
+                    statusSpan.textContent = data.error || 'No sitemap found';
+                    statusSpan.style.color = '#e94560';
+
+                    if (data.homepage_links) {
+                        infoDiv.style.display = 'block';
+                        document.getElementById('sitemapPageCount').textContent = `~${data.homepage_links} (from homepage links)`;
+                        document.getElementById('sitemapType').textContent = 'Link crawl (no sitemap)';
+                        document.getElementById('sitemapSampleList').innerHTML = '<div>Will crawl links from homepage</div>';
+                    }
+
+                    logOutput(`Sitemap check: ${data.error || 'No sitemap found'}`, 'warning');
+                }
+            } catch (e) {
+                statusSpan.textContent = 'Error checking sitemap';
+                statusSpan.style.color = '#e94560';
+                logOutput(`Error checking sitemap: ${e.message}`, 'error');
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Check Sitemap';
+            }
+        }
+
+        // Start HTML scrape job
+        async function startScrape() {
+            if (!currentSource) return;
+
+            const baseUrl = currentSource.base_url;
+            if (!baseUrl) {
+                showToast('No base URL configured for this source', true);
+                return;
+            }
+
+            const pageLimit = parseInt(document.getElementById('scrapePageLimit').value) || 100;
+            const maxDepth = parseInt(document.getElementById('scrapeMaxDepth').value) || 3;
+            const requestDelay = parseFloat(document.getElementById('scrapeRequestDelay').value) || 0.5;
+            const followLinks = document.getElementById('scrapeFollowLinks').checked;
+            const includeAssets = document.getElementById('scrapeIncludeAssets').checked;
+
+            const btn = document.getElementById('btnStartScrape');
+            btn.disabled = true;
+            btn.textContent = 'Starting...';
+
+            const depthInfo = followLinks ? `, depth ${maxDepth}` : ', no link following';
+            const delayInfo = requestDelay !== 0.5 ? `, ${requestDelay}s delay` : '';
+            logOutput(`Starting scrape of ${baseUrl} (limit: ${pageLimit} pages${depthInfo}${delayInfo})...`);
+
+            try {
+                const response = await fetch('/useradmin/api/start-scrape', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        source_id: currentSource.source_id,
+                        url: baseUrl,
+                        page_limit: pageLimit,
+                        include_assets: includeAssets,
+                        follow_links: followLinks,
+                        max_depth: maxDepth,
+                        request_delay: requestDelay
+                    })
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    logOutput(`Scrape job started: ${data.job_id}`, 'success');
+                    showToast('Scrape job started - check Jobs page for progress');
+                    btn.textContent = 'Scraping...';
+
+                    // Poll for job completion
+                    pollScrapeJob(data.job_id);
+                } else {
+                    logOutput(`Error: ${data.detail || 'Failed to start scrape'}`, 'error');
+                    showToast(data.detail || 'Failed to start scrape', true);
+                    btn.disabled = false;
+                    btn.textContent = 'Start Scrape';
+                }
+            } catch (e) {
+                logOutput(`Error: ${e.message}`, 'error');
+                showToast('Error: ' + e.message, true);
+                btn.disabled = false;
+                btn.textContent = 'Start Scrape';
+            }
+        }
+
+        async function pollScrapeJob(jobId) {
+            const progressDiv = document.getElementById('scrapeProgress');
+            const progressBar = document.getElementById('scrapeProgressBar');
+            const progressText = document.getElementById('scrapeProgressText');
+            const btn = document.getElementById('btnStartScrape');
+
+            progressDiv.style.display = 'block';
+
+            const poll = async () => {
+                try {
+                    const response = await fetch(`/useradmin/api/jobs/${jobId}`);
+                    const job = await response.json();
+
+                    if (job.status === 'running' || job.status === 'pending') {
+                        const progress = job.progress || 0;
+                        progressBar.style.width = `${progress}%`;
+                        progressText.textContent = job.message || `${progress}% complete`;
+                        setTimeout(poll, 2000);
+                    } else if (job.status === 'completed') {
+                        progressBar.style.width = '100%';
+                        progressText.textContent = job.result?.message || 'Scrape complete!';
+                        const pagesSaved = job.result?.pages_saved || 0;
+                        const totalBackedUp = job.result?.total_backed_up || 0;
+                        const assetsDownloaded = job.result?.assets_downloaded || 0;
+                        const queuedRemaining = job.result?.queued_remaining || 0;
+                        const errorCount = job.result?.error_count || 0;
+
+                        // Build completion summary
+                        logOutput('--- Scrape Complete ---', 'success');
+                        logOutput(`New pages saved: ${pagesSaved}`);
+                        logOutput(`Total pages backed up: ${totalBackedUp}`);
+                        if (assetsDownloaded > 0) {
+                            logOutput(`Assets downloaded: ${assetsDownloaded}`);
+                        }
+                        if (errorCount > 0) {
+                            logOutput(`Errors: ${errorCount}`, 'warning');
+                        }
+                        if (queuedRemaining > 0) {
+                            logOutput(`URLs still in queue: ${queuedRemaining} (set limit to ${totalBackedUp + queuedRemaining} to get all)`);
+                        }
+                        showToast('Scrape completed!');
+                        btn.disabled = false;
+                        btn.textContent = 'Start Scrape';
+                        markSectionComplete('scanBackupSection');
+                        await refreshSources();
+                        await loadSourceDetails();
+                    } else {
+                        progressText.textContent = `Error: ${job.error || 'Job failed'}`;
+                        logOutput(`Scrape failed: ${job.error || 'Unknown error'}`, 'error');
+                        showToast('Scrape failed', true);
+                        btn.disabled = false;
+                        btn.textContent = 'Start Scrape';
+                    }
+                } catch (e) {
+                    progressText.textContent = 'Error checking job status';
+                    btn.disabled = false;
+                    btn.textContent = 'Start Scrape';
+                }
+            };
+
+            poll();
+        }
+
+        // Show/hide scrape section based on source
+        function updateScrapeSection() {
+            const scrapeSection = document.getElementById('scrapeSection');
+            if (currentSource && currentSource.base_url && currentSource.backup_type === 'html') {
+                scrapeSection.style.display = 'block';
+            } else {
+                scrapeSection.style.display = 'none';
             }
         }
 

@@ -45,6 +45,49 @@ def get_backup_manifest_file() -> str:
     return "backup_manifest.json"
 
 
+# =============================================================================
+# HTML FILENAME UTILITIES
+# =============================================================================
+
+def html_filename_to_url(filename: str) -> str:
+    """
+    Convert an HTML backup filename to a URL path.
+
+    The scraper saves files like:
+        Projects_Cooling_ACEvapCool.htm.html  (original was .htm)
+        Projects_Cooling_SolarAC.html         (original was .html or no extension)
+
+    This converts them to URL paths:
+        /Projects/Cooling/ACEvapCool.htm
+        /Projects/Cooling/SolarAC
+
+    Args:
+        filename: The HTML filename (e.g., "Projects_Cooling_Page.htm.html")
+
+    Returns:
+        URL path (e.g., "/Projects/Cooling/Page.htm")
+    """
+    # Preserve .htm extension (scraper adds .html to all files including .htm)
+    # Order matters: check .htm.html first, then .html
+    url_path = filename.replace(".htm.html", ".htm").replace(".html", "").replace("_", "/")
+    return f"/{url_path}"
+
+
+def html_filename_to_title(filename: str) -> str:
+    """
+    Convert an HTML backup filename to a display title.
+
+    Strips all extensions and converts underscores to spaces.
+
+    Args:
+        filename: The HTML filename (e.g., "Projects_Cooling_Page.htm.html")
+
+    Returns:
+        Display title (e.g., "Projects Cooling Page")
+    """
+    # Strip all extensions for display
+    title = filename.replace(".htm.html", "").replace(".html", "").replace(".htm", "").replace("_", " ")
+    return title
 
 
 # =============================================================================

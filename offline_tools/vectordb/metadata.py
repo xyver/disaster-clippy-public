@@ -233,29 +233,14 @@ class MetadataIndex:
         }
 
     def _get_source_file(self, source: str) -> Optional[Path]:
-        """Get path to source-specific JSON file.
-
-        Checks both:
-        - Schema v3: {source_id}/_metadata.json (subfolder)
-        - Legacy: {source_id}.json (root level)
-        """
+        """Get path to source-specific JSON file: {source_id}/_metadata.json"""
         if self._cloud_only:
             return None
         # Sanitize source name for filename
         safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in source.lower())
 
-        # Check schema v3 path first: {source_id}/_metadata.json
-        v3_path = self.index_dir / safe_name / "_metadata.json"
-        if v3_path.exists():
-            return v3_path
-
-        # Fall back to legacy path: {source_id}.json
-        legacy_path = self.index_dir / f"{safe_name}.json"
-        if legacy_path.exists():
-            return legacy_path
-
-        # Return v3 path as default for new files
-        return v3_path
+        # Schema v3 path: {source_id}/_metadata.json
+        return self.index_dir / safe_name / "_metadata.json"
 
     def _load_source(self, source: str) -> Dict[str, Any]:
         """Load source-specific data (with caching)"""

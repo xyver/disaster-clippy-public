@@ -23,7 +23,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from offline_tools.vectordb import VectorStore, MetadataIndex
 from .schemas import (
     get_manifest_file, get_metadata_file, get_index_file, get_vectors_file,
-    get_backup_manifest_file, CURRENT_SCHEMA_VERSION
+    get_backup_manifest_file, CURRENT_SCHEMA_VERSION,
+    html_filename_to_url, html_filename_to_title
 )
 
 
@@ -1266,17 +1267,8 @@ class HTMLBackupIndexer:
         self.output_folder.mkdir(parents=True, exist_ok=True)
 
         # Find manifest file
-        self.manifest_path = None
-        candidates = [
-            self.backup_path / get_backup_manifest_file(),  # New: backup_manifest.json
-            self.backup_path / f"{source_id}_backup_manifest.json",  # Legacy v2
-            self.backup_path / f"{source_id}_manifest.json",  # Legacy v1
-            self.backup_path / "manifest.json",  # Very old
-        ]
-        for candidate in candidates:
-            if candidate.exists():
-                self.manifest_path = candidate
-                break
+        manifest_path = self.backup_path / get_backup_manifest_file()
+        self.manifest_path = manifest_path if manifest_path.exists() else None
 
         if not self.backup_path.exists():
             raise FileNotFoundError(f"Backup folder not found: {backup_path}")
@@ -1309,10 +1301,11 @@ class HTMLBackupIndexer:
             print(f"No pages in manifest, scanning {self.pages_dir}...")
             for html_file in self.pages_dir.glob("*.html"):
                 filename = html_file.name
-                url_path = filename.replace(".html", "").replace("_", "/")
-                pages[f"/{url_path}"] = {
+                # Use centralized filename conversion
+                url_path = html_filename_to_url(filename)
+                pages[url_path] = {
                     "filename": filename,
-                    "title": filename.replace(".html", "").replace("_", " ")
+                    "title": html_filename_to_title(filename)
                 }
             print(f"Found {len(pages)} HTML files")
 

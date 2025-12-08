@@ -21,7 +21,8 @@ from dataclasses import dataclass, asdict
 
 from .schemas import (
     get_manifest_file, get_metadata_file, get_index_file,
-    get_vectors_file, get_backup_manifest_file, validate_source_files
+    get_vectors_file, get_backup_manifest_file, validate_source_files,
+    html_filename_to_url
 )
 
 
@@ -981,9 +982,8 @@ class SourceManager:
                 except Exception:
                     pass  # Use filename-based title
 
-                # Reconstruct URL from filename
-                url_path = filename.replace(".html", "").replace(".htm", "").replace("_", "/")
-                url = f"/{url_path}"
+                # Reconstruct URL from filename using centralized function
+                url = html_filename_to_url(filename)
 
                 # Get file size
                 file_size = html_file.stat().st_size
@@ -1588,14 +1588,15 @@ class SourceManager:
             return {"success": False, "error": "No pages/ folder found", "document_count": 0}
 
         try:
-            metadata = generate_metadata_from_html(str(pages_folder))
+            metadata = generate_metadata_from_html(str(pages_folder), source_id, save=False)
 
             if not metadata or not metadata.get("documents"):
                 return {"success": False, "error": "No documents found in pages/", "document_count": 0}
 
-            # Save to _metadata.json
+            # Save to _metadata.json directly (don't use save_metadata which creates its own path)
             metadata_file = source_path / get_metadata_file()
-            save_metadata(metadata, str(metadata_file))
+            with open(metadata_file, 'w', encoding='utf-8') as f:
+                json.dump(metadata, f, indent=2)
 
             return {
                 "success": True,
@@ -2214,10 +2215,8 @@ class SourceManager:
 
         source_path = self.get_source_path(source_id)
 
-        # Check metadata file first (v3 or legacy)
+        # Check metadata file first
         metadata_file = source_path / get_metadata_file()
-        if not metadata_file.exists():
-            metadata_file = source_path / f"{source_id}_metadata.json"
         if metadata_file.exists():
             try:
                 with open(metadata_file, 'r', encoding='utf-8') as f:
@@ -2256,10 +2255,8 @@ class SourceManager:
                 except Exception:
                     pass
 
-        # Check backup manifest for license info (v3 or legacy)
+        # Check backup manifest for license info
         manifest = source_path / get_backup_manifest_file()
-        if not manifest.exists():
-            manifest = source_path / f"{source_id}_backup_manifest.json"
         if manifest.exists():
             try:
                 with open(manifest, 'r', encoding='utf-8') as f:
@@ -2336,12 +2333,9 @@ class SourceManager:
             except Exception as e:
                 print(f"[suggest_tags] Error reading collection: {e}")
 
-        # Check metadata for titles (v3 or legacy)
+        # Check metadata for titles
         metadata_file = source_path / get_metadata_file()
         print(f"[suggest_tags] Checking for: {metadata_file}")
-        if not metadata_file.exists():
-            metadata_file = source_path / f"{source_id}_metadata.json"
-            print(f"[suggest_tags] v3 not found, trying legacy: {metadata_file}")
 
         if metadata_file.exists():
             print(f"[suggest_tags] Found metadata file: {metadata_file}")
@@ -2448,10 +2442,6 @@ class SourceManager:
 
         source_path = self.get_source_path(source_id)
         metadata_file = source_path / get_metadata_file()
-
-        if not metadata_file.exists():
-            # Try legacy format
-            metadata_file = source_path / f"{source_id}_metadata.json"
 
         if not metadata_file.exists():
             return {
@@ -2578,12 +2568,7 @@ class SourceManager:
             manifest_file = source_path / get_manifest_file()
 
             if not manifest_file.exists():
-                # Try legacy format
-                legacy_manifest = source_path / f"{source_id}_source.json"
-                if legacy_manifest.exists():
-                    manifest_file = legacy_manifest
-                else:
-                    continue
+                continue
 
             sources_scanned += 1
 
