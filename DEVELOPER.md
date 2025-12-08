@@ -551,6 +551,45 @@ Available tag categories (defined in `SourceManager.TOPIC_KEYWORDS`):
 | appropriate-tech, electronics, vehicles | low tech, arduino, bicycle |
 | reference, how-to | manual, handbook, tutorial, diy |
 
+#### Novel Tags Discovery (Global Admin)
+
+When users choose tags for their sources (including novel terms from content analysis), those tags are saved with the source. Global admins can scan all sources to discover tags that users have chosen but which don't exist in `TOPIC_KEYWORDS`.
+
+**UI Location:** Submissions page (Global mode only) -> "Novel Tags Discovery" section
+
+**API Endpoint:** `GET /useradmin/api/discover-novel-tags` (requires Global Admin mode)
+
+**Backend Function:** `SourceManager.discover_novel_used_tags(source_ids=None)`
+
+```python
+from offline_tools.source_manager import SourceManager
+
+manager = SourceManager()
+
+# Scan all sources in backup folder
+result = manager.discover_novel_used_tags()
+
+# Or scan specific sources
+result = manager.discover_novel_used_tags(source_ids=["bitcoin", "ethereum"])
+
+# Result structure:
+{
+    "novel_tags": {"blockchain": ["bitcoin", "ethereum"], ...},  # tag -> sources
+    "known_tags": {"energy": ["solar-guide"], ...},
+    "sources_scanned": 15,
+    "sources_with_tags": 12,
+    "report": "Novel Tags Not in TOPIC_KEYWORDS:\n...",  # formatted string
+    "errors": []
+}
+```
+
+**Workflow:**
+1. Local users create sources and choose tags (Step 4 of Source Tools)
+2. Tags are saved in `_manifest.json`
+3. Global admin scans sources from Submissions page
+4. Novel tags displayed with usage counts
+5. Global admin manually adds valuable tags to `TOPIC_KEYWORDS` in `source_manager.py`
+
 ### Source Validation
 
 A source is ready for distribution when it has 5 status boxes green:
@@ -1252,18 +1291,19 @@ def extract_text_lenient(html_content: str) -> str:
     return ' '.join(line.strip() for line in text.splitlines() if line.strip())
 ```
 
-### Token Limit Errors During Indexing
+### Token Limit Errors During Indexing (FIXED Dec 2025)
 
 **Problem:** OpenAI embedding fails with "8581 tokens requested, 8192 max".
 
 **Cause:** Text truncation (20k chars) can still exceed 8192 tokens for dense text.
 
-**Current behavior:** Failed embeddings get zero vectors as placeholders.
+**Fix:** Added intelligent chunking in `EmbeddingService._embed_with_chunking()`:
+1. Try to embed full text (up to 32k chars)
+2. If token limit error, split text in half at sentence boundary
+3. Recursively embed each half (up to 8 chunks max)
+4. Average the embeddings to produce final vector
 
-**Fix options:**
-1. Truncate by token count, not character count
-2. Chunk long documents into multiple embeddings
-3. Use local embeddings (no token limit)
+All long articles now get proper embeddings instead of zero vectors.
 
 ### Pinecone Sync "Pushed: 0 documents" (FIXED Dec 2025)
 
@@ -1281,6 +1321,52 @@ doc_id = hashlib.md5(f"{source_id}:{url}".encode()).hexdigest()
 ```
 
 **Recovery:** Regenerate metadata for affected sources, then retry Pinecone sync.
+
+---
+
+## Search Result Diversity
+
+Search results are re-ranked to ensure diversity across sources, preventing any single source from dominating results.
+
+### How It Works
+
+1. **Search Phase**: Retrieves 15 candidate results from vector DB
+2. **Doc Type Prioritization**: Boosts guides over articles (configurable)
+3. **Source Diversity**: Limits to 2 results per source, then backfills
+4. **Final Output**: Returns top 5 diverse results to user
+
+### Implementation
+
+```python
+# app.py - ensure_source_diversity()
+def ensure_source_diversity(articles, max_per_source=2, total_results=5):
+    # Group by source
+    # Round-robin: take up to max_per_source from each source
+    # Backfill remaining slots with highest-scored unused articles
+```
+
+**Example behavior:**
+- Input: `[wiki1, wiki2, wiki3, wiki4, ready1, ready2, appro1]`
+- Output: `[wiki1, ready1, appro1, wiki2, ready2]`
+
+### User Override
+
+Users can still filter to a single source using the source filter in chat UI. When only one source is selected, all 5 results come from that source.
+
+---
+
+## Content Filtering
+
+### Minimum Content Length
+
+Articles with less than 100 characters of extracted text are filtered out during metadata generation. This removes stub pages, redirects, and other low-value content.
+
+**Configured in:**
+- `source_manager.py:1434` - Filter during ZIM metadata generation
+- `zim_utils.py:106` - Default parameter for ZIM inspection
+
+**Previous value:** 50 characters
+**Current value:** 100 characters
 
 ---
 

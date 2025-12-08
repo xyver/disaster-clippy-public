@@ -428,7 +428,7 @@ class VectorStore:
         result = self.delete_by_source(source_id)
         return result.get("deleted_count", 0)
 
-    def delete_by_source(self, source_id: str) -> Dict[str, Any]:
+    def delete_by_source(self, source_id: str, progress_callback=None) -> Dict[str, Any]:
         """
         Delete all vectors for a specific source.
 
@@ -436,6 +436,7 @@ class VectorStore:
 
         Args:
             source_id: The source identifier to delete
+            progress_callback: Optional function(current, total, message) for progress
 
         Returns:
             Dict with deletion stats: {deleted_count, batches}
@@ -452,12 +453,28 @@ class VectorStore:
                 include=[]
             )
             ids_to_delete = result.get("ids", [])
-            print(f"[VectorStore] Found {len(ids_to_delete)} documents to delete")
+            total_to_delete = len(ids_to_delete)
+            print(f"[VectorStore] Found {total_to_delete} documents to delete")
 
             if ids_to_delete:
-                self.collection.delete(ids=ids_to_delete)
-                print(f"[VectorStore] Deleted {len(ids_to_delete)} documents from source '{source_id}'")
-                return {"deleted_count": len(ids_to_delete), "batches": 1}
+                # Delete in batches to prevent long blocking and show progress
+                BATCH_SIZE = 500
+                deleted = 0
+                batches = 0
+
+                for i in range(0, total_to_delete, BATCH_SIZE):
+                    batch_ids = ids_to_delete[i:i + BATCH_SIZE]
+                    self.collection.delete(ids=batch_ids)
+                    deleted += len(batch_ids)
+                    batches += 1
+
+                    if progress_callback:
+                        progress_callback(deleted, total_to_delete, f"Deleting old documents ({deleted}/{total_to_delete})...")
+                    else:
+                        print(f"[VectorStore] Deleted {deleted}/{total_to_delete} documents...")
+
+                print(f"[VectorStore] Deleted {total_to_delete} documents from source '{source_id}'")
+                return {"deleted_count": total_to_delete, "batches": batches}
             else:
                 print(f"[VectorStore] No documents found for source '{source_id}'")
 

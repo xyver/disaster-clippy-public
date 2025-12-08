@@ -261,6 +261,33 @@ class SourceManager:
         "how-to": ["how to", "tutorial", "instructions", "step by step", "diy", "homemade", "build your own"],
     }
 
+    # Common English stopwords to filter from term discovery
+    STOPWORDS = {
+        "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for",
+        "of", "with", "by", "from", "as", "is", "was", "are", "were", "been",
+        "be", "have", "has", "had", "do", "does", "did", "will", "would",
+        "could", "should", "may", "might", "must", "shall", "can", "need",
+        "this", "that", "these", "those", "it", "its", "they", "them", "their",
+        "he", "she", "him", "her", "his", "we", "us", "our", "you", "your",
+        "i", "me", "my", "who", "what", "which", "when", "where", "why", "how",
+        "all", "each", "every", "both", "few", "more", "most", "other", "some",
+        "such", "no", "nor", "not", "only", "own", "same", "so", "than", "too",
+        "very", "just", "also", "now", "here", "there", "then", "once", "if",
+        "about", "after", "before", "above", "below", "between", "into", "through",
+        "during", "under", "again", "further", "any", "new", "old", "first",
+        "last", "long", "great", "little", "own", "other", "much", "many",
+        "over", "out", "up", "down", "off", "well", "back", "even", "still",
+        "way", "use", "used", "using", "one", "two", "three", "part", "parts",
+        "made", "make", "see", "also", "known", "called", "like", "get", "got",
+        "however", "example", "including", "because", "while", "being", "since",
+        "based", "within", "without", "although", "either", "another", "per",
+        "list", "lists", "article", "articles", "page", "pages", "section",
+        "wikipedia", "wikimedia", "category", "categories", "file", "files",
+        "index", "main", "content", "contents", "external", "links", "link",
+        "references", "reference", "source", "sources", "note", "notes",
+        "image", "images", "figure", "figures", "table", "tables", "data",
+    }
+
     def __init__(self, backup_path: str = None):
         """
         Args:
@@ -1280,6 +1307,8 @@ class SourceManager:
             Dict with success status and document count
         """
         import time as time_module
+        import re
+        from collections import Counter
         from .schemas import get_metadata_file
         from .indexer import should_include_article, extract_text_lenient
 
@@ -1313,10 +1342,17 @@ class SourceManager:
 
         # Initialize or load from checkpoint
         documents = {}
+        word_freq = Counter()  # Track word frequency for term discovery
         start_index = 0
         language_filtered = 0
         checkpoint = None
         resumed = False
+
+        # Build set of existing keywords to exclude from term discovery
+        existing_keywords = set()
+        for keywords in self.TOPIC_KEYWORDS.values():
+            for kw in keywords:
+                existing_keywords.update(kw.lower().split())
 
         if checkpointing_available and resume:
             checkpoint = load_checkpoint(source_id, "metadata")
@@ -1329,6 +1365,9 @@ class SourceManager:
                             partial_data = json.load(f)
                         documents = partial_data.get("documents", {})
                         language_filtered = partial_data.get("language_filtered", 0)
+                        # Restore word frequency from checkpoint if available
+                        saved_freq = partial_data.get("word_freq", {})
+                        word_freq = Counter(saved_freq)
                         start_index = checkpoint.last_article_index + 1
                         resumed = True
                         print(f"[metadata] Resuming from checkpoint: {len(documents)} docs, starting at article {start_index}")
@@ -1336,6 +1375,7 @@ class SourceManager:
                         print(f"[metadata] Error loading partial file: {e}")
                         # Start fresh if partial file is corrupted
                         documents = {}
+                        word_freq = Counter()
                         start_index = 0
 
         if not checkpoint and checkpointing_available:
@@ -1391,7 +1431,7 @@ class SourceManager:
 
                 # Use unified BeautifulSoup extraction for consistency with indexing
                 text = extract_text_lenient(content)
-                if len(text) < 50:  # Skip very short articles
+                if len(text) < 100:  # Skip very short articles
                     continue
 
                 # Use same ID format as indexer: MD5 hash of source_id:url
@@ -1407,6 +1447,13 @@ class SourceManager:
                 }
                 processed += 1
                 articles_since_checkpoint += 1
+
+                # Extract words from title for term discovery
+                # Only count words 3+ chars that aren't stopwords or existing keywords
+                title_words = re.findall(r'\b[a-zA-Z]{3,}\b', title.lower())
+                for word in title_words:
+                    if word not in self.STOPWORDS and word not in existing_keywords:
+                        word_freq[word] += 1
 
                 # Progress callback
                 if progress_callback and processed % 100 == 0:
@@ -1430,6 +1477,7 @@ class SourceManager:
                                     "source_id": source_id,
                                     "documents": documents,
                                     "language_filtered": language_filtered,
+                                    "word_freq": dict(word_freq),
                                     "last_article_index": i
                                 }, f)
                     zim.close()
@@ -1463,6 +1511,7 @@ class SourceManager:
                                     "source_id": source_id,
                                     "documents": documents,
                                     "language_filtered": language_filtered,
+                                    "word_freq": dict(word_freq),
                                     "last_article_index": i
                                 }
                                 temp_path = partial_path.with_suffix('.tmp')
@@ -1490,11 +1539,19 @@ class SourceManager:
 
         # Save final metadata
         metadata_file = source_path / get_metadata_file()
+
+        # Filter discovered terms: only include words appearing 2+ times, sorted by frequency
+        discovered_terms = {
+            word: count for word, count in word_freq.most_common()
+            if count >= 2
+        }
+
         metadata = {
             "source_id": source_id,
             "document_count": len(documents),
             "language_filter": language_filter,
             "language_filtered_count": language_filtered,
+            "discovered_terms": discovered_terms,
             "documents": documents
         }
 
@@ -1506,14 +1563,16 @@ class SourceManager:
             delete_checkpoint(source_id, "metadata")
 
         lang_info = f", {language_filtered} filtered by language" if language_filtered > 0 else ""
+        terms_info = f", {len(discovered_terms)} novel terms found" if discovered_terms else ""
         if progress_callback:
-            progress_callback(article_count, article_count, f"Metadata generation complete{lang_info}")
+            progress_callback(article_count, article_count, f"Metadata generation complete{lang_info}{terms_info}")
 
         return {
             "success": True,
             "document_count": len(documents),
             "language_filter": language_filter,
             "language_filtered_count": language_filtered,
+            "discovered_terms_count": len(discovered_terms),
             "metadata_file": str(metadata_file),
             "resumed": resumed
         }
@@ -2365,6 +2424,242 @@ class SourceManager:
         print(f"[suggest_tags] Total tags: {len(all_tags)}, returning top 10")
 
         return all_tags[:10]  # Return top 10 (priority + highest-scoring content)
+
+    def analyze_metadata_for_tags(self, source_id: str, update_metadata: bool = False) -> Dict[str, Any]:
+        """
+        Analyze existing metadata to discover novel terms without regenerating.
+
+        This is a quick alternative to regenerating metadata when you just want
+        to discover terms from an existing source.
+
+        Args:
+            source_id: Source identifier
+            update_metadata: If True, save discovered_terms back to metadata file
+
+        Returns:
+            Dict with:
+                - discovered_terms: dict of {term: count} sorted by frequency
+                - total_terms: number of unique terms found
+                - updated_metadata: bool indicating if file was updated
+        """
+        import re
+        from collections import Counter
+        from .schemas import get_metadata_file
+
+        source_path = self.get_source_path(source_id)
+        metadata_file = source_path / get_metadata_file()
+
+        if not metadata_file.exists():
+            # Try legacy format
+            metadata_file = source_path / f"{source_id}_metadata.json"
+
+        if not metadata_file.exists():
+            return {
+                "success": False,
+                "error": f"Metadata file not found for {source_id}",
+                "discovered_terms": {},
+                "total_terms": 0
+            }
+
+        try:
+            with open(metadata_file, 'r', encoding='utf-8') as f:
+                metadata = json.load(f)
+
+            # Check if already has discovered_terms
+            if "discovered_terms" in metadata and not update_metadata:
+                return {
+                    "success": True,
+                    "discovered_terms": metadata["discovered_terms"],
+                    "total_terms": len(metadata["discovered_terms"]),
+                    "already_analyzed": True,
+                    "updated_metadata": False
+                }
+
+            # Build existing keywords set
+            existing_keywords = set()
+            for keywords in self.TOPIC_KEYWORDS.values():
+                for kw in keywords:
+                    existing_keywords.update(kw.lower().split())
+
+            # Scan document titles
+            word_freq = Counter()
+            documents = metadata.get("documents", {})
+
+            for doc_id, doc_info in documents.items():
+                title = doc_info.get("title", "")
+                # Extract words 3+ chars, not in stopwords or existing keywords
+                title_words = re.findall(r'\b[a-zA-Z]{3,}\b', title.lower())
+                for word in title_words:
+                    if word not in self.STOPWORDS and word not in existing_keywords:
+                        word_freq[word] += 1
+
+            # Filter to terms appearing 2+ times
+            discovered_terms = {
+                word: count for word, count in word_freq.most_common()
+                if count >= 2
+            }
+
+            # Optionally update the metadata file
+            updated = False
+            if update_metadata:
+                metadata["discovered_terms"] = discovered_terms
+                with open(metadata_file, 'w', encoding='utf-8') as f:
+                    json.dump(metadata, f, indent=2)
+                updated = True
+
+            return {
+                "success": True,
+                "discovered_terms": discovered_terms,
+                "total_terms": len(discovered_terms),
+                "documents_scanned": len(documents),
+                "updated_metadata": updated
+            }
+
+        except Exception as e:
+            return {
+                "success": False,
+                "error": str(e),
+                "discovered_terms": {},
+                "total_terms": 0
+            }
+
+    def discover_novel_used_tags(self, source_ids: List[str] = None) -> Dict[str, Any]:
+        """
+        Discover tags used by sources that are not in TOPIC_KEYWORDS.
+
+        This helps global admins identify new tags that users have chosen
+        which could be added to the canonical TOPIC_KEYWORDS list.
+
+        Args:
+            source_ids: List of source IDs to scan. If None, scans all sources
+                       in the backup folder.
+
+        Returns:
+            Dict with:
+                - novel_tags: dict of {tag: [list of source_ids using it]}
+                - known_tags: dict of {tag: [list of source_ids using it]}
+                - sources_scanned: number of sources checked
+                - sources_with_tags: number of sources that had tags
+                - report: formatted string report for display
+        """
+        from .schemas import get_manifest_file
+
+        # Get known tags from TOPIC_KEYWORDS
+        known_tag_names = set(self.TOPIC_KEYWORDS.keys())
+
+        # Track tag usage
+        novel_tags = {}  # tag -> [source_ids]
+        known_tags = {}  # tag -> [source_ids]
+        sources_scanned = 0
+        sources_with_tags = 0
+        errors = []
+
+        # Determine which sources to scan
+        if source_ids is None:
+            # Scan all sources in backup folder
+            if not self.backup_path.exists():
+                return {
+                    "novel_tags": {},
+                    "known_tags": {},
+                    "sources_scanned": 0,
+                    "sources_with_tags": 0,
+                    "report": "Backup folder does not exist",
+                    "errors": ["Backup folder does not exist"]
+                }
+
+            source_ids = [
+                d.name for d in self.backup_path.iterdir()
+                if d.is_dir() and not d.name.startswith('.')
+            ]
+
+        # Scan each source
+        for source_id in source_ids:
+            source_path = self.get_source_path(source_id)
+            manifest_file = source_path / get_manifest_file()
+
+            if not manifest_file.exists():
+                # Try legacy format
+                legacy_manifest = source_path / f"{source_id}_source.json"
+                if legacy_manifest.exists():
+                    manifest_file = legacy_manifest
+                else:
+                    continue
+
+            sources_scanned += 1
+
+            try:
+                with open(manifest_file, 'r', encoding='utf-8') as f:
+                    manifest = json.load(f)
+
+                tags = manifest.get("tags", [])
+                if not tags:
+                    # Also check "topics" for PDF sources
+                    tags = manifest.get("topics", [])
+
+                if tags:
+                    sources_with_tags += 1
+
+                    for tag in tags:
+                        tag_lower = tag.lower().strip()
+                        if not tag_lower:
+                            continue
+
+                        if tag_lower in known_tag_names:
+                            if tag_lower not in known_tags:
+                                known_tags[tag_lower] = []
+                            known_tags[tag_lower].append(source_id)
+                        else:
+                            if tag_lower not in novel_tags:
+                                novel_tags[tag_lower] = []
+                            novel_tags[tag_lower].append(source_id)
+
+            except Exception as e:
+                errors.append(f"{source_id}: {str(e)}")
+
+        # Sort novel tags by usage count (most used first)
+        sorted_novel = dict(
+            sorted(novel_tags.items(), key=lambda x: len(x[1]), reverse=True)
+        )
+
+        # Generate report
+        report_lines = []
+        report_lines.append("Novel Tags Not in TOPIC_KEYWORDS:")
+        report_lines.append("-" * 50)
+
+        if sorted_novel:
+            # Find max tag length for alignment
+            max_tag_len = max(len(tag) for tag in sorted_novel.keys())
+
+            for tag, sources in sorted_novel.items():
+                source_list = ", ".join(sources[:5])
+                if len(sources) > 5:
+                    source_list += f", ... (+{len(sources) - 5} more)"
+                report_lines.append(
+                    f"{tag:<{max_tag_len}}  (used by {len(sources)} source(s): {source_list})"
+                )
+        else:
+            report_lines.append("No novel tags found - all tags are in TOPIC_KEYWORDS")
+
+        report_lines.append("")
+        report_lines.append(f"Sources scanned: {sources_scanned}")
+        report_lines.append(f"Sources with tags: {sources_with_tags}")
+        report_lines.append(f"Novel tags found: {len(sorted_novel)}")
+        report_lines.append(f"Known tags in use: {len(known_tags)}")
+
+        if errors:
+            report_lines.append("")
+            report_lines.append(f"Errors ({len(errors)}):")
+            for err in errors[:5]:
+                report_lines.append(f"  - {err}")
+
+        return {
+            "novel_tags": sorted_novel,
+            "known_tags": known_tags,
+            "sources_scanned": sources_scanned,
+            "sources_with_tags": sources_with_tags,
+            "report": "\n".join(report_lines),
+            "errors": errors
+        }
 
     # =========================================================================
     # PACK CREATION

@@ -873,6 +873,10 @@
                                     <!-- Sample rows will be inserted here -->
                                 </tbody>
                             </table>
+                            <div style="display: flex; align-items: center; gap: 1rem; margin-top: 0.5rem;">
+                                <button id="btnMoreUrlSamples" class="btn btn-secondary btn-sm" onclick="showMoreUrlSamples()" style="display: none;">Show More</button>
+                                <div id="urlSamplesCounter" style="font-size: 0.8rem; color: #888;"></div>
+                            </div>
                             <p style="font-size: 0.8rem; color: #888; margin-top: 0.5rem;">
                                 Find any article online (e.g., search Wikipedia for the title), copy its URL, and paste above. Then click "Detect Pattern".
                             </p>
@@ -959,26 +963,36 @@
                     <!-- Tags Section -->
                     <div class="tool-section" id="sectionTags" style="margin-top: 1.5rem;">
                         <h3>Source Tags</h3>
-                        <p>Tags help categorize and filter sources. Suggested tags are based on indexed content.</p>
+                        <p>Click tags to move between sections. Suggestions include content analysis and novel terms from titles.</p>
 
-                        <div class="form-group">
-                            <label>Current Tags</label>
-                            <input type="text" id="editTags" placeholder="emergency, water, shelter, medical">
-                            <p style="font-size: 0.8rem; color: #888; margin-top: 0.25rem;">
-                                Comma-separated tags for categorization
-                            </p>
-                        </div>
-
-                        <div id="suggestedTagsHint" style="display: none; margin-top: 0.5rem; padding: 0.75rem; background: #0a2a1a; border: 1px solid #1a5a3e; border-radius: 4px;">
-                            <div style="font-size: 0.8rem; color: #4ecca3; margin-bottom: 0.5rem;">
-                                <strong>Suggested Tags:</strong> <span id="suggestedTagsList"></span>
+                        <!-- Chosen Tags (will be saved) -->
+                        <div style="margin-bottom: 1rem;">
+                            <label style="display: block; margin-bottom: 0.5rem; color: #4ecca3; font-weight: 500;">Chosen Tags (will be saved)</label>
+                            <div id="chosenTagsCloud" style="min-height: 40px; background: #0a2a1a; border: 1px solid #1a5a3e; border-radius: 4px; padding: 0.5rem;">
+                                <span style="color: #666; font-size: 0.8rem;" id="noChosenTags">Click suggested tags or add custom tags below</span>
                             </div>
-                            <button class="btn btn-secondary" style="padding: 0.3rem 0.75rem; font-size: 0.8rem;" onclick="applySuggestedTags()">Apply Suggested Tags</button>
                         </div>
+
+                        <!-- Suggested Tags -->
+                        <div style="margin-bottom: 1rem;">
+                            <label style="display: block; margin-bottom: 0.5rem; color: #f9a825; font-weight: 500;">Suggested Tags <span id="suggestedTagsCount" style="color: #888; font-weight: normal;"></span></label>
+                            <div id="suggestedTagsCloud" style="min-height: 40px; max-height: 200px; overflow-y: auto; background: #2a2a1a; border: 1px solid #5a5a3e; border-radius: 4px; padding: 0.5rem;">
+                                <span style="color: #666; font-size: 0.8rem;" id="noSuggestedTags">Click "Get Suggestions" to analyze content</span>
+                            </div>
+                        </div>
+
+                        <!-- Add Custom Tag -->
+                        <div style="display: flex; gap: 0.5rem; margin-bottom: 1rem;">
+                            <input type="text" id="customTagInput" placeholder="Add custom tag..." style="flex: 1; padding: 0.4rem 0.75rem; font-size: 0.85rem;" onkeypress="if(event.key==='Enter'){addCustomTag();event.preventDefault();}">
+                            <button class="btn btn-secondary" onclick="addCustomTag()" style="padding: 0.4rem 0.75rem; font-size: 0.85rem;">Add</button>
+                        </div>
+
+                        <!-- Hidden field for form compatibility -->
+                        <input type="hidden" id="editTags" value="">
 
                         <div class="tool-actions" style="margin-top: 1rem;">
                             <button class="btn btn-primary" onclick="saveTags()">Save Tags</button>
-                            <button class="btn btn-secondary" onclick="getSuggestedTags()">Get Suggestions</button>
+                            <button class="btn btn-secondary" id="btnGetSuggestions" onclick="getSuggestedTags()">Get Suggestions</button>
                         </div>
                     </div>
                 </div>
@@ -1037,10 +1051,14 @@
                         <h3>Test Links</h3>
                         <p>Verify that article URLs are correct for online access. Important before publishing to Pinecone.</p>
                         <div class="tool-actions">
-                            <button class="btn btn-secondary" onclick="testLinks()">Test Sample Links</button>
+                            <button class="btn btn-secondary" id="btnTestLinks" onclick="testLinks()">Test Sample Links</button>
+                            <button class="btn btn-secondary" id="btnTestMore" onclick="showMoreSampleLinks()" style="display: none;">Show More (5 more)</button>
                         </div>
                         <div id="testLinksResults" style="display: none; margin-top: 1rem; font-size: 0.85rem;">
                             <!-- Results will be shown here -->
+                        </div>
+                        <div id="testLinksCounter" style="display: none; margin-top: 0.5rem; font-size: 0.8rem; color: #888;">
+                            <!-- Showing X of Y samples -->
                         </div>
                     </div>
 
@@ -1084,6 +1102,11 @@
         let sources = [];
         let currentSource = null;
         let currentStep = 1;
+
+        // Sample links rotation state
+        let allSampleLinks = [];      // All 20 sample links from API
+        let sampleLinksOffset = 0;    // Current offset for displaying
+        let sampleLinksBaseUrl = '';  // Base URL for display
         let selectedSourceType = null;
 
         // Pending index state for sync mode modal
@@ -1094,7 +1117,8 @@
         // Maps section IDs to their completion status
         let sectionState = {
             // Step 2: Configure
-            'scanBackupSection': 'pending',
+            'sectionConfig': 'pending',      // License configured
+            'scanBackupSection': 'pending',  // Backup scanned
             // Step 3: Index
             'sectionGenerateMetadata': 'pending',
             'sectionBaseUrl': 'pending',
@@ -1108,7 +1132,7 @@
 
         // Map steps to their required sections
         const stepSections = {
-            2: ['scanBackupSection'],
+            2: ['sectionConfig', 'scanBackupSection'],  // Need both license AND backup
             3: ['sectionGenerateMetadata', 'sectionCreateIndex'], // sectionBaseUrl is optional
             4: ['sectionTags'],
             5: ['sectionValidate']  // sectionTestLinks is optional
@@ -1169,13 +1193,20 @@
         function updateStepCompletion() {
             document.querySelectorAll('.wizard-step').forEach(el => {
                 const step = parseInt(el.dataset.step);
-                if (step !== currentStep) {
-                    // Check if step is complete based on sections
-                    if (isStepComplete(step) && step < currentStep) {
+                const stepComplete = isStepComplete(step);
+
+                if (step === currentStep) {
+                    // Current step - show as complete if all sections done
+                    if (stepComplete) {
                         el.classList.add('completed');
                         el.classList.remove('pending');
-                    } else if (step < currentStep) {
-                        // Visited but not all sections complete
+                    }
+                } else if (step < currentStep) {
+                    // Previous steps - show complete or pending
+                    if (stepComplete) {
+                        el.classList.add('completed');
+                        el.classList.remove('pending');
+                    } else {
                         el.classList.add('pending');
                         el.classList.remove('completed');
                     }
@@ -1191,12 +1222,13 @@
             }
 
             // Check what's already done based on source data
-            // Step 2: Config is "complete" if manifest exists with name
-            if (source.name && source.name !== source.source_id) {
-                // Config has been customized - but we track this via save action
+            // Step 2: Config is "complete" if license is set (not Unknown/empty)
+            const hasLicense = source.license && source.license.toLowerCase() !== 'unknown' && source.license !== '';
+            if (hasLicense) {
+                markSectionComplete('sectionConfig');
             }
 
-            // Step 2: Scan backup complete if backup_manifest exists
+            // Step 2: Scan backup complete if backup exists
             if (source.has_backup) {
                 markSectionComplete('scanBackupSection');
             }
@@ -1213,8 +1245,8 @@
                 markSectionSkipped('sectionBaseUrl');
             }
 
-            // Step 3: Index/vectors exist
-            if (source.has_vectors || source.has_index) {
+            // Step 3: Index/vectors exist (check actual API fields)
+            if (source.has_embeddings || source.has_vectors_file) {
                 markSectionComplete('sectionCreateIndex');
             }
 
@@ -1226,7 +1258,7 @@
             // Step 5: We don't persist validation state, so leave pending
             // unless we want to check if all status boxes are green
             if (source.has_config && source.has_backup && source.has_metadata &&
-                source.has_index && source.license_verified) {
+                source.has_embeddings && source.license_verified) {
                 markSectionComplete('sectionValidate');
             }
         }
@@ -1676,14 +1708,128 @@
             }
         }
 
+        // Track tags in the two sections
+        let chosenTags = new Set();
+        let suggestedTags = new Set();
+
         function populateTagsForm() {
             const s = currentSource;
-            // Tags - convert array to comma-separated string
-            const tags = Array.isArray(s.tags) ? s.tags.join(', ') : (s.tags || '');
-            document.getElementById('editTags').value = tags;
 
-            // Hide suggested tags hint initially
-            document.getElementById('suggestedTagsHint').style.display = 'none';
+            // Initialize chosen tags from current source tags
+            chosenTags.clear();
+            suggestedTags.clear();
+
+            const existingTags = Array.isArray(s.tags) ? s.tags : (s.tags ? s.tags.split(',').map(t => t.trim()).filter(t => t) : []);
+            existingTags.forEach(tag => chosenTags.add(tag));
+
+            // Update hidden field for form compatibility
+            updateHiddenTagsField();
+
+            // Render the tag clouds
+            renderChosenTags();
+            renderSuggestedTags();
+        }
+
+        function updateHiddenTagsField() {
+            document.getElementById('editTags').value = [...chosenTags].join(', ');
+        }
+
+        function renderChosenTags() {
+            const container = document.getElementById('chosenTagsCloud');
+            const noTags = document.getElementById('noChosenTags');
+
+            if (chosenTags.size === 0) {
+                container.innerHTML = '<span style="color: #666; font-size: 0.8rem;" id="noChosenTags">Click suggested tags or add custom tags below</span>';
+                return;
+            }
+
+            const html = [...chosenTags].map(tag => `
+                <button type="button" class="tag-btn chosen" data-tag="${tag}" onclick="moveTagToSuggested('${tag}')"
+                    style="display: inline-block; background: #0a2a1a; border: 1px solid #1a5a3e; color: #4ecca3; padding: 0.25rem 0.6rem; border-radius: 3px; margin: 0.15rem; font-size: 0.8rem; cursor: pointer; transition: all 0.15s;"
+                    title="Click to remove">
+                    ${tag}
+                </button>
+            `).join('');
+
+            container.innerHTML = html;
+        }
+
+        function renderSuggestedTags() {
+            const container = document.getElementById('suggestedTagsCloud');
+            const countSpan = document.getElementById('suggestedTagsCount');
+
+            // Update count in label
+            if (countSpan) {
+                countSpan.textContent = suggestedTags.size > 0 ? `(${suggestedTags.size} available)` : '';
+            }
+
+            if (suggestedTags.size === 0) {
+                container.innerHTML = '<span style="color: #666; font-size: 0.8rem;" id="noSuggestedTags">Click "Get Suggestions" to analyze content</span>';
+                return;
+            }
+
+            const html = [...suggestedTags].map(tag => `
+                <button type="button" class="tag-btn suggested" data-tag="${tag}" onclick="moveTagToChosen('${tag}')"
+                    style="display: inline-block; background: #2a2a1a; border: 1px solid #5a5a3e; color: #f9a825; padding: 0.25rem 0.6rem; border-radius: 3px; margin: 0.15rem; font-size: 0.8rem; cursor: pointer; transition: all 0.15s;"
+                    title="Click to add">
+                    ${tag}
+                </button>
+            `).join('');
+
+            container.innerHTML = html;
+        }
+
+        function moveTagToChosen(tag) {
+            suggestedTags.delete(tag);
+            chosenTags.add(tag);
+            renderChosenTags();
+            renderSuggestedTags();
+            updateHiddenTagsField();
+        }
+
+        function moveTagToSuggested(tag) {
+            chosenTags.delete(tag);
+            suggestedTags.add(tag);
+            renderChosenTags();
+            renderSuggestedTags();
+            updateHiddenTagsField();
+        }
+
+        function addCustomTag() {
+            const input = document.getElementById('customTagInput');
+            const tag = input.value.trim().toLowerCase();
+
+            if (!tag) return;
+
+            // Don't add duplicates
+            if (chosenTags.has(tag)) {
+                showToast('Tag already added');
+                input.value = '';
+                return;
+            }
+
+            // Remove from suggested if it's there
+            suggestedTags.delete(tag);
+
+            // Add to chosen
+            chosenTags.add(tag);
+            renderChosenTags();
+            renderSuggestedTags();
+            updateHiddenTagsField();
+
+            input.value = '';
+            logOutput(`Added custom tag: ${tag}`, 'success');
+        }
+
+        function addTagsToChosen(tags) {
+            // Used by novel terms "Add to Tags" button
+            tags.forEach(tag => {
+                suggestedTags.delete(tag);
+                chosenTags.add(tag);
+            });
+            renderChosenTags();
+            renderSuggestedTags();
+            updateHiddenTagsField();
         }
 
         // Save source configuration (Step 2 - without tags)
@@ -1713,6 +1859,11 @@
                 if (response.ok) {
                     logOutput('Configuration saved successfully', 'success');
                     showToast('Configuration saved');
+                    // Mark config section complete if license is set
+                    const hasLicense = config.license && config.license.toLowerCase() !== 'unknown' && config.license !== '';
+                    if (hasLicense) {
+                        markSectionComplete('sectionConfig');
+                    }
                     await refreshSources();
                     await loadSourceDetails();
                 } else {
@@ -1727,6 +1878,7 @@
 
         // Store sample articles for URL pattern detection
         let urlSamples = [];
+        let urlSamplesOffset = 0;  // Current offset for displaying (show 5 at a time)
 
         // Load sample articles for URL pattern detection
         async function loadUrlSamples() {
@@ -1796,19 +1948,26 @@
             }
         }
 
-        // Display sample articles in the URL detection table
-        function displayUrlSamples(samples) {
+        // Display sample articles in the URL detection table (shows 5 at a time)
+        function displayUrlSamples(samples, resetOffset = true) {
+            if (resetOffset) {
+                urlSamplesOffset = 0;
+            }
+
             const tbody = document.getElementById('urlSamplesBody');
             tbody.innerHTML = '';
 
-            samples.forEach((link, i) => {
+            // Show only 5 samples at a time
+            const batch = samples.slice(urlSamplesOffset, urlSamplesOffset + 5);
+
+            batch.forEach((link, i) => {
                 const row = document.createElement('tr');
                 row.style.borderBottom = '1px solid #222';
                 row.innerHTML = `
                     <td style="padding: 0.5rem; max-width: 150px; overflow: hidden; text-overflow: ellipsis;" title="${link.title}">${link.title}</td>
                     <td style="padding: 0.5rem; font-family: monospace; color: #4ecca3; font-size: 0.8rem;" title="${link.article_name}">${link.article_name || '(unknown)'}</td>
                     <td style="padding: 0.5rem;">
-                        <input type="text" class="actual-url-input" data-index="${i}" data-article="${link.article_name}"
+                        <input type="text" class="actual-url-input" data-index="${urlSamplesOffset + i}" data-article="${link.article_name}"
                                placeholder="https://..." style="width: 100%; font-size: 0.8rem; font-family: monospace;">
                     </td>
                 `;
@@ -1816,6 +1975,32 @@
             });
 
             document.getElementById('urlSamplesTable').style.display = 'block';
+
+            // Update counter and Show More button
+            const counterDiv = document.getElementById('urlSamplesCounter');
+            const btnMore = document.getElementById('btnMoreUrlSamples');
+            if (samples.length > 0) {
+                const start = urlSamplesOffset + 1;
+                const end = Math.min(urlSamplesOffset + 5, samples.length);
+                counterDiv.textContent = `Showing ${start}-${end} of ${samples.length} samples`;
+            }
+            btnMore.style.display = samples.length > 5 ? 'inline-block' : 'none';
+        }
+
+        // Show next batch of URL samples
+        function showMoreUrlSamples() {
+            if (!urlSamples || urlSamples.length === 0) return;
+
+            // Move to next batch
+            urlSamplesOffset += 5;
+
+            // Wrap around if we've shown all
+            if (urlSamplesOffset >= urlSamples.length) {
+                urlSamplesOffset = 0;
+            }
+
+            displayUrlSamples(urlSamples, false);
+            logOutput(`Showing URL samples ${urlSamplesOffset + 1}-${Math.min(urlSamplesOffset + 5, urlSamples.length)}`);
         }
 
         // Detect URL pattern from user-provided actual URLs
@@ -2641,6 +2826,9 @@
             }
 
             const resultsDiv = document.getElementById('testLinksResults');
+            const counterDiv = document.getElementById('testLinksCounter');
+            const btnMore = document.getElementById('btnTestMore');
+
             resultsDiv.style.display = 'block';
             resultsDiv.innerHTML = '<div style="color: #888;">Testing links...</div>';
             logOutput(`Testing links for ${currentSource.source_id}...`);
@@ -2655,49 +2843,30 @@
                     return;
                 }
 
-                // Build results HTML
-                let html = `<div style="margin-bottom: 0.5rem;">
-                    <strong>Base URL:</strong> ${data.base_url || '(not set)'}
-                </div>`;
+                // Store all sample links and reset offset
+                allSampleLinks = data.sample_links || [];
+                sampleLinksOffset = 0;
+                sampleLinksBaseUrl = data.base_url || '';
+
+                // Show source info
+                const sourceInfo = data.docs_source === 'index' ? '(from _index.json)' : '(from _metadata.json)';
+                logOutput(`Loaded ${allSampleLinks.length} sample links ${sourceInfo}`);
 
                 if (data.warning) {
-                    html += `<div style="color: #f9a825; margin-bottom: 0.5rem;">
-                        Warning: ${data.warning}
-                    </div>`;
                     logOutput(`Warning: ${data.warning}`, 'warning');
                 }
 
-                if (data.sample_links && data.sample_links.length > 0) {
-                    html += '<table style="width: 100%; border-collapse: collapse; margin-top: 0.5rem;">';
-                    html += '<tr style="border-bottom: 1px solid #333;"><th style="text-align: left; padding: 0.25rem;">Title</th><th style="text-align: left; padding: 0.25rem;">URL Type</th><th style="text-align: left; padding: 0.25rem;">Test</th></tr>';
+                // Show first 5
+                renderSampleLinks();
 
-                    data.sample_links.forEach(link => {
-                        const typeColor = link.is_online_url ? '#4ecca3' : '#e94560';
-                        const typeLabel = link.is_online_url ? 'Online' : (link.is_local_url ? 'Local' : 'Unknown');
-                        const displayUrl = link.constructed_url || link.stored_url;
-                        const testUrl = link.is_online_url ? displayUrl : null;
-
-                        html += `<tr style="border-bottom: 1px solid #222;">
-                            <td style="padding: 0.25rem; max-width: 200px; overflow: hidden; text-overflow: ellipsis;">${link.title}</td>
-                            <td style="padding: 0.25rem; color: ${typeColor};">${typeLabel}</td>
-                            <td style="padding: 0.25rem;">
-                                ${testUrl ? `<a href="${testUrl}" target="_blank" style="color: #4ecca3;">Open</a>` : '<span style="color: #666;">N/A</span>'}
-                            </td>
-                        </tr>`;
-
-                        logOutput(`  ${link.title}: ${typeLabel} - ${displayUrl}`);
-                    });
-
-                    html += '</table>';
-                } else {
-                    html += '<div style="color: #888;">No sample links found. Generate metadata first.</div>';
+                // Show/hide "Show More" button
+                if (btnMore) {
+                    btnMore.style.display = allSampleLinks.length > 5 ? 'inline-block' : 'none';
                 }
 
-                resultsDiv.innerHTML = html;
-
-                // Summary
-                const onlineCount = data.sample_links.filter(l => l.is_online_url).length;
-                const totalCount = data.sample_links.length;
+                // Summary for all samples
+                const onlineCount = allSampleLinks.filter(l => l.is_online_url).length;
+                const totalCount = allSampleLinks.length;
                 if (onlineCount === totalCount && totalCount > 0) {
                     logOutput(`All ${totalCount} sample links are online URLs - ready for Pinecone!`, 'success');
                     showToast('Links look good!');
@@ -2706,7 +2875,6 @@
                     logOutput(`${onlineCount}/${totalCount} links are online. Re-index may be needed.`, 'warning');
                     showToast(`${totalCount - onlineCount} links are local - may not work on Railway`, true);
                 } else {
-                    // No links to test, mark as skipped
                     markSectionSkipped('sectionTestLinks');
                 }
 
@@ -2715,6 +2883,66 @@
                 logOutput(`Error: ${e.message}`, 'error');
                 showToast('Error: ' + e.message, true);
             }
+        }
+
+        function renderSampleLinks() {
+            const resultsDiv = document.getElementById('testLinksResults');
+            const counterDiv = document.getElementById('testLinksCounter');
+
+            if (!allSampleLinks || allSampleLinks.length === 0) {
+                resultsDiv.innerHTML = '<div style="color: #888;">No sample links found. Run Create Index first.</div>';
+                if (counterDiv) counterDiv.style.display = 'none';
+                return;
+            }
+
+            // Get current batch of 5
+            const batch = allSampleLinks.slice(sampleLinksOffset, sampleLinksOffset + 5);
+
+            let html = `<div style="margin-bottom: 0.5rem;">
+                <strong>Base URL:</strong> ${sampleLinksBaseUrl || '(not set)'}
+            </div>`;
+
+            html += '<table style="width: 100%; border-collapse: collapse; margin-top: 0.5rem;">';
+            html += '<tr style="border-bottom: 1px solid #333;"><th style="text-align: left; padding: 0.25rem;">Title</th><th style="text-align: left; padding: 0.25rem;">URL Type</th><th style="text-align: left; padding: 0.25rem;">Test</th></tr>';
+
+            batch.forEach(link => {
+                const typeColor = link.is_online_url ? '#4ecca3' : '#e94560';
+                const typeLabel = link.is_online_url ? 'Online' : (link.is_local_url ? 'Local' : 'Unknown');
+                const displayUrl = link.constructed_url || link.stored_url;
+                const testUrl = link.is_online_url ? displayUrl : null;
+
+                html += `<tr style="border-bottom: 1px solid #222;">
+                    <td style="padding: 0.25rem; max-width: 200px; overflow: hidden; text-overflow: ellipsis;" title="${link.title}">${link.title}</td>
+                    <td style="padding: 0.25rem; color: ${typeColor};">${typeLabel}</td>
+                    <td style="padding: 0.25rem;">
+                        ${testUrl ? `<a href="${testUrl}" target="_blank" style="color: #4ecca3;">Open</a>` : '<span style="color: #666;">N/A</span>'}
+                    </td>
+                </tr>`;
+            });
+
+            html += '</table>';
+            resultsDiv.innerHTML = html;
+
+            // Update counter
+            if (counterDiv) {
+                const start = sampleLinksOffset + 1;
+                const end = Math.min(sampleLinksOffset + 5, allSampleLinks.length);
+                counterDiv.textContent = `Showing ${start}-${end} of ${allSampleLinks.length} samples`;
+                counterDiv.style.display = 'block';
+            }
+        }
+
+        function showMoreSampleLinks() {
+            if (!allSampleLinks || allSampleLinks.length === 0) return;
+
+            // Advance offset, wrap around if needed
+            sampleLinksOffset += 5;
+            if (sampleLinksOffset >= allSampleLinks.length) {
+                sampleLinksOffset = 0;
+            }
+
+            renderSampleLinks();
+            logOutput(`Showing samples ${sampleLinksOffset + 1}-${Math.min(sampleLinksOffset + 5, allSampleLinks.length)}`);
         }
 
         function showValidationSuccess() {
@@ -2742,27 +2970,20 @@
             banner.style.display = 'flex';
         }
 
-        function applySuggestedTags() {
-            if (window.suggestedTags && window.suggestedTags.length > 0) {
-                document.getElementById('editTags').value = window.suggestedTags.join(', ');
-                logOutput('Applied suggested tags', 'success');
-                showToast('Tags applied - click Save Tags to confirm');
-            }
-        }
-
+        // =====================================================================
         // Save tags (Step 4)
         async function saveTags() {
             if (!currentSource) return;
 
-            const tagsStr = document.getElementById('editTags').value;
-            const tags = tagsStr ? tagsStr.split(',').map(t => t.trim()).filter(t => t) : [];
+            // Get tags from the chosen tags cloud
+            const tags = [...chosenTags];
 
             const config = {
                 source_id: currentSource.source_id,
                 tags: tags
             };
 
-            logOutput(`Saving tags for ${currentSource.source_id}...`);
+            logOutput(`Saving ${tags.length} tags for ${currentSource.source_id}...`);
 
             try {
                 const response = await fetch('/useradmin/api/update-source-config', {
@@ -2775,7 +2996,7 @@
 
                 if (response.ok) {
                     logOutput(`Tags saved: ${tags.join(', ') || '(none)'}`, 'success');
-                    showToast('Tags saved');
+                    showToast(`Saved ${tags.length} tags`);
                     markSectionComplete('sectionTags');
                     await refreshSources();
                     await loadSourceDetails();
@@ -2789,51 +3010,78 @@
             }
         }
 
-        // Get suggested tags by running validation
+        // Get suggested tags by running validation + novel terms analysis
         async function getSuggestedTags() {
             if (!currentSource) return;
 
+            const btn = document.getElementById('btnGetSuggestions');
+            if (btn) {
+                btn.disabled = true;
+                btn.textContent = 'Analyzing...';
+            }
+
             logOutput(`Analyzing content for tag suggestions...`);
+            let totalAdded = 0;
 
             try {
-                const response = await fetch('/useradmin/api/validate-source', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ source_id: currentSource.source_id })
-                });
+                // Fetch both system suggestions and novel terms in parallel
+                const [validateResp, novelResp] = await Promise.all([
+                    fetch('/useradmin/api/validate-source', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ source_id: currentSource.source_id })
+                    }),
+                    fetch(`/useradmin/api/novel-terms/${currentSource.source_id}?update=true`)
+                ]);
 
-                const data = await response.json();
+                const validateData = await validateResp.json();
+                const novelData = await novelResp.json();
 
-                if (response.ok && data.suggested_tags && data.suggested_tags.length > 0) {
-                    // New suggestions available - populate text box
-                    window.suggestedTags = data.suggested_tags;
-                    document.getElementById('editTags').value = data.suggested_tags.join(', ');
-                    document.getElementById('suggestedTagsList').textContent = data.suggested_tags.join(', ');
-                    document.getElementById('suggestedTagsHint').style.display = 'block';
-                    logOutput(`Suggested tags applied: ${data.suggested_tags.join(', ')}`, 'success');
-                } else if (response.ok) {
-                    // Check why no suggestions
-                    if (data.has_tags) {
-                        // Source already has tags - load them into text box
-                        const existingTags = currentSource.tags || [];
-                        if (existingTags.length > 0) {
-                            document.getElementById('editTags').value = existingTags.join(', ');
-                            logOutput(`Loaded ${existingTags.length} existing tags: ${existingTags.join(', ')}`, 'success');
-                        } else {
-                            logOutput('Source has tags in manifest. Edit tags below if needed.', 'info');
+                // Add system-suggested tags (from TOPIC_KEYWORDS matching)
+                if (validateResp.ok && validateData.suggested_tags && validateData.suggested_tags.length > 0) {
+                    validateData.suggested_tags.forEach(tag => {
+                        if (!chosenTags.has(tag) && !suggestedTags.has(tag)) {
+                            suggestedTags.add(tag);
+                            totalAdded++;
                         }
-                    } else if (!data.has_metadata) {
-                        logOutput('No tag suggestions - source needs to be indexed first (Step 3).', 'warning');
-                    } else {
-                        logOutput('No tag suggestions found. Try adding tags manually based on content type.', 'info');
-                    }
-                    document.getElementById('suggestedTagsHint').style.display = 'none';
-                } else {
-                    logOutput(`Validation error: ${data.detail || 'Unknown error'}`, 'error');
-                    document.getElementById('suggestedTagsHint').style.display = 'none';
+                    });
+                    logOutput(`Found ${validateData.suggested_tags.length} content-based suggestions`, 'success');
                 }
+
+                // Add novel terms (from title word frequency)
+                if (novelResp.ok && novelData.status === 'success' && novelData.top_terms) {
+                    const novelTerms = Object.keys(novelData.top_terms);
+                    let novelAdded = 0;
+                    novelTerms.forEach(term => {
+                        if (!chosenTags.has(term) && !suggestedTags.has(term)) {
+                            suggestedTags.add(term);
+                            novelAdded++;
+                            totalAdded++;
+                        }
+                    });
+                    if (novelAdded > 0) {
+                        logOutput(`Found ${novelAdded} novel terms from ${novelData.documents_scanned} document titles`, 'success');
+                    }
+                }
+
+                renderSuggestedTags();
+
+                if (totalAdded > 0) {
+                    showToast(`Found ${totalAdded} suggestions - click to add`);
+                } else if (!validateData.has_metadata) {
+                    logOutput('No suggestions - source needs to be indexed first (Step 3).', 'warning');
+                } else {
+                    logOutput('No new suggestions found.', 'info');
+                }
+
             } catch (e) {
                 logOutput(`Error: ${e.message}`, 'error');
+            } finally {
+                const btn = document.getElementById('btnGetSuggestions');
+                if (btn) {
+                    btn.disabled = false;
+                    btn.textContent = 'Get Suggestions';
+                }
             }
         }
 

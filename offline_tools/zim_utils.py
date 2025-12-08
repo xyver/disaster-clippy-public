@@ -37,7 +37,7 @@ class ZIMInspectionResult:
     indexable_count: int = 0  # Articles with >= min_text_length chars
     skipped_count: int = 0    # Articles with < min_text_length chars
     avg_text_length: float = 0
-    min_text_length_used: int = 50
+    min_text_length_used: int = 100
 
     # Content type detection
     has_video_content: bool = False
@@ -103,7 +103,7 @@ class ZIMInspectionResult:
 def inspect_zim_file(
     zim_path: str,
     scan_limit: int = 5000,
-    min_text_length: int = 50,
+    min_text_length: int = 100,
     sample_size: int = 10,
     progress_callback: Optional[Callable[[int, int, str], None]] = None
 ) -> ZIMInspectionResult:

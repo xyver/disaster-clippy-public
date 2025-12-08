@@ -31,6 +31,29 @@ class JobStatus(str, Enum):
     INTERRUPTED = "interrupted"  # Was running when server stopped
 
 
+def _result_to_dict(result: Any) -> Dict[str, Any]:
+    """Convert a job result to a JSON-serializable dict.
+
+    Handles:
+    - dict: returned as-is
+    - dataclass: converted via asdict()
+    - objects with to_dict(): calls to_dict()
+    - other: wrapped in {"result": str(result)}
+    """
+    if result is None:
+        return {}
+    if isinstance(result, dict):
+        return result
+    # Check if it's a dataclass
+    if hasattr(result, '__dataclass_fields__'):
+        return asdict(result)
+    # Check if it has to_dict method
+    if hasattr(result, 'to_dict') and callable(result.to_dict):
+        return result.to_dict()
+    # Fallback: wrap as string
+    return {"result": str(result)}
+
+
 # =============================================================================
 # CHECKPOINT SYSTEM
 # =============================================================================
@@ -587,21 +610,24 @@ class JobManager:
             # Run the function
             result = func(*args, **kwargs)
 
+            # Convert result to dict (handles dataclasses, dicts, etc.)
+            result_dict = _result_to_dict(result)
+
             # Check if job was cancelled (either by check_cancelled or result status)
-            if isinstance(result, dict) and result.get("status") == "cancelled":
+            if result_dict.get("status") == "cancelled":
                 job.status = JobStatus.CANCELLED
                 job.message = "Cancelled by user (checkpoint saved)"
-                job.result = result
-            # Check if result indicates failure (some functions return success: False)
-            elif isinstance(result, dict) and result.get("success") is False:
+                job.result = result_dict
+            # Check if result indicates failure (success: False)
+            elif result_dict.get("success") is False:
                 job.status = JobStatus.FAILED
-                job.error = result.get("error", "Operation failed")
-                job.message = f"Failed: {result.get('error', 'Unknown error')}"
-                job.result = result
+                job.error = result_dict.get("error", "Operation failed")
+                job.message = f"Failed: {result_dict.get('error', 'Unknown error')}"
+                job.result = result_dict
             else:
                 job.status = JobStatus.COMPLETED
                 job.progress = 100
-                job.result = result if isinstance(result, dict) else {"result": result}
+                job.result = result_dict
                 job.message = "Completed successfully"
 
         except Exception as e:

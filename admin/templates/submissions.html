@@ -48,6 +48,44 @@
             color: #888;
             margin-bottom: 0.25rem;
         }
+        /* Novel Tags Section Styles */
+        .novel-tags-section {
+            background: #1a1a2e;
+            border: 1px solid #4ecca3;
+            border-radius: 6px;
+            padding: 1rem;
+            margin-bottom: 1rem;
+        }
+        .novel-tags-section h3 {
+            color: #4ecca3;
+            margin-bottom: 0.5rem;
+        }
+        .novel-tags-report {
+            background: #0d1117;
+            border: 1px solid #30363d;
+            border-radius: 4px;
+            padding: 1rem;
+            font-family: monospace;
+            font-size: 0.85rem;
+            white-space: pre-wrap;
+            max-height: 400px;
+            overflow-y: auto;
+            color: #c9d1d9;
+        }
+        .novel-tag-item {
+            display: inline-block;
+            background: #2e2a1a;
+            color: #f9a825;
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+            margin: 0.25rem;
+            font-size: 0.85rem;
+        }
+        .novel-tag-count {
+            color: #888;
+            font-size: 0.75rem;
+            margin-left: 0.25rem;
+        }
         .summary-stats {
             display: flex;
             gap: 2rem;
@@ -125,6 +163,65 @@
 
             <div id="submissionsList" class="submission-list">
                 <div class="placeholder">Loading...</div>
+            </div>
+        </div>
+
+        <!-- Novel Tags Discovery Section (Global Admin Only) -->
+        <div class="section" id="novelTagsSection" style="display: none;">
+            <h2>Novel Tags Discovery</h2>
+            <p class="description">
+                Scan all sources to find tags users have chosen that are not in TOPIC_KEYWORDS.
+                Consider adding frequently-used novel tags to the codebase.
+            </p>
+
+            <div class="novel-tags-section">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                    <h3>Scan Sources for Novel Tags</h3>
+                    <button class="btn btn-primary" id="btnScanNovelTags" onclick="scanNovelTags()">
+                        Scan All Sources
+                    </button>
+                </div>
+
+                <div id="novelTagsStats" style="display: none; margin-bottom: 1rem;">
+                    <div class="summary-stats" style="margin-bottom: 0;">
+                        <div class="stat-item">
+                            <div class="stat-value" id="novelSourcesScanned">0</div>
+                            <div class="stat-label">Sources Scanned</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-value" id="novelSourcesWithTags">0</div>
+                            <div class="stat-label">With Tags</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-value" style="color: #f9a825;" id="novelTagsCount">0</div>
+                            <div class="stat-label">Novel Tags</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-value" id="knownTagsCount">0</div>
+                            <div class="stat-label">Known Tags Used</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="novelTagsResults" style="display: none;">
+                    <div style="margin-bottom: 0.5rem; color: #888; font-size: 0.85rem;">
+                        Novel tags not in TOPIC_KEYWORDS (click to copy):
+                    </div>
+                    <div id="novelTagsCloud" style="margin-bottom: 1rem;">
+                        <!-- Tag chips will be rendered here -->
+                    </div>
+
+                    <details>
+                        <summary style="cursor: pointer; color: #4ecca3; margin-bottom: 0.5rem;">Full Report</summary>
+                        <div id="novelTagsReport" class="novel-tags-report">
+                            <!-- Report will be rendered here -->
+                        </div>
+                    </details>
+                </div>
+
+                <div id="novelTagsPlaceholder" class="placeholder" style="margin-top: 1rem;">
+                    Click "Scan All Sources" to discover novel tags
+                </div>
             </div>
         </div>
     </div>
@@ -237,14 +334,88 @@
             const isGlobal = isGlobalTestMode();
             const title = document.getElementById('submissionsTitle');
             const desc = document.getElementById('submissionsDesc');
+            const novelTagsSection = document.getElementById('novelTagsSection');
 
             if (isGlobal) {
                 title.textContent = 'Incoming Submissions';
                 desc.textContent = 'User-submitted sources pending review. Approve to add to the Global Cloud Backup.';
+                // Show novel tags section for global admin
+                novelTagsSection.style.display = 'block';
             } else {
                 title.textContent = 'Your Submissions';
                 desc.textContent = 'Sources you\'ve submitted for review. Once approved by the admin, they\'ll be moved to the Global Cloud Backup for all users to access.';
+                // Hide novel tags section for local users
+                novelTagsSection.style.display = 'none';
             }
+        }
+
+        // Scan for novel tags
+        async function scanNovelTags() {
+            const btn = document.getElementById('btnScanNovelTags');
+            const statsContainer = document.getElementById('novelTagsStats');
+            const resultsContainer = document.getElementById('novelTagsResults');
+            const placeholder = document.getElementById('novelTagsPlaceholder');
+
+            btn.disabled = true;
+            btn.textContent = 'Scanning...';
+            placeholder.textContent = 'Scanning sources...';
+
+            try {
+                const response = await fetch('/useradmin/api/discover-novel-tags');
+                const data = await response.json();
+
+                if (data.status === 'error') {
+                    placeholder.textContent = 'Error: ' + (data.error || 'Unknown error');
+                    placeholder.style.color = '#e94560';
+                    return;
+                }
+
+                // Update stats
+                document.getElementById('novelSourcesScanned').textContent = data.sources_scanned || 0;
+                document.getElementById('novelSourcesWithTags').textContent = data.sources_with_tags || 0;
+                document.getElementById('novelTagsCount').textContent = Object.keys(data.novel_tags || {}).length;
+                document.getElementById('knownTagsCount').textContent = Object.keys(data.known_tags || {}).length;
+                statsContainer.style.display = 'block';
+
+                // Render novel tags as clickable chips
+                const novelTags = data.novel_tags || {};
+                const tagCloud = document.getElementById('novelTagsCloud');
+
+                if (Object.keys(novelTags).length > 0) {
+                    let tagsHtml = '';
+                    for (const [tag, sources] of Object.entries(novelTags)) {
+                        tagsHtml += `<span class="novel-tag-item" onclick="copyTag('${escapeHtml(tag)}')" title="Used by: ${sources.join(', ')}">${escapeHtml(tag)}<span class="novel-tag-count">(${sources.length})</span></span>`;
+                    }
+                    tagCloud.innerHTML = tagsHtml;
+                    resultsContainer.style.display = 'block';
+                    placeholder.style.display = 'none';
+                } else {
+                    tagCloud.innerHTML = '<span style="color: #4ecca3;">All tags are already in TOPIC_KEYWORDS!</span>';
+                    resultsContainer.style.display = 'block';
+                    placeholder.style.display = 'none';
+                }
+
+                // Show full report
+                document.getElementById('novelTagsReport').textContent = data.report || 'No report available';
+
+            } catch (e) {
+                placeholder.textContent = 'Error: ' + e.message;
+                placeholder.style.color = '#e94560';
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Scan All Sources';
+            }
+        }
+
+        // Copy tag to clipboard
+        function copyTag(tag) {
+            navigator.clipboard.writeText(tag).then(() => {
+                // Brief visual feedback
+                const btn = event.target.closest('.novel-tag-item');
+                const originalBg = btn.style.background;
+                btn.style.background = '#1a5a3e';
+                setTimeout(() => { btn.style.background = originalBg; }, 200);
+            });
         }
 
         // Initialize view on load

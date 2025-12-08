@@ -1158,6 +1158,47 @@ async def list_cloud_backups():
         return {"submissions": [], "error": str(e)}
 
 
+@router.get("/api/discover-novel-tags")
+async def discover_novel_tags(
+    _: bool = Depends(_require_global_admin)
+):
+    """
+    Discover tags used by sources that are not in TOPIC_KEYWORDS.
+
+    REQUIRES: VECTOR_DB_MODE=global (Global Admin only)
+
+    Scans all sources in the backup folder and returns a report of novel tags
+    that users have chosen but which don't exist in the canonical TOPIC_KEYWORDS list.
+    """
+    try:
+        from offline_tools.source_manager import SourceManager
+
+        manager = SourceManager()
+        result = manager.discover_novel_used_tags()
+
+        return {
+            "status": "success",
+            "novel_tags": result["novel_tags"],
+            "known_tags": result["known_tags"],
+            "sources_scanned": result["sources_scanned"],
+            "sources_with_tags": result["sources_with_tags"],
+            "report": result["report"],
+            "errors": result["errors"]
+        }
+
+    except Exception as e:
+        return {
+            "status": "error",
+            "error": str(e),
+            "novel_tags": {},
+            "known_tags": {},
+            "sources_scanned": 0,
+            "sources_with_tags": 0,
+            "report": f"Error: {str(e)}",
+            "errors": [str(e)]
+        }
+
+
 # ============================================================================
 # Pinecone Sync Operations
 # ============================================================================

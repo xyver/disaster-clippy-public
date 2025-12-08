@@ -609,10 +609,10 @@ async def chat(request: Request, body: ChatRequest):
                 articles = []
             else:
                 source_filter = {"source": {"$in": body.sources}}
-                articles = search_articles(message, n_results=10,
+                articles = search_articles(message, n_results=15,
                                           source_filter=source_filter, mode=mode)
         else:
-            articles = search_articles(message, n_results=10,
+            articles = search_articles(message, n_results=15,
                                        source_filter=source_filter, mode=mode)
 
     # Prioritize results by doc_type (guides by default, unless user asked for something else)
@@ -622,8 +622,8 @@ async def chat(request: Request, body: ChatRequest):
     if body.sources is not None and len(body.sources) > 0:
         articles = [a for a in articles if a.get("metadata", {}).get("source") in body.sources]
 
-    # Return top 5 after re-ranking
-    articles = articles[:5]
+    # Ensure source diversity (max 2 per source, then backfill)
+    articles = ensure_source_diversity(articles, max_per_source=2, total_results=5)
 
     # Store results for follow-up queries
     session["last_results"] = articles
@@ -722,11 +722,11 @@ async def simple_chat(request: Request, body: SimpleQueryRequest):
     elif body.sources is not None and len(body.sources) == 0:
         articles = []  # No sources selected
     else:
-        articles = search_articles(message, n_results=10, source_filter=source_filter)
+        articles = search_articles(message, n_results=15, source_filter=source_filter)
 
-    # Prioritize and limit results
+    # Prioritize and ensure source diversity
     articles = prioritize_results_by_doc_type(articles, preferred_doc_type)
-    articles = articles[:5]
+    articles = ensure_source_diversity(articles, max_per_source=2, total_results=5)
     session["last_results"] = articles
 
     # Format context for LLM
@@ -809,10 +809,10 @@ async def stream_chat(request: Request, body: SimpleQueryRequest):
     elif body.sources is not None and len(body.sources) == 0:
         articles = []  # No sources selected
     else:
-        articles = search_articles(message, n_results=10, source_filter=source_filter)
+        articles = search_articles(message, n_results=15, source_filter=source_filter)
 
     articles = prioritize_results_by_doc_type(articles, preferred_doc_type)
-    articles = articles[:5]
+    articles = ensure_source_diversity(articles, max_per_source=2, total_results=5)
     session["last_results"] = articles
 
     context = format_articles_for_context(articles)
@@ -1889,6 +1889,72 @@ def prioritize_results_by_doc_type(articles: List[dict],
     scored_articles.sort(key=lambda x: x["score"], reverse=True)
 
     return scored_articles
+
+
+def ensure_source_diversity(articles: List[dict], max_per_source: int = 2,
+                            total_results: int = 5) -> List[dict]:
+    """
+    Re-rank results to ensure diversity across sources.
+
+    Takes top N from each source first, then backfills with remaining
+    high-scoring results until we have total_results.
+
+    Args:
+        articles: Pre-sorted list of search results (highest score first)
+        max_per_source: Maximum articles to take from each source initially
+        total_results: Total number of results to return
+
+    Returns:
+        Re-ordered list with source diversity
+    """
+    if not articles or len(articles) <= total_results:
+        return articles
+
+    # Group by source
+    by_source = {}
+    for article in articles:
+        source = article.get("metadata", {}).get("source", "unknown")
+        if source not in by_source:
+            by_source[source] = []
+        by_source[source].append(article)
+
+    # Phase 1: Take up to max_per_source from each source (round-robin by score)
+    diverse_results = []
+    used_indices = {source: 0 for source in by_source}
+
+    # Round-robin: take one from each source at a time, up to max_per_source
+    for round_num in range(max_per_source):
+        # Sort sources by their next available article's score (highest first)
+        sources_with_remaining = [
+            (source, items[used_indices[source]]["score"])
+            for source, items in by_source.items()
+            if used_indices[source] < len(items)
+        ]
+        sources_with_remaining.sort(key=lambda x: x[1], reverse=True)
+
+        for source, _ in sources_with_remaining:
+            if len(diverse_results) >= total_results:
+                break
+            idx = used_indices[source]
+            if idx < len(by_source[source]):
+                diverse_results.append(by_source[source][idx])
+                used_indices[source] = idx + 1
+
+    # Phase 2: Backfill with remaining highest-scored articles
+    if len(diverse_results) < total_results:
+        # Collect all unused articles
+        remaining = []
+        for source, items in by_source.items():
+            remaining.extend(items[used_indices[source]:])
+
+        # Sort by score and fill remaining slots
+        remaining.sort(key=lambda x: x.get("score", 0), reverse=True)
+        for article in remaining:
+            if len(diverse_results) >= total_results:
+                break
+            diverse_results.append(article)
+
+    return diverse_results
 
 
 def format_articles_for_context(articles: List[dict]) -> str:

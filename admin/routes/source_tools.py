@@ -737,6 +737,57 @@ async def create_index(request: CreateIndexRequest):
 
 
 # =============================================================================
+# NOVEL TERMS ANALYSIS
+# =============================================================================
+
+@router.get("/novel-terms/{source_id}")
+async def get_novel_terms(source_id: str, update: bool = False):
+    """
+    Get discovered novel terms for a source.
+
+    If the source metadata already has discovered_terms, returns them.
+    Otherwise, runs a quick analysis on existing metadata titles.
+
+    Args:
+        source_id: Source identifier
+        update: If True, re-analyze and update metadata even if terms exist
+    """
+    try:
+        from offline_tools.source_manager import SourceManager
+
+        manager = SourceManager()
+        result = manager.analyze_metadata_for_tags(source_id, update_metadata=update)
+
+        if not result.get("success"):
+            return {
+                "status": "error",
+                "source_id": source_id,
+                "error": result.get("error", "Analysis failed"),
+                "has_terms": False,
+                "needs_analysis": True
+            }
+
+        # Get top 50 terms for display
+        all_terms = result.get("discovered_terms", {})
+        top_terms = dict(list(all_terms.items())[:50])
+
+        return {
+            "status": "success",
+            "source_id": source_id,
+            "has_terms": len(all_terms) > 0,
+            "total_terms": result.get("total_terms", 0),
+            "top_terms": top_terms,
+            "documents_scanned": result.get("documents_scanned", 0),
+            "already_analyzed": result.get("already_analyzed", False),
+            "updated_metadata": result.get("updated_metadata", False),
+            "needs_analysis": False
+        }
+
+    except Exception as e:
+        raise HTTPException(500, f"Novel terms analysis failed: {e}")
+
+
+# =============================================================================
 # VALIDATION & CLEANUP
 # =============================================================================
 
@@ -1579,88 +1630,98 @@ async def test_source_links(source_id: str, test_base_url: Optional[str] = None)
     # Use test_base_url if provided, otherwise use stored
     base_url = test_base_url if test_base_url else stored_base_url
 
-    # Load metadata for sample documents
+    # Load documents for sample - prefer _index.json (has actual indexed URLs)
+    # Fall back to _metadata.json if index doesn't exist yet
+    index_path = source_path / get_index_file()
     metadata_path = source_path / get_metadata_file()
     sample_links = []
+    docs_source = "none"
 
-    if metadata_path.exists():
+    docs = {}
+    if index_path.exists():
+        try:
+            with open(index_path, 'r', encoding='utf-8') as f:
+                index_data = json.load(f)
+            docs = index_data.get("documents", {})
+            docs_source = "index"
+        except Exception:
+            pass
+
+    if not docs and metadata_path.exists():
         try:
             with open(metadata_path, 'r', encoding='utf-8') as f:
                 metadata = json.load(f)
-
-            # Get up to 5 sample documents
             docs = metadata.get("documents", {})
-            for i, (doc_id, doc) in enumerate(docs.items()):
-                if i >= 5:
-                    break
+            docs_source = "metadata"
+        except Exception:
+            pass
 
-                local_url = doc.get("local_url", doc.get("url", ""))
-                stored_url = doc.get("url", "")
-                zim_url = doc.get("zim_url", "")  # Original ZIM path
+    # Get sample documents
+    for i, (doc_id, doc) in enumerate(docs.items()):
+        if i >= 20:
+            break
 
-                # Extract article path from local_url
-                article_path = ""
-                if local_url:
-                    # Remove /zim/ or /backup/ prefixes
-                    if local_url.startswith("/zim/"):
-                        article_path = local_url[5:]  # Remove /zim/
-                        # Remove source_id prefix if present
-                        if "/" in article_path:
-                            article_path = article_path.split("/", 1)[1]
-                    elif local_url.startswith("/backup/"):
-                        # /backup/source_id/path -> get just path
-                        parts = local_url.split("/", 3)
-                        if len(parts) > 3:
-                            article_path = parts[3]
-                    else:
-                        article_path = local_url.lstrip("/")
+        local_url = doc.get("local_url", doc.get("url", ""))
+        stored_url = doc.get("url", "")
+        zim_url = doc.get("zim_url", "")  # Original ZIM path
 
-                # Extract just the article name (last path segment)
-                article_name = article_path.split("/")[-1] if "/" in article_path else article_path
+        # Extract article path from local_url
+        article_path = ""
+        if local_url:
+            # Remove /zim/ or /backup/ prefixes
+            if local_url.startswith("/zim/"):
+                article_path = local_url[5:]  # Remove /zim/
+                # Remove source_id prefix if present
+                if "/" in article_path:
+                    article_path = article_path.split("/", 1)[1]
+            elif local_url.startswith("/backup/"):
+                # /backup/source_id/path -> get just path
+                parts = local_url.split("/", 3)
+                if len(parts) > 3:
+                    article_path = parts[3]
+            else:
+                article_path = local_url.lstrip("/")
 
-                # Check if article_path contains full domain (www.example.com/path)
-                # and extract just the path portion
-                domain_pattern = r'^(www\.|[a-z0-9-]+\.(gov|com|org|net|edu|io|co|info|wiki))[/.]'
-                clean_path = article_path
-                if re.match(domain_pattern, article_path, re.IGNORECASE):
-                    # Extract path after domain
-                    path_match = re.match(r'^[^/]+/(.*)$', article_path)
-                    if path_match:
-                        clean_path = path_match.group(1)
-                        article_name = clean_path.split("/")[-1] if "/" in clean_path else clean_path
+        # Extract just the article name (last path segment)
+        article_name = article_path.split("/")[-1] if "/" in article_path else article_path
 
-                # If testing a new base_url, reconstruct the URL
-                if test_base_url:
-                    # Construct test URL using article name
-                    if article_name:
-                        test_url = test_base_url.rstrip("/") + "/" + article_name
-                    else:
-                        test_url = stored_url  # Fallback to stored
-                    constructed_url = test_url
-                else:
-                    constructed_url = stored_url
+        # Check if article_path contains full domain (www.example.com/path)
+        # and extract just the path portion
+        domain_pattern = r'^(www\.|[a-z0-9-]+\.(gov|com|org|net|edu|io|co|info|wiki))[/.]'
+        clean_path = article_path
+        if re.match(domain_pattern, article_path, re.IGNORECASE):
+            # Extract path after domain
+            path_match = re.match(r'^[^/]+/(.*)$', article_path)
+            if path_match:
+                clean_path = path_match.group(1)
+                article_name = clean_path.split("/")[-1] if "/" in clean_path else clean_path
 
-                # Determine if URL looks valid
-                is_online_url = constructed_url.startswith("http://") or constructed_url.startswith("https://")
-                is_local_url = constructed_url.startswith("/zim/") or constructed_url.startswith("/backup/")
+        # If testing a new base_url, reconstruct the URL
+        if test_base_url:
+            # Construct test URL using article name
+            if article_name:
+                test_url = test_base_url.rstrip("/") + "/" + article_name
+            else:
+                test_url = stored_url  # Fallback to stored
+            constructed_url = test_url
+        else:
+            constructed_url = stored_url
 
-                sample_links.append({
-                    "title": doc.get("title", "Unknown"),
-                    "stored_url": stored_url,
-                    "constructed_url": constructed_url,
-                    "local_url": local_url,
-                    "zim_path": article_path,  # Full path from ZIM
-                    "article_name": article_name,  # Just the article identifier
-                    "is_online_url": is_online_url,
-                    "is_local_url": is_local_url,
-                    "url_type": "online" if is_online_url else ("local" if is_local_url else "unknown")
-                })
-        except Exception as e:
-            return {
-                "source_id": source_id,
-                "error": f"Failed to read metadata: {e}",
-                "sample_links": []
-            }
+        # Determine if URL looks valid
+        is_online_url = constructed_url.startswith("http://") or constructed_url.startswith("https://")
+        is_local_url = constructed_url.startswith("/zim/") or constructed_url.startswith("/backup/")
+
+        sample_links.append({
+            "title": doc.get("title", "Unknown"),
+            "stored_url": stored_url,
+            "constructed_url": constructed_url,
+            "local_url": local_url,
+            "zim_path": article_path,  # Full path from ZIM
+            "article_name": article_name,  # Just the article identifier
+            "is_online_url": is_online_url,
+            "is_local_url": is_local_url,
+            "url_type": "online" if is_online_url else ("local" if is_local_url else "unknown")
+        })
 
     return {
         "source_id": source_id,
@@ -1670,6 +1731,7 @@ async def test_source_links(source_id: str, test_base_url: Optional[str] = None)
         "testing_custom_url": bool(test_base_url),
         "sample_count": len(sample_links),
         "sample_links": sample_links,
+        "docs_source": docs_source,  # "index" or "metadata" - shows where URLs came from
         "warning": None if all(s["is_online_url"] for s in sample_links) else
                    "Some URLs are local paths - online users won't be able to access them. Check base_url configuration."
     }

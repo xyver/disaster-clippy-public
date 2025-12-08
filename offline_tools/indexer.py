@@ -685,6 +685,10 @@ class ZIMIndexer:
         # Extract article name (last path segment) for base_url construction
         article_name = zim_path.split('/')[-1] if '/' in zim_path else zim_path
 
+        # Strip quotes from article names - some ZIM files have titles like "Aquifex_aeolicus"
+        # which break URL construction (the quote terminates the href attribute)
+        article_name = article_name.strip('"\'')
+
         # Priority 1: User-configured base_url from manifest
         if manifest_base_url:
             if not manifest_base_url.endswith('/'):
@@ -769,9 +773,13 @@ class ZIMIndexer:
         # Clear existing documents from ChromaDB if requested (force reindex)
         if clear_existing:
             print(f"[ZIMIndexer] Force reindex requested - clearing existing documents for '{self.source_id}'")
+            if progress_callback:
+                progress_callback(0, 100, "Preparing to delete existing documents...")
             try:
                 store = VectorStore()
-                deleted_count = store.delete_source(self.source_id)
+                # Pass progress callback for delete progress
+                result = store.delete_by_source(self.source_id, progress_callback=progress_callback)
+                deleted_count = result.get("deleted_count", 0)
                 if deleted_count > 0:
                     print(f"[ZIMIndexer] Cleared {deleted_count} existing documents for {self.source_id}")
                 else:
@@ -850,24 +858,15 @@ class ZIMIndexer:
         CHECKPOINT_INTERVAL_DOCS = 500
 
         try:
-            # Track total documents for progress reporting
-            # We report actual counts so UI shows "100 / 18,000 items"
-            extraction_total = [0]  # Use list to allow modification in nested function
-
+            # Progress reporting helpers
+            # Each phase reports its own progress independently
             def report_extraction_progress(current, total, message):
-                extraction_total[0] = total  # Remember extraction total
                 if progress_callback:
-                    # Pass actual counts - job manager calculates percentage
                     progress_callback(current, total, message)
 
             def report_embedding_progress(current, total, message):
                 if progress_callback:
-                    # During embedding, show docs being indexed
-                    # Add extraction_total to offset so progress continues from where extraction left off
-                    ext_total = extraction_total[0]
-                    combined_current = ext_total + current
-                    combined_total = ext_total + total
-                    progress_callback(combined_current, combined_total, message)
+                    progress_callback(current, total, message)
 
             report_extraction_progress(0, 1, "Opening ZIM file...")
 

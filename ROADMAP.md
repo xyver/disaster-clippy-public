@@ -1019,6 +1019,29 @@ My Source Preferences:
 - Issue: Progress callback received percentages (0-100) instead of actual item counts
 - Fix: Changed progress reporting to pass actual `(current, total, message)` values
 
+**Token limit errors for long articles - got zero vectors instead of embeddings**
+- Location: `offline_tools/embeddings.py`
+- Issue: Articles exceeding 8192 tokens got zero vectors and wouldn't appear in search
+- Fix: Added `_embed_with_chunking()` - splits long text in half, embeds both, averages result
+- Recursively splits up to 8 chunks for very long articles
+
+### Improvements (Dec 2025)
+
+**Search result diversity**
+- Location: `app.py` - `ensure_source_diversity()`
+- Change: Search now retrieves 15 candidates, applies source diversity (max 2 per source), returns 5
+- Benefit: Prevents single source from dominating results when multiple sources are relevant
+
+**Minimum content length filter increased**
+- Location: `source_manager.py`, `zim_utils.py`
+- Change: Increased from 50 to 100 characters
+- Benefit: Filters out stub pages like "0.1.0" or single-word redirects
+
+**URL samples pagination in Source Tools**
+- Location: `source_tools.html`
+- Change: URL sample tables now show 5 at a time with "Show More" button
+- Benefit: Cleaner UI when sources have 20+ sample articles
+
 ### Testing
 
 **Automated Tests (TODO):**
