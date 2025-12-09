@@ -224,6 +224,29 @@
                 </div>
             </div>
         </div>
+
+        <!-- Site Suggestions Section (Global Admin Only) -->
+        <div class="section" id="siteSuggestionsSection" style="display: none;">
+            <h2>Site Suggestions</h2>
+            <p class="description">
+                URLs submitted by users for consideration. Review and add promising sites to your source list.
+            </p>
+
+            <div id="siteSuggestionsStats" class="summary-stats" style="display: none;">
+                <div class="stat-item">
+                    <div class="stat-value" id="suggestionsTotal">0</div>
+                    <div class="stat-label">Total Suggestions</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value" style="color: #f9a825;" id="suggestionsPending">0</div>
+                    <div class="stat-label">Pending Review</div>
+                </div>
+            </div>
+
+            <div id="siteSuggestionsList" class="submission-list">
+                <div class="placeholder">Loading...</div>
+            </div>
+        </div>
     </div>
 
     <script src="/admin/static/admin-common.js"></script>
@@ -335,17 +358,80 @@
             const title = document.getElementById('submissionsTitle');
             const desc = document.getElementById('submissionsDesc');
             const novelTagsSection = document.getElementById('novelTagsSection');
+            const siteSuggestionsSection = document.getElementById('siteSuggestionsSection');
 
             if (isGlobal) {
                 title.textContent = 'Incoming Submissions';
                 desc.textContent = 'User-submitted sources pending review. Approve to add to the Global Cloud Backup.';
-                // Show novel tags section for global admin
+                // Show global admin sections
                 novelTagsSection.style.display = 'block';
+                siteSuggestionsSection.style.display = 'block';
+                // Load site suggestions
+                loadSiteSuggestions();
             } else {
                 title.textContent = 'Your Submissions';
                 desc.textContent = 'Sources you\'ve submitted for review. Once approved by the admin, they\'ll be moved to the Global Cloud Backup for all users to access.';
-                // Hide novel tags section for local users
+                // Hide global admin sections
                 novelTagsSection.style.display = 'none';
+                siteSuggestionsSection.style.display = 'none';
+            }
+        }
+
+        // Load site suggestions
+        async function loadSiteSuggestions() {
+            const container = document.getElementById('siteSuggestionsList');
+            const statsContainer = document.getElementById('siteSuggestionsStats');
+
+            try {
+                const response = await fetch('/api/site-suggestions');
+                const data = await response.json();
+
+                if (data.error) {
+                    container.innerHTML = '<div class="placeholder">' + escapeHtml(data.error) + '</div>';
+                    return;
+                }
+
+                if (!data.suggestions || data.suggestions.length === 0) {
+                    container.innerHTML = '<div class="placeholder">No site suggestions yet.</div>';
+                    return;
+                }
+
+                // Show stats
+                statsContainer.style.display = 'flex';
+                document.getElementById('suggestionsTotal').textContent = data.count || 0;
+                document.getElementById('suggestionsPending').textContent = data.pending_count || 0;
+
+                // Build suggestions list (newest first)
+                let html = '';
+                const sortedSuggestions = [...data.suggestions].reverse();
+
+                for (const suggestion of sortedSuggestions) {
+                    const statusColor = suggestion.status === 'pending' ? '#f9a825' :
+                                       suggestion.status === 'added' ? '#4ecca3' : '#888';
+                    const statusText = suggestion.status === 'pending' ? 'Pending' :
+                                      suggestion.status === 'added' ? 'Added' : suggestion.status;
+
+                    const date = suggestion.submitted_at ?
+                        new Date(suggestion.submitted_at).toLocaleDateString() : 'Unknown';
+
+                    html += '<div class="submission-item" style="border-left: 3px solid ' + statusColor + ';">';
+                    html += '<div class="submission-header">';
+                    html += '<a href="' + escapeHtml(suggestion.url) + '" target="_blank" class="submission-name" style="color: #4ecca3;">' + escapeHtml(suggestion.url) + '</a>';
+                    html += '<span class="submission-status" style="background: ' + statusColor + '22; color: ' + statusColor + ';">' + statusText + '</span>';
+                    html += '</div>';
+                    html += '<div class="submission-meta">Submitted: ' + date + '</div>';
+
+                    if (suggestion.description) {
+                        html += '<div style="margin-top: 0.5rem; color: #aaa; font-size: 0.9rem;">' + escapeHtml(suggestion.description) + '</div>';
+                    }
+
+                    html += '</div>';
+                }
+
+                container.innerHTML = html;
+
+            } catch (e) {
+                container.innerHTML = '<div class="placeholder">Error loading suggestions: ' + escapeHtml(e.message) + '</div>';
             }
         }
 

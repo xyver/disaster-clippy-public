@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Suggest a Site - Disaster Clippy</title>
+    <link rel="icon" type="image/png" href="/static/paperclip.png">
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: #1a1a2e;
+            color: #eee;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        header {
+            background: #16213e;
+            padding: 1rem 2rem;
+            border-bottom: 1px solid #0f3460;
+        }
+
+        header h1 {
+            font-size: 1.5rem;
+            color: #e94560;
+        }
+
+        header p {
+            font-size: 0.9rem;
+            color: #888;
+            margin-top: 0.25rem;
+        }
+
+        header a {
+            color: #4ecca3;
+            text-decoration: none;
+        }
+
+        header a:hover {
+            text-decoration: underline;
+        }
+
+        .container {
+            max-width: 600px;
+            margin: 2rem auto;
+            padding: 0 1rem;
+            width: 100%;
+        }
+
+        .card {
+            background: #16213e;
+            border: 1px solid #0f3460;
+            border-radius: 8px;
+            padding: 2rem;
+        }
+
+        .card h2 {
+            color: #4ecca3;
+            margin-bottom: 1rem;
+            font-size: 1.25rem;
+        }
+
+        .card p {
+            color: #aaa;
+            margin-bottom: 1.5rem;
+            line-height: 1.6;
+        }
+
+        .form-group {
+            margin-bottom: 1rem;
+        }
+
+        .form-group label {
+            display: block;
+            color: #888;
+            font-size: 0.85rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .form-group input[type="text"],
+        .form-group textarea {
+            width: 100%;
+            padding: 0.75rem;
+            background: #1a1a2e;
+            border: 1px solid #0f3460;
+            border-radius: 6px;
+            color: #eee;
+            font-size: 1rem;
+            font-family: inherit;
+        }
+
+        .form-group input[type="text"]:focus,
+        .form-group textarea:focus {
+            outline: none;
+            border-color: #4ecca3;
+        }
+
+        .form-group textarea {
+            min-height: 80px;
+            resize: vertical;
+        }
+
+        .btn {
+            background: #4ecca3;
+            color: #1a1a2e;
+            border: none;
+            padding: 0.75rem 1.5rem;
+            border-radius: 6px;
+            font-size: 1rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .btn:hover {
+            background: #3db890;
+        }
+
+        .btn:disabled {
+            background: #555;
+            cursor: not-allowed;
+        }
+
+        .message {
+            padding: 1rem;
+            border-radius: 6px;
+            margin-top: 1rem;
+            display: none;
+        }
+
+        .message.success {
+            background: #1a2e1a;
+            border: 1px solid #4ecca3;
+            color: #4ecca3;
+        }
+
+        .message.error {
+            background: #2e1a1a;
+            border: 1px solid #e94560;
+            color: #e94560;
+        }
+
+        .examples {
+            margin-top: 1rem;
+            padding: 1rem;
+            background: #1a1a2e;
+            border-radius: 6px;
+            font-size: 0.85rem;
+            color: #888;
+        }
+
+        .examples strong {
+            color: #aaa;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>Disaster Clippy</h1>
+        <p>Conversational search for DIY guides and humanitarian resources</p>
+        <p style="margin-top: 0.5rem;">
+            <a href="/">Back to Search</a>
+        </p>
+    </header>
+
+    <div class="container">
+        <div class="card">
+            <h2>Suggest a Site</h2>
+            <p>
+                Found a website with useful DIY guides, survival tips, or humanitarian resources?
+                Suggest it here and our team will review it for inclusion in our search engine.
+            </p>
+
+            <form id="suggestForm" onsubmit="submitSuggestion(event)">
+                <div class="form-group">
+                    <label for="url">Website URL *</label>
+                    <input type="text" id="url" name="url" placeholder="https://example.com" required>
+                </div>
+
+                <div class="form-group">
+                    <label for="description">Why is this site useful? (optional)</label>
+                    <textarea id="description" name="description" placeholder="e.g., Great collection of solar cooker designs..."></textarea>
+                </div>
+
+                <button type="submit" class="btn" id="submitBtn">Submit Suggestion</button>
+            </form>
+
+            <div id="successMessage" class="message success">
+                Thank you! Your suggestion has been submitted for review.
+            </div>
+
+            <div id="errorMessage" class="message error">
+                Something went wrong. Please try again.
+            </div>
+
+            <div class="examples">
+                <strong>Good examples:</strong><br>
+                - Wikis about solar energy, water purification, or emergency preparedness<br>
+                - DIY project sites with tutorials and guides<br>
+                - Open-source hardware documentation<br>
+                - Humanitarian organization resource pages
+            </div>
+        </div>
+    </div>
+
+    <script>
+        async function submitSuggestion(event) {
+            event.preventDefault();
+
+            const btn = document.getElementById('submitBtn');
+            const successMsg = document.getElementById('successMessage');
+            const errorMsg = document.getElementById('errorMessage');
+            const urlInput = document.getElementById('url');
+            const descInput = document.getElementById('description');
+
+            // Hide messages
+            successMsg.style.display = 'none';
+            errorMsg.style.display = 'none';
+
+            // Basic URL validation
+            let url = urlInput.value.trim();
+            if (!url.startsWith('http://') && !url.startsWith('https://')) {
+                url = 'https://' + url;
+            }
+
+            btn.disabled = true;
+            btn.textContent = 'Submitting...';
+
+            try {
+                const response = await fetch('/api/suggest-site', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        url: url,
+                        description: descInput.value.trim()
+                    })
+                });
+
+                const data = await response.json();
+
+                if (response.ok && data.status === 'success') {
+                    successMsg.style.display = 'block';
+                    urlInput.value = '';
+                    descInput.value = '';
+                } else {
+                    errorMsg.textContent = data.error || 'Something went wrong. Please try again.';
+                    errorMsg.style.display = 'block';
+                }
+            } catch (e) {
+                errorMsg.textContent = 'Network error. Please try again.';
+                errorMsg.style.display = 'block';
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Submit Suggestion';
+            }
+        }
+    </script>
+</body>
+</html>

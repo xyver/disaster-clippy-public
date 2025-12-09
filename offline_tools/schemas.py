@@ -91,6 +91,268 @@ def html_filename_to_title(filename: str) -> str:
 
 
 # =============================================================================
+# TAG NORMALIZATION
+# =============================================================================
+
+# Irregular plurals and word variations to normalize
+TAG_NORMALIZATIONS = {
+    # Plurals -> singular
+    "collectors": "collector",
+    "systems": "system",
+    "heaters": "heater",
+    "cookers": "cooker",
+    "panels": "panel",
+    "projects": "project",
+    "designs": "design",
+    "plans": "plan",
+    "houses": "house",
+    "homes": "home",
+    "buildings": "building",
+    "pumps": "pump",
+    "tanks": "tank",
+    "batteries": "battery",
+    "generators": "generator",
+    "turbines": "turbine",
+    "cells": "cell",
+    "modules": "module",
+    "inverters": "inverter",
+    "controllers": "controller",
+    "sensors": "sensor",
+    "meters": "meter",
+    "filters": "filter",
+    "valves": "valve",
+    "pipes": "pipe",
+    "tubes": "tube",
+    "coils": "coil",
+    "fans": "fan",
+    "vents": "vent",
+    "windows": "window",
+    "walls": "wall",
+    "roofs": "roof",
+    "floors": "floor",
+    "doors": "door",
+    "tools": "tool",
+    "materials": "material",
+    "sources": "source",
+    "resources": "resource",
+    "guides": "guide",
+    "tutorials": "tutorial",
+    "instructions": "instruction",
+    "methods": "method",
+    "techniques": "technique",
+    "solutions": "solution",
+    "applications": "application",
+    "installations": "installation",
+    "calculations": "calculation",
+    "measurements": "measurement",
+    "experiments": "experiment",
+    "tests": "test",
+    "results": "result",
+    "costs": "cost",
+    "savings": "saving",
+    "benefits": "benefit",
+    "improvements": "improvement",
+    "upgrades": "upgrade",
+    "modifications": "modification",
+    "conversions": "conversion",
+    "alternatives": "alternative",
+    "options": "option",
+    "features": "feature",
+    "components": "component",
+    "parts": "part",
+    "units": "unit",
+    "types": "type",
+    "models": "model",
+    "versions": "version",
+    "examples": "example",
+    "photos": "photo",
+    "images": "image",
+    "videos": "video",
+    "diagrams": "diagram",
+    "drawings": "drawing",
+    "schematics": "schematic",
+    "charts": "chart",
+    "graphs": "graph",
+    "tables": "table",
+    "lists": "list",
+    "links": "link",
+    "references": "reference",
+    "articles": "article",
+    "pages": "page",
+    "sections": "section",
+    "chapters": "chapter",
+    "books": "book",
+    "reports": "report",
+    "studies": "study",
+    "papers": "paper",
+    "notes": "note",
+    "tips": "tip",
+    "ideas": "idea",
+    "concepts": "concept",
+    "principles": "principle",
+    "basics": "basic",
+    "fundamentals": "fundamental",
+    "standards": "standard",
+    "codes": "code",
+    "regulations": "regulation",
+    "requirements": "requirement",
+    "specifications": "specification",
+    "ratings": "rating",
+    "reviews": "review",
+    "comments": "comment",
+    "questions": "question",
+    "answers": "answer",
+    "problems": "problem",
+    "issues": "issue",
+    "challenges": "challenge",
+    "obstacles": "obstacle",
+    "barriers": "barrier",
+    "limitations": "limitation",
+    "drawbacks": "drawback",
+    "advantages": "advantage",
+    "disadvantages": "disadvantage",
+
+    # Verb forms -> base noun
+    "heated": "heater",
+    "heating": "heater",
+    "cooled": "cooler",
+    "cooling": "cooler",
+    "collected": "collector",
+    "collecting": "collector",
+    "powered": "power",
+    "powering": "power",
+    "stored": "storage",
+    "storing": "storage",
+    "pumped": "pump",
+    "pumping": "pump",
+    "filtered": "filter",
+    "filtering": "filter",
+    "insulated": "insulation",
+    "insulating": "insulation",
+    "installed": "installation",
+    "installing": "installation",
+    "designed": "design",
+    "designing": "design",
+    "built": "build",
+    "building": "build",
+    "constructed": "construction",
+    "constructing": "construction",
+    "measured": "measurement",
+    "measuring": "measurement",
+    "tested": "test",
+    "testing": "test",
+    "calculated": "calculation",
+    "calculating": "calculation",
+    "estimated": "estimate",
+    "estimating": "estimate",
+    "improved": "improvement",
+    "improving": "improvement",
+    "upgraded": "upgrade",
+    "upgrading": "upgrade",
+    "modified": "modification",
+    "modifying": "modification",
+    "converted": "conversion",
+    "converting": "conversion",
+    "connected": "connection",
+    "connecting": "connection",
+    "mounted": "mount",
+    "mounting": "mount",
+    "attached": "attachment",
+    "attaching": "attachment",
+    "sealed": "seal",
+    "sealing": "seal",
+    "glazed": "glazing",
+    "glazing": "glazing",
+
+    # Synonyms -> preferred term
+    "collection": "collector",
+    "collections": "collector",
+    "home": "house",
+    "residential": "house",
+    "domestic": "house",
+    "photovoltaic": "pv",
+    "photovoltaics": "pv",
+    "thermal": "heat",
+    "electric": "electrical",
+    "electricity": "electrical",
+    "h2o": "water",
+    "aqua": "water",
+    "sunlight": "solar",
+    "sunshine": "solar",
+    "windmill": "wind",
+    "hydroelectric": "hydro",
+    "hydropower": "hydro",
+    "geothermal": "geo",
+    "biomass": "bio",
+    "biofuel": "bio",
+}
+
+
+def normalize_tag(tag: str) -> str:
+    """
+    Normalize a tag/term to its canonical form.
+
+    Handles:
+    - Lowercase conversion
+    - Plural -> singular
+    - Verb forms -> base noun
+    - Common synonyms -> preferred term
+    - Basic -s, -es, -ies plural removal
+
+    Args:
+        tag: The tag to normalize
+
+    Returns:
+        Normalized tag string
+    """
+    if not tag:
+        return tag
+
+    # Lowercase
+    tag = tag.lower().strip()
+
+    # Check explicit mappings first
+    if tag in TAG_NORMALIZATIONS:
+        return TAG_NORMALIZATIONS[tag]
+
+    # Basic plural handling for unmapped words
+    if len(tag) > 3:
+        # -ies -> -y (batteries -> battery, but not "series")
+        if tag.endswith("ies") and tag not in ("series", "species"):
+            return tag[:-3] + "y"
+        # -es -> remove (boxes -> box, but not "types")
+        if tag.endswith("es") and not tag.endswith("tes") and len(tag) > 4:
+            base = tag[:-2]
+            if base.endswith(("s", "x", "z", "ch", "sh")):
+                return base
+        # -s -> remove (simple plural)
+        if tag.endswith("s") and not tag.endswith(("ss", "us", "is")):
+            return tag[:-1]
+
+    return tag
+
+
+def normalize_tags(tags: list) -> list:
+    """
+    Normalize a list of tags and remove duplicates.
+
+    Args:
+        tags: List of tag strings
+
+    Returns:
+        List of normalized, deduplicated tags
+    """
+    seen = set()
+    result = []
+    for tag in tags:
+        normalized = normalize_tag(tag)
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            result.append(normalized)
+    return result
+
+
+# =============================================================================
 # SCHEMA: MANIFEST (Source Identity + Distribution)
 # =============================================================================
 

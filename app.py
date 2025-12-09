@@ -290,6 +290,83 @@ async def serve_index():
     return template_path.read_text(encoding='utf-8')
 
 
+@app.get("/suggest", response_class=HTMLResponse)
+async def serve_suggest():
+    """Serve the site suggestion page"""
+    template_path = BASE_DIR / "templates" / "suggest.html"
+    return template_path.read_text(encoding='utf-8')
+
+
+class SiteSuggestion(BaseModel):
+    url: str
+    description: str = ""
+
+
+@app.post("/api/suggest-site")
+async def submit_site_suggestion(suggestion: SiteSuggestion):
+    """
+    Accept site suggestions from users.
+    Saves to data/site_suggestions.json for admin review.
+    """
+    import json
+    from datetime import datetime
+
+    # Validate URL
+    url = suggestion.url.strip()
+    if not url:
+        return {"status": "error", "error": "URL is required"}
+
+    # Basic URL validation
+    if not url.startswith(("http://", "https://")):
+        url = "https://" + url
+
+    # Load existing suggestions
+    suggestions_file = BASE_DIR / "data" / "site_suggestions.json"
+    suggestions_file.parent.mkdir(parents=True, exist_ok=True)
+
+    suggestions = []
+    if suggestions_file.exists():
+        try:
+            suggestions = json.loads(suggestions_file.read_text(encoding='utf-8'))
+        except:
+            suggestions = []
+
+    # Add new suggestion
+    suggestions.append({
+        "url": url,
+        "description": suggestion.description.strip(),
+        "submitted_at": datetime.utcnow().isoformat(),
+        "status": "pending"
+    })
+
+    # Save
+    suggestions_file.write_text(json.dumps(suggestions, indent=2), encoding='utf-8')
+
+    return {"status": "success", "message": "Suggestion submitted"}
+
+
+@app.get("/api/site-suggestions")
+async def get_site_suggestions():
+    """Get all site suggestions (for admin panel)"""
+    import json
+
+    suggestions_file = BASE_DIR / "data" / "site_suggestions.json"
+
+    if not suggestions_file.exists():
+        return {"suggestions": [], "count": 0}
+
+    try:
+        suggestions = json.loads(suggestions_file.read_text(encoding='utf-8'))
+        pending = [s for s in suggestions if s.get("status") == "pending"]
+        return {
+            "suggestions": suggestions,
+            "count": len(suggestions),
+            "pending_count": len(pending)
+        }
+    except:
+        return {"suggestions": [], "count": 0, "error": "Failed to load suggestions"}
+
+
 @app.get("/health")
 async def health_check():
     """Health check endpoint - lightweight, no DB access"""

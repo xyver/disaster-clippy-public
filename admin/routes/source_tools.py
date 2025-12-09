@@ -2121,10 +2121,14 @@ async def test_source_links(source_id: str, test_base_url: Optional[str] = None)
         # Construct the online URL using base_url + relative path
         # For HTML sources, stored_url is already a relative path like /Projects/Cooling/Page
         # For ZIM sources, we may need to use article_name
+
+        # Detect HTML source by local_url prefix (more reliable than source_type)
+        is_html_source = local_url.startswith("/backup/") or source_type == "html"
+
         if base_url:
             # Use stored_url for HTML (already has correct path structure)
             # Use article_name for ZIM (may need path extraction)
-            if source_type == "html" and stored_url:
+            if is_html_source and stored_url:
                 # stored_url is like /Projects/Cooling/Page - combine with base_url
                 rel_path = stored_url.lstrip("/")
                 constructed_url = base_url.rstrip("/") + "/" + rel_path

@@ -2438,7 +2438,7 @@ class SourceManager:
         """
         import re
         from collections import Counter
-        from .schemas import get_metadata_file
+        from .schemas import get_metadata_file, normalize_tag
 
         source_path = self.get_source_path(source_id)
         metadata_file = source_path / get_metadata_file()
@@ -2480,8 +2480,10 @@ class SourceManager:
                 # Extract words 3+ chars, not in stopwords or existing keywords
                 title_words = re.findall(r'\b[a-zA-Z]{3,}\b', title.lower())
                 for word in title_words:
-                    if word not in self.STOPWORDS and word not in existing_keywords:
-                        word_freq[word] += 1
+                    # Normalize the word (plurals, verb forms, synonyms)
+                    normalized = normalize_tag(word)
+                    if normalized not in self.STOPWORDS and normalized not in existing_keywords:
+                        word_freq[normalized] += 1
 
             # Filter to terms appearing 2+ times
             discovered_terms = {

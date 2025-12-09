@@ -285,6 +285,8 @@ class StaticSiteScraper(BaseScraper):
 
     def _extract_categories(self, url: str, soup: BeautifulSoup) -> List[str]:
         """Extract categories from URL path or page metadata"""
+        from offline_tools.schemas import normalize_tags
+
         categories = []
 
         # Extract from URL path
@@ -299,15 +301,8 @@ class StaticSiteScraper(BaseScraper):
                 cats = [c.strip() for c in meta["content"].split(",")]
                 categories.extend(cats)
 
-        # Deduplicate while preserving order
-        seen = set()
-        unique = []
-        for cat in categories:
-            if cat.lower() not in seen:
-                seen.add(cat.lower())
-                unique.append(cat)
-
-        return unique
+        # Normalize and deduplicate (handles plurals, synonyms)
+        return normalize_tags(categories)
 
 
 # Convenience function

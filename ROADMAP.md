@@ -1095,6 +1095,126 @@ Each source should have these files with `schema_version: 3`:
 
 ---
 
+## Search Pipeline Architecture
+
+Understanding how queries become results - useful for improving search quality.
+
+### Pipeline Flow
+
+```
+USER QUERY: "what are solar projects I can build at home?"
+                              |
+                              v
++------------------------------------------------------------------+
+|  1. EMBEDDING GENERATION (ai_service.py)                         |
+|     - Query sent to OpenAI text-embedding-3-small                |
+|     - Returns 1536-dimensional vector                            |
+|     - Vector captures semantic meaning of query                  |
++------------------------------------------------------------------+
+                              |
+                              v
++------------------------------------------------------------------+
+|  2. VECTOR SEARCH (pinecone_store.py / store.py)                 |
+|     - Compare query vector to all stored document vectors        |
+|     - Cosine similarity scoring (0-1, higher = more similar)     |
+|     - Returns top 15 closest matches                             |
+|     - Pre-filtered by source if user selected specific sources   |
++------------------------------------------------------------------+
+                              |
+                              v
++------------------------------------------------------------------+
+|  3. DOC TYPE PRIORITIZATION (app.py)                             |
+|     - Boost guides/how-to content over reference articles        |
+|     - Detect user intent (wants products? tutorials? research?)  |
++------------------------------------------------------------------+
+                              |
+                              v
++------------------------------------------------------------------+
+|  4. SOURCE DIVERSITY (app.py - ensure_source_diversity)          |
+|     - Max 2 results per source                                   |
+|     - Round-robin selection by score                             |
+|     - Returns final 5 results                                    |
++------------------------------------------------------------------+
+                              |
+                              v
+                      FINAL 5 RESULTS
+```
+
+### What Gets Embedded (Step 4 - Create Index)
+
+Each document's embedding is generated from:
+- `title` - article title
+- `content` - first ~8000 characters of page text
+
+**Location:** `offline_tools/packager.py` - `_prepare_document_for_embedding()`
+
+### Metadata Stored (Step 3 - Generate Metadata)
+
+Stored alongside embeddings but NOT included in vector search:
+- `title` - for display
+- `source` - source identifier (e.g., "builditsolar2")
+- `url` - online URL for attribution
+- `local_url` - offline browsing path
+- `categories` - tags from URL path and meta tags
+- `doc_type` - classification (article, guide, product)
+
+**Location:** `offline_tools/source_manager.py` - metadata generation functions
+
+### Improving Search Quality
+
+**Option 1: Include Tags in Embedding (Recommended)**
+Modify `_prepare_document_for_embedding()` to append categories:
+```python
+text_to_embed = f"{title}\n\nCategories: {', '.join(categories)}\n\n{content}"
+```
+This makes tag matches influence semantic similarity.
+
+**Option 2: Hybrid Search**
+Combine semantic results with keyword matching on tags/title.
+Post-filter or re-rank based on exact keyword matches.
+
+**Option 3: Metadata Boosting**
+After vector search, boost scores for results matching query keywords in metadata.
+
+### Key Files
+
+| File | Role in Pipeline |
+|------|------------------|
+| `admin/ai_service.py` | Orchestrates search, selects method |
+| `offline_tools/vectordb/pinecone_store.py` | Cloud vector search |
+| `offline_tools/vectordb/store.py` | Local ChromaDB search |
+| `offline_tools/packager.py` | Creates embeddings from content |
+| `offline_tools/source_manager.py` | Generates metadata (step 3) |
+| `app.py` | Doc type prioritization, source diversity |
+
+### Conversation Context
+
+The chat maintains conversation history and article references for follow-up queries.
+
+**History Management (app.py):**
+- Line 641: `history = session["history"][-20:]` - keeps last 20 messages (10 exchanges)
+- Lines 647-648: Appends user message and AI response to history
+- Line 596: Session initialization with `"last_results": []`
+
+**Article References (app.py):**
+- Line 605: Detects "more like", "similar to", "like #" phrases
+- Line 607: `handle_similarity_query(message, session["last_results"])`
+- Line 635: Stores current search results in `session["last_results"]`
+- Lines 2011-2021: `handle_similarity_query()` - finds similar articles by ID
+
+**Supported Phrases:**
+- "tell me more about #2"
+- "more like the first one"
+- "similar to the solar heating article"
+- Follow-up questions referencing previous context
+
+**To Modify:**
+- Increase history: Change `[-20:]` to `[-40:]` for 20 exchanges
+- Add more trigger phrases: Edit line 605's phrase list
+- Change similarity logic: Edit `handle_similarity_query()` at line 2011
+
+---
+
 ## Cost Estimates
 
 **Project Infrastructure:**
