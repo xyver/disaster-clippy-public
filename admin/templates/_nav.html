@@ -1,0 +1,18 @@
+<nav class="nav-links">
+    <a href="/useradmin/dashboard"{% if active_page == 'dashboard' %} class="active"{% endif %}>Dashboard</a>
+    <a href="/useradmin/sources"{% if active_page == 'sources' %} class="active"{% endif %}>Sources</a>
+    <a href="/useradmin/jobs"{% if active_page == 'jobs' %} class="active"{% endif %}>Jobs</a>
+    <a href="/useradmin/cloud"{% if active_page == 'cloud' %} class="active"{% endif %}>Cloud</a>
+    <a href="/useradmin/visualise"{% if active_page == 'visualise' %} class="active"{% endif %}>Visualise</a>
+    <a href="/useradmin/settings"{% if active_page == 'settings' %} class="active"{% endif %}>Settings</a>
+    <a href="/useradmin/submissions"{% if active_page == 'submissions' %} class="active"{% endif %}>Submissions</a>
+    <a href="/useradmin/pinecone"{% if active_page == 'pinecone' %} class="active"{% endif %}>Pinecone</a>
+    <a href="/">Chat</a>
+    <span class="nav-divider"></span>
+    <label class="mode-toggle" id="modeToggle" title="Switch between Local and Global mode for testing">
+        <input type="checkbox" id="modeCheckbox" onchange="toggleMode()">
+        <span class="mode-label" id="modeLabel">Local</span>
+        <span class="toggle-slider"></span>
+        <span class="mode-badge" id="modeBadge">TEST</span>
+    </label>
+</nav>

@@ -272,6 +272,9 @@ class StaticSiteScraper(BaseScraper):
         if meta_modified:
             last_modified = meta_modified.get("content")
 
+        # Extract internal links from content
+        internal_links = self._extract_internal_links(url, content_elem)
+
         return ScrapedPage(
             url=url,
             title=title,
@@ -280,7 +283,8 @@ class StaticSiteScraper(BaseScraper):
             categories=categories[:10],
             last_modified=last_modified,
             content_hash=self._hash_content(content),
-            scraped_at=datetime.utcnow().isoformat()
+            scraped_at=datetime.utcnow().isoformat(),
+            internal_links=internal_links
         )
 
     def _extract_categories(self, url: str, soup: BeautifulSoup) -> List[str]:
@@ -303,6 +307,57 @@ class StaticSiteScraper(BaseScraper):
 
         # Normalize and deduplicate (handles plurals, synonyms)
         return normalize_tags(categories)
+
+    def _extract_internal_links(self, page_url: str, content_elem) -> List[str]:
+        """
+        Extract internal links from page content.
+
+        Returns list of relative URLs that this page links to within the same site.
+        Only includes links within the main content area, not navigation.
+        """
+        if not content_elem:
+            return []
+
+        internal_links = []
+        seen = set()
+
+        for link in content_elem.find_all("a", href=True):
+            href = link["href"]
+
+            # Skip empty, anchor-only, or javascript links
+            if not href or href.startswith("#") or href.startswith("javascript:"):
+                continue
+
+            # Skip external links (mailto, http to other domains)
+            if href.startswith("mailto:") or href.startswith("tel:"):
+                continue
+
+            # Make absolute URL
+            full_url = urljoin(page_url, href)
+
+            # Only include internal links (same base URL)
+            if not full_url.startswith(self.base_url):
+                continue
+
+            # Strip anchor fragments
+            if "#" in full_url:
+                full_url = full_url.split("#")[0]
+
+            # Skip self-links
+            if full_url == page_url:
+                continue
+
+            # Convert back to relative path for storage
+            relative_url = full_url.replace(self.base_url, "")
+            if not relative_url.startswith("/"):
+                relative_url = "/" + relative_url
+
+            # Deduplicate
+            if relative_url not in seen:
+                seen.add(relative_url)
+                internal_links.append(relative_url)
+
+        return internal_links
 
 
 # Convenience function

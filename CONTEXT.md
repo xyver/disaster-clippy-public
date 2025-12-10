@@ -37,7 +37,9 @@ User Question
 | AI Service | `admin/ai_service.py` | Unified AI search/response with mode switching |
 | Connection Manager | `admin/connection_manager.py` | Smart connectivity detection |
 | Job Manager | `admin/job_manager.py` | Background job queue with checkpointing |
+| Source Manager | `offline_tools/source_manager.py` | Unified source pipeline (dispatch pattern) |
 | ZIM Server | `admin/zim_server.py` | ZIM content server for offline browsing |
+| Visualization | `admin/routes/visualise.py` | 3D knowledge map generation |
 | Indexers | `offline_tools/indexer.py` | HTML, ZIM, PDF content indexing |
 | Scrapers | `offline_tools/scraper/` | Web content scrapers |
 | Vector Store | `offline_tools/vectordb/` | ChromaDB (local) and Pinecone (cloud) |
@@ -67,7 +69,8 @@ disaster-clippy/
 |   |-- cloud_upload.py       # R2 upload endpoints
 |   |-- routes/               # API route modules
 |   |   |-- sources.py        # Source listing API
-|   |   |-- source_tools.py   # Source management API
+|   |   |-- source_tools.py   # Source management API (unified pipeline)
+|   |   |-- visualise.py      # Knowledge map visualization API
 |   |   |-- packs.py          # Pack management API
 |   |   |-- jobs.py           # Job status API
 |   |-- templates/            # Admin UI templates
@@ -152,9 +155,10 @@ Each source is a self-contained folder:
 ```
 BACKUP_PATH/
 |-- _master.json                         # Master source index (optional)
+|-- _visualisation.json                  # 3D visualization data (generated)
 |-- my_wiki/                             # Source folder
 |   |-- _manifest.json                   # Source config (identity + distribution)
-|   |-- _metadata.json                   # Document metadata
+|   |-- _metadata.json                   # Document metadata (includes internal_links)
 |   |-- _index.json                      # Full content for display
 |   |-- _vectors.json                    # Vector embeddings
 |   |-- backup_manifest.json             # URL to file mapping
@@ -162,6 +166,8 @@ BACKUP_PATH/
 |-- bitcoin.zim                          # ZIM files at backup root
 +-- chroma/                              # ChromaDB data (all sources)
 ```
+
+**Note:** `_metadata.json` now includes `internal_links` arrays for each document (extracted during metadata generation) used by the Knowledge Map visualization.
 
 ### R2 Cloud Structure
 
@@ -288,7 +294,15 @@ The codebase was recently consolidated from two repos (private + public):
 - Pipeline testing with real data sources
 - Documentation cleanup and consolidation (this update)
 - Final validation before v1.0 release
-- Known bug fixes: Document ID mismatch (fixed), progress count display (fixed)
+
+### Recently Completed (Dec 2025)
+
+- Unified pipeline architecture (SourceManager dispatch pattern)
+- Internal links extraction for visualization edges
+- Orphaned source detection (sources in _master.json but folder missing)
+- Knowledge Map Visualization (3D PCA scatter plot with link edges)
+- Legacy endpoint deprecation (/zim/index -> /create-index)
+- Document ID mismatch fix, progress count display fix
 
 See [ROADMAP.md](ROADMAP.md) for full details.
 
@@ -385,4 +399,4 @@ curl -X POST "http://localhost:8000/api/v1/chat" \
 
 ---
 
-*Last Updated: December 2025*
+*Last Updated: December 9, 2025*

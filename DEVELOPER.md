@@ -384,7 +384,7 @@ LOCAL ADMIN                              GLOBAL ADMIN
 
 ### SourceManager (`offline_tools/source_manager.py`)
 
-High-level interface for source creation workflow:
+High-level interface for source creation workflow with **unified dispatch pattern**.
 
 ```python
 from offline_tools.source_manager import SourceManager
@@ -398,6 +398,71 @@ result = manager.create_index("my_wiki")
 validation = manager.validate_source("my_wiki", source_config)
 # Returns: has_backup, has_index, has_license, detected_license, suggested_tags
 ```
+
+### Unified Pipeline Architecture
+
+All source types (ZIM, HTML, PDF) go through the same 4-step pipeline via SourceManager dispatch methods:
+
+| Step | Entry Point | Dispatches To | Output |
+|------|-------------|---------------|--------|
+| 1. Backup | `scan_backup()` | `_scan_zim_backup()`, `_scan_html_backup()`, `_scan_pdf_backup()` | `backup_manifest.json` |
+| 2. Metadata | `generate_metadata()` | `_generate_zim_metadata()`, `_generate_html_metadata()`, `_generate_pdf_metadata()` | `_metadata.json` |
+| 3. Index | `create_index()` | `_index_zim()`, `_index_html()`, `_index_pdf()` | `_index.json`, `_vectors.json`, ChromaDB |
+
+**Auto-detection:** `_detect_source_type()` determines the source type based on:
+- `.zim` file present -> ZIM
+- `pages/` folder present -> HTML
+- `.pdf` files present -> PDF
+
+**API Endpoints (all use unified dispatch):**
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/useradmin/api/scan-backup` | POST | Scan backup files |
+| `/useradmin/api/generate-metadata` | POST | Generate metadata with language filter |
+| `/useradmin/api/create-index` | POST | Create index and embeddings |
+
+**DEPRECATED:** `/useradmin/api/zim/index` - Use `/create-index` instead (auto-detects source type)
+
+### Adding New Source Types
+
+To add a new source type (e.g., EPUB), implement these methods in `source_manager.py`:
+
+```python
+# 1. Update _detect_source_type() to recognize the new type
+def _detect_source_type(self, source_id: str) -> str:
+    source_path = self.backup_path / source_id
+    if list(source_path.glob("*.epub")):
+        return "epub"
+    # ... existing detection logic
+
+# 2. Add dispatch case in scan_backup()
+def scan_backup(self, source_id: str, ...):
+    source_type = self._detect_source_type(source_id)
+    if source_type == "epub":
+        return self._scan_epub_backup(source_id, ...)
+    # ... existing dispatch
+
+# 3. Add dispatch case in generate_metadata()
+def generate_metadata(self, source_id: str, ...):
+    if source_type == "epub":
+        return self._generate_epub_metadata(source_id, ...)
+
+# 4. Add dispatch case in create_index()
+def create_index(self, source_id: str, ...):
+    if source_type == "epub":
+        return self._index_epub(source_id, ...)
+
+# 5. Implement the type-specific methods
+def _scan_epub_backup(self, source_id, ...): ...
+def _generate_epub_metadata(self, source_id, ...): ...
+def _index_epub(self, source_id, ...): ...
+```
+
+The unified architecture ensures:
+- Consistent progress callbacks and cancellation support
+- Automatic checkpoint/resume for long jobs
+- Same UI workflow across all source types
 
 ### Indexers (`offline_tools/indexer.py`)
 
@@ -661,14 +726,87 @@ When installing, indexing, or publishing a source that already exists, the syste
    # Returns: {"deleted_count": 1234, "batches": 2}
    ```
 
+### Orphaned Source Detection
+
+When a source folder is manually deleted but the source still exists in `_master.json` and/or ChromaDB, it appears as an **orphaned source** in the Source Tools dropdown.
+
+**How it works:**
+
+1. Source list reads from BOTH `_master.json` AND folder scan
+2. Sources in master but missing folder are flagged `is_orphaned: true`
+3. UI shows `[ORPHANED]` prefix with red color
+4. Selecting orphaned source shows warning panel with cleanup button
+
+**Purpose:** Allows proper cleanup of ChromaDB vectors and `_master.json` even when the source folder was deleted outside the admin panel.
+
+**Implementation:**
+
+```python
+# source_tools.py - get_local_sources()
+# 1. Load sources from _master.json (catches orphaned entries)
+for source_id, source_info in master_data.get("sources", {}).items():
+    sources_config[source_id] = {
+        "name": source_id,
+        "tags": source_info.get("topics", []),
+        "from_master": True,  # Flag for orphan detection
+    }
+
+# 2. Scan folders to supplement with actual data
+for source_folder in backup_path.iterdir():
+    # ... updates sources_config with real folder data
+
+# 3. Mark orphaned if in master but folder missing
+is_orphaned = config_data.get("from_master", False) and not folder_exists
+```
+
+### Internal Links (for Visualization)
+
+During metadata generation, internal links between documents are extracted and stored in `_metadata.json`. These are used by the 3D visualization to draw connection lines between related documents.
+
+**Extracted during:**
+- `generate_metadata()` for HTML sources (via `extract_internal_links_from_html()`)
+- `_generate_zim_metadata()` for ZIM sources
+
+**Storage format in `_metadata.json`:**
+
+```json
+{
+  "documents": {
+    "doc_id_1": {
+      "title": "Solar Water Heater",
+      "url": "/wiki/Solar_Water_Heater",
+      "internal_links": [
+        "/wiki/Solar_Energy",
+        "/wiki/Water_Heating",
+        "/wiki/DIY_Projects"
+      ]
+    }
+  }
+}
+```
+
+**Visualization usage (`admin/routes/visualise.py`):**
+
+The `build_link_edges()` function reads `internal_links` from `_metadata.json` and creates edges between points in the 3D scatter plot:
+
+```python
+def build_link_edges(points, sources, progress_callback=None):
+    # Builds URL-to-point-index mapping
+    # Reads internal_links from each source's _metadata.json
+    # Returns: [{"from": idx1, "to": idx2}, ...]
+```
+
+**Note:** Links are only stored if present (to save space). Empty `internal_links` arrays are omitted.
+
 ### File Structure in BACKUP_PATH
 
 ```
 BACKUP_PATH/
 |-- _master.json                         # Master source index (optional)
+|-- _visualisation.json                  # 3D visualization data (generated)
 |-- my_wiki/                             # Source folder
 |   |-- _manifest.json                   # Source config (identity + distribution)
-|   |-- _metadata.json                   # Document metadata
+|   |-- _metadata.json                   # Document metadata (includes internal_links)
 |   |-- _index.json                      # Full content for display
 |   |-- _vectors.json                    # Vector embeddings
 |   |-- backup_manifest.json             # URL to file mapping
@@ -676,6 +814,57 @@ BACKUP_PATH/
 |-- bitcoin.zim                          # ZIM files at backup root
 +-- chroma/                              # ChromaDB data
 ```
+
+---
+
+## Knowledge Map Visualization
+
+The Knowledge Map is a 3D scatter plot visualization of all indexed documents, showing semantic relationships and hyperlink connections.
+
+### How It Works
+
+1. **PCA Reduction**: 1536-dimensional embeddings are reduced to 3D using Principal Component Analysis
+2. **Point Coloring**: Documents colored by source for visual grouping
+3. **Link Edges**: Connection lines between documents based on internal hyperlinks
+4. **Interactive**: Pan, zoom, rotate the 3D space; click points to view document details
+
+### API Endpoints (`/useradmin/api/visualise/...`)
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/visualise/status` | GET | Check if visualization data exists, get stats |
+| `/visualise/data` | GET | Get full visualization JSON for rendering |
+| `/visualise/generate` | POST | Start background job to generate visualization |
+| `/visualise/data` | DELETE | Delete visualization data |
+
+### Data Structure (`_visualisation.json`)
+
+```json
+{
+  "generated_at": "2025-12-09T12:00:00",
+  "algorithm": "pca",
+  "point_count": 22000,
+  "edge_count": 15000,
+  "sources": ["appropedia", "bitcoin", "ready_gov"],
+  "source_counts": {"appropedia": 13522, "bitcoin": 1812, ...},
+  "variance_explained": [0.15, 0.08, 0.05],
+  "total_variance": 0.28,
+  "points": [
+    {"x": 1.2, "y": -0.5, "z": 0.8, "id": "doc_id", "title": "...", "source": "..."}
+  ],
+  "edges": [
+    {"from": 0, "to": 42}
+  ]
+}
+```
+
+### Generation Process
+
+1. Fetch all embeddings from ChromaDB
+2. Run PCA to reduce to 3D coordinates
+3. Build point list with metadata (title, source, URLs)
+4. Build edges from `internal_links` in `_metadata.json`
+5. Save to `_visualisation.json` in backup folder
 
 ---
 
@@ -688,6 +877,7 @@ Access at: `http://localhost:8000/useradmin/`
 - **Dashboard** - System status and statistics
 - **Sources** - Browse all sources with status boxes, install cloud sources
 - **Source Tools** - 5-step wizard for creating/editing sources
+- **Visualization** - 3D knowledge map of all indexed documents
 - **Settings** - Configure backup paths, connection modes
 
 ### Connection Modes
@@ -704,7 +894,7 @@ Your settings are saved to: `local_settings.json` (in the project root)
 
 ```json
 {
-  "backup_path": "D:\\disaster-backups",
+  "backup_folder": "/path/to/your/backups",
   "offline_mode": "hybrid",
   "auto_fallback": true,
   "cache_responses": true
@@ -848,7 +1038,7 @@ The "URLs still in queue" tells you how many discovered pages weren't downloaded
 from offline_tools.backup.html import run_backup
 
 result = run_backup(
-    backup_path="D:/disaster-backups",
+    backup_path="/path/to/your/backups",  # Set via Settings page or BACKUP_PATH env
     source_id="mysite",
     base_url="https://example.com",
     scraper_type="static",  # or "mediawiki"
@@ -1498,4 +1688,4 @@ Articles with less than 100 characters of extracted text are filtered out during
 
 ---
 
-*Last Updated: December 2025*
+*Last Updated: December 9, 2025*

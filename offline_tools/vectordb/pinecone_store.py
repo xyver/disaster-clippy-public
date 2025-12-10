@@ -232,10 +232,15 @@ class PineconeStore:
 
         # Upsert in batches (Pinecone limit is 100 vectors per request)
         batch_size = 100
+        total_batches = (len(vectors) - 1) // batch_size + 1 if vectors else 0
         for i in range(0, len(vectors), batch_size):
             batch = vectors[i:i + batch_size]
             self.index.upsert(vectors=batch, namespace=self.namespace)
-            print(f"  Uploaded batch {i // batch_size + 1}/{(len(vectors) - 1) // batch_size + 1}")
+            batch_num = i // batch_size + 1
+            print(f"  Uploaded batch {batch_num}/{total_batches}")
+            # Report batch progress if callback provided
+            if progress_callback:
+                progress_callback(batch_num, total_batches, f"Uploading batch {batch_num}/{total_batches}")
 
         # Update local metadata index
         self.metadata_index.add_documents(documents)

@@ -10,6 +10,16 @@ from typing import Dict, Any, Optional, List
 from datetime import datetime
 
 
+class BackupFolderNotConfigured(Exception):
+    """
+    Raised when backup folder is required but not configured.
+
+    This provides a clear error message directing users to configure
+    their backup folder in Settings or .env file.
+    """
+    pass
+
+
 class LocalConfig:
     """Manages local user settings stored in a JSON file"""
 
@@ -141,6 +151,32 @@ Only recommend articles that are in the provided context - do not make up articl
         folder = self.config.get("backup_folder", "")
         if not folder:
             folder = self.config.get("backup_paths", {}).get("zim_folder", "")
+        return folder
+
+    def require_backup_folder(self) -> str:
+        """
+        Get backup folder or raise a clear error if not configured.
+
+        Use this when backup folder is required for an operation.
+
+        Returns:
+            str: The backup folder path
+
+        Raises:
+            BackupFolderNotConfigured: If backup folder is not set
+        """
+        folder = self.get_backup_folder()
+        if not folder:
+            raise BackupFolderNotConfigured(
+                "Backup folder not configured. "
+                "Please set it in Settings page (http://localhost:8001/useradmin/settings) "
+                "or set BACKUP_PATH in your .env file."
+            )
+        if not os.path.isdir(folder):
+            raise BackupFolderNotConfigured(
+                f"Backup folder does not exist: {folder}. "
+                "Please create the folder or update the path in Settings."
+            )
         return folder
 
     def set_backup_folder(self, path: str) -> None:

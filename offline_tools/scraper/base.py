@@ -24,9 +24,10 @@ class ScrapedPage:
     last_modified: Optional[str]
     content_hash: str  # For change detection
     scraped_at: str
+    internal_links: Optional[List[str]] = None  # URLs this page links to (within same source)
 
     def to_dict(self) -> Dict:
-        return {
+        result = {
             "url": self.url,
             "title": self.title,
             "content": self.content,
@@ -36,6 +37,9 @@ class ScrapedPage:
             "content_hash": self.content_hash,
             "scraped_at": self.scraped_at
         }
+        if self.internal_links:
+            result["internal_links"] = self.internal_links
+        return result
 
 
 class RateLimitMixin:

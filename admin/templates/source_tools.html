@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Source Tools - Disaster Clippy</title>
     <link rel="icon" type="image/png" href="/static/paperclip.png">
-    <link rel="stylesheet" href="/admin/static/admin-common.css">
+    <link rel="stylesheet" href="/admin/static/{{ admin_css }}">
     <style>
         /* Page-specific styles for Source Tools wizard */
 
@@ -540,23 +540,7 @@
             <h1>Source Tools</h1>
             <p>Create, configure, and manage content sources</p>
         </div>
-        <nav class="nav-links">
-            <a href="/useradmin/dashboard">Dashboard</a>
-            <a href="/useradmin/sources" class="active">Sources</a>
-            <a href="/useradmin/jobs">Jobs</a>
-            <a href="/useradmin/cloud">Cloud</a>
-            <a href="/useradmin/settings">Settings</a>
-            <a href="/useradmin/submissions">Submissions</a>
-            <a href="/useradmin/pinecone">Pinecone</a>
-            <a href="/">Chat</a>
-            <span class="nav-divider"></span>
-            <label class="mode-toggle" id="modeToggle" title="Switch between Local and Global mode for testing">
-                <input type="checkbox" id="modeCheckbox" onchange="toggleMode()">
-                <span class="mode-label" id="modeLabel">Local</span>
-                <span class="toggle-slider"></span>
-                <span class="mode-badge" id="modeBadge">TEST</span>
-            </label>
-        </nav>
+        {% with active_page='sources' %}{% include '_nav.html' %}{% endwith %}
     </header>
 
     <div class="container">
@@ -1070,7 +1054,10 @@
 
                         <!-- Chosen Tags (will be saved) -->
                         <div style="margin-bottom: 1rem;">
-                            <label style="display: block; margin-bottom: 0.5rem; color: #4ecca3; font-weight: 500;">Chosen Tags (will be saved)</label>
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+                                <label style="color: #4ecca3; font-weight: 500;">Chosen Tags (will be saved)</label>
+                                <button type="button" onclick="removeAllChosen()" style="background: transparent; border: 1px solid #e94560; color: #e94560; padding: 0.2rem 0.5rem; border-radius: 3px; font-size: 0.7rem; cursor: pointer;" title="Remove all chosen tags">Remove all</button>
+                            </div>
                             <div id="chosenTagsCloud" style="min-height: 40px; background: #0a2a1a; border: 1px solid #1a5a3e; border-radius: 4px; padding: 0.5rem;">
                                 <span style="color: #666; font-size: 0.8rem;" id="noChosenTags">Click suggested tags or add custom tags below</span>
                             </div>
@@ -1078,7 +1065,10 @@
 
                         <!-- Suggested Tags -->
                         <div style="margin-bottom: 1rem;">
-                            <label style="display: block; margin-bottom: 0.5rem; color: #f9a825; font-weight: 500;">Suggested Tags <span id="suggestedTagsCount" style="color: #888; font-weight: normal;"></span></label>
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+                                <label style="color: #f9a825; font-weight: 500;">Suggested Tags <span id="suggestedTagsCount" style="color: #888; font-weight: normal;"></span></label>
+                                <button type="button" onclick="addAllSuggested()" style="background: transparent; border: 1px solid #4ecca3; color: #4ecca3; padding: 0.2rem 0.5rem; border-radius: 3px; font-size: 0.7rem; cursor: pointer;" title="Add all suggested tags">Add all</button>
+                            </div>
                             <div id="suggestedTagsCloud" style="min-height: 40px; max-height: 200px; overflow-y: auto; background: #2a2a1a; border: 1px solid #5a5a3e; border-radius: 4px; padding: 0.5rem;">
                                 <span style="color: #666; font-size: 0.8rem;" id="noSuggestedTags">Click "Get Suggestions" to analyze content</span>
                             </div>
@@ -1671,16 +1661,23 @@
                 for (const source of sources) {
                     const option = document.createElement('option');
                     option.value = source.source_id;
-                    // Show backup count vs indexed count for HTML sources
-                    const backupCount = source.backup_page_count || 0;
-                    const indexedCount = source.document_count || 0;
-                    let countText;
-                    if (backupCount > 0 && backupCount !== indexedCount) {
-                        countText = `${backupCount} pages, ${indexedCount} indexed`;
+
+                    // Check if orphaned (in master.json but folder deleted)
+                    if (source.is_orphaned) {
+                        option.textContent = `[ORPHANED] ${source.name || source.source_id} (0 docs - needs cleanup)`;
+                        option.style.color = '#ff6b6b';
                     } else {
-                        countText = `${indexedCount} docs`;
+                        // Show backup count vs indexed count for HTML sources
+                        const backupCount = source.backup_page_count || 0;
+                        const indexedCount = source.document_count || 0;
+                        let countText;
+                        if (backupCount > 0 && backupCount !== indexedCount) {
+                            countText = `${backupCount} pages, ${indexedCount} indexed`;
+                        } else {
+                            countText = `${indexedCount} docs`;
+                        }
+                        option.textContent = `${source.name || source.source_id} (${countText})`;
                     }
-                    option.textContent = `${source.name || source.source_id} (${countText})`;
                     select.appendChild(option);
                 }
 
@@ -1717,6 +1714,46 @@
             currentSource = sources.find(s => s.source_id === sourceId);
 
             if (currentSource) {
+                // Check if this is an orphaned source
+                if (currentSource.is_orphaned) {
+                    selectedInfoDiv.style.display = 'block';
+                    selectedInfoDiv.innerHTML = `
+                        <div style="background: #3a2020; border: 1px solid #ff6b6b; border-radius: 8px; padding: 16px;">
+                            <h4 style="color: #ff6b6b; margin: 0 0 8px 0;">ORPHANED SOURCE: ${currentSource.source_id}</h4>
+                            <p style="margin: 0 0 12px 0; color: #ccc;">
+                                This source exists in the database but its folder has been deleted.
+                                Use the <strong>Delete Source</strong> button below to clean up ChromaDB and master.json.
+                            </p>
+                            <button onclick="deleteSource()" class="btn btn-danger" style="background: #ff4444;">
+                                Delete Source (Clean Up)
+                            </button>
+                        </div>
+                    `;
+                    document.getElementById('documentCountDisplay').style.display = 'none';
+                    document.getElementById('btnIndexAll').style.display = 'none';
+                    // Hide other sections for orphaned sources
+                    document.getElementById('sourceInfo').innerHTML = '';
+                    logOutput(`WARNING: ${currentSource.source_id} is orphaned - folder deleted but database entries remain`, 'error');
+                    return;
+                }
+
+                // Restore normal selectedSourceInfo structure if it was replaced by orphaned warning
+                if (!document.getElementById('selectedSourceName')) {
+                    selectedInfoDiv.innerHTML = `
+                        <div style="font-size: 0.8rem; color: #888; text-transform: uppercase; margin-bottom: 0.5rem;">Selected Source</div>
+                        <div style="display: grid; grid-template-columns: auto 1fr; gap: 0.25rem 1rem; font-size: 0.9rem;">
+                            <span style="color: #888;">Name:</span>
+                            <span id="selectedSourceName" style="color: #fff;">-</span>
+                            <span style="color: #888;">Slug (ID):</span>
+                            <span id="selectedSourceSlug" style="color: #4ecca3; font-family: monospace;">-</span>
+                            <span style="color: #888;">Type:</span>
+                            <span id="selectedSourceType" style="color: #e94560;">-</span>
+                            <span style="color: #888;">Base URL:</span>
+                            <span id="selectedSourceUrl" style="color: #4fc3f7; word-break: break-all;">-</span>
+                        </div>
+                    `;
+                }
+
                 // Show selected source info in Step 1
                 selectedInfoDiv.style.display = 'block';
                 document.getElementById('selectedSourceName').textContent = currentSource.name || currentSource.source_id;
@@ -1854,14 +1891,14 @@
 
         // Track tags in the two sections
         let chosenTags = new Set();
-        let suggestedTags = new Set();
+        let suggestedTags = [];  // Array to preserve sorted order from API
 
         function populateTagsForm() {
             const s = currentSource;
 
             // Initialize chosen tags from current source tags
             chosenTags.clear();
-            suggestedTags.clear();
+            suggestedTags = [];
 
             const existingTags = Array.isArray(s.tags) ? s.tags : (s.tags ? s.tags.split(',').map(t => t.trim()).filter(t => t) : []);
             existingTags.forEach(tag => chosenTags.add(tag));
@@ -1904,15 +1941,15 @@
 
             // Update count in label
             if (countSpan) {
-                countSpan.textContent = suggestedTags.size > 0 ? `(${suggestedTags.size} available)` : '';
+                countSpan.textContent = suggestedTags.length > 0 ? `(${suggestedTags.length} available)` : '';
             }
 
-            if (suggestedTags.size === 0) {
+            if (suggestedTags.length === 0) {
                 container.innerHTML = '<span style="color: #666; font-size: 0.8rem;" id="noSuggestedTags">Click "Get Suggestions" to analyze content</span>';
                 return;
             }
 
-            const html = [...suggestedTags].map(tag => `
+            const html = suggestedTags.map(tag => `
                 <button type="button" class="tag-btn suggested" data-tag="${tag}" onclick="moveTagToChosen('${tag}')"
                     style="display: inline-block; background: #2a2a1a; border: 1px solid #5a5a3e; color: #f9a825; padding: 0.25rem 0.6rem; border-radius: 3px; margin: 0.15rem; font-size: 0.8rem; cursor: pointer; transition: all 0.15s;"
                     title="Click to add">
@@ -1924,7 +1961,7 @@
         }
 
         function moveTagToChosen(tag) {
-            suggestedTags.delete(tag);
+            suggestedTags = suggestedTags.filter(t => t !== tag);
             chosenTags.add(tag);
             renderChosenTags();
             renderSuggestedTags();
@@ -1933,7 +1970,10 @@
 
         function moveTagToSuggested(tag) {
             chosenTags.delete(tag);
-            suggestedTags.add(tag);
+            // Add at beginning since user already found this tag valuable
+            if (!suggestedTags.includes(tag)) {
+                suggestedTags.unshift(tag);
+            }
             renderChosenTags();
             renderSuggestedTags();
             updateHiddenTagsField();
@@ -1953,7 +1993,7 @@
             }
 
             // Remove from suggested if it's there
-            suggestedTags.delete(tag);
+            suggestedTags = suggestedTags.filter(t => t !== tag);
 
             // Add to chosen
             chosenTags.add(tag);
@@ -1968,12 +2008,38 @@
         function addTagsToChosen(tags) {
             // Used by novel terms "Add to Tags" button
             tags.forEach(tag => {
-                suggestedTags.delete(tag);
+                suggestedTags = suggestedTags.filter(t => t !== tag);
                 chosenTags.add(tag);
             });
             renderChosenTags();
             renderSuggestedTags();
             updateHiddenTagsField();
+        }
+
+        function addAllSuggested() {
+            // Move all suggested tags to chosen
+            suggestedTags.forEach(tag => chosenTags.add(tag));
+            const count = suggestedTags.length;
+            suggestedTags = [];
+            renderChosenTags();
+            renderSuggestedTags();
+            updateHiddenTagsField();
+            if (count > 0) {
+                logOutput(`Added ${count} tags to chosen`, 'success');
+            }
+        }
+
+        function removeAllChosen() {
+            // Move all chosen tags back to suggested (at the front)
+            const chosenArray = [...chosenTags];
+            chosenTags.clear();
+            suggestedTags = [...chosenArray, ...suggestedTags];
+            renderChosenTags();
+            renderSuggestedTags();
+            updateHiddenTagsField();
+            if (chosenArray.length > 0) {
+                logOutput(`Removed ${chosenArray.length} tags from chosen`, 'info');
+            }
         }
 
         // Save source configuration (Step 2 - without tags)
@@ -3427,55 +3493,33 @@
             }
 
             logOutput(`Analyzing content for tag suggestions...`);
-            let totalAdded = 0;
 
             try {
-                // Fetch both system suggestions and novel terms in parallel
-                const [validateResp, novelResp] = await Promise.all([
-                    fetch('/useradmin/api/validate-source', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ source_id: currentSource.source_id })
-                    }),
-                    fetch(`/useradmin/api/novel-terms/${currentSource.source_id}?update=true`)
-                ]);
+                // Fetch all suggestions (TOPIC_KEYWORDS + novel terms) combined and sorted
+                const response = await fetch(`/useradmin/api/all-suggested-tags/${currentSource.source_id}`);
+                const data = await response.json();
 
-                const validateData = await validateResp.json();
-                const novelData = await novelResp.json();
-
-                // Add system-suggested tags (from TOPIC_KEYWORDS matching)
-                if (validateResp.ok && validateData.suggested_tags && validateData.suggested_tags.length > 0) {
-                    validateData.suggested_tags.forEach(tag => {
-                        if (!chosenTags.has(tag) && !suggestedTags.has(tag)) {
-                            suggestedTags.add(tag);
-                            totalAdded++;
-                        }
-                    });
-                    logOutput(`Found ${validateData.suggested_tags.length} content-based suggestions`, 'success');
+                if (!response.ok || data.status !== 'success') {
+                    logOutput(data.error || 'Failed to get suggestions', 'error');
+                    return;
                 }
 
-                // Add novel terms (from title word frequency)
-                if (novelResp.ok && novelData.status === 'success' && novelData.top_terms) {
-                    const novelTerms = Object.keys(novelData.top_terms);
-                    let novelAdded = 0;
-                    novelTerms.forEach(term => {
-                        if (!chosenTags.has(term) && !suggestedTags.has(term)) {
-                            suggestedTags.add(term);
-                            novelAdded++;
-                            totalAdded++;
-                        }
-                    });
-                    if (novelAdded > 0) {
-                        logOutput(`Found ${novelAdded} novel terms from ${novelData.documents_scanned} document titles`, 'success');
+                // Add tags that aren't already chosen, maintaining sorted order
+                let totalAdded = 0;
+                const newTags = [];
+                for (const item of data.tags) {
+                    if (!chosenTags.has(item.tag) && !suggestedTags.includes(item.tag)) {
+                        newTags.push(item.tag);
+                        totalAdded++;
                     }
                 }
+                suggestedTags = newTags;
 
+                logOutput(`Found ${data.topic_count} topic matches and ${data.novel_count} novel terms`, 'success');
                 renderSuggestedTags();
 
                 if (totalAdded > 0) {
-                    showToast(`Found ${totalAdded} suggestions - click to add`);
-                } else if (!validateData.has_metadata) {
-                    logOutput('No suggestions - source needs to be indexed first (Step 3).', 'warning');
+                    showToast(`Found ${totalAdded} suggestions sorted by frequency - click to add`);
                 } else {
                     logOutput('No new suggestions found.', 'info');
                 }

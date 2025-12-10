@@ -345,6 +345,7 @@ class MediaWikiScraper(BaseScraper):
         page_url = self._title_to_url(page_title)
 
         # If API extract is empty/short, fall back to HTML parsing
+        internal_links = []
         if len(content) < 100:
             html_result = self._scrape_page_html(page_url)
             if html_result:
@@ -352,8 +353,14 @@ class MediaWikiScraper(BaseScraper):
                 # Use HTML categories if API didn't return any
                 if not categories:
                     categories = html_result.get("categories", [])
+                internal_links = html_result.get("internal_links", [])
             else:
                 return None  # Skip if both methods fail
+        else:
+            # API gave us content, but we still need links from HTML
+            html_result = self._scrape_page_html(page_url)
+            if html_result:
+                internal_links = html_result.get("internal_links", [])
 
         # Clean content
         content = self._clean_content(content)
@@ -369,7 +376,8 @@ class MediaWikiScraper(BaseScraper):
             categories=categories[:10],
             last_modified=last_modified,
             content_hash=self._hash_content(content),
-            scraped_at=datetime.utcnow().isoformat()
+            scraped_at=datetime.utcnow().isoformat(),
+            internal_links=internal_links if internal_links else None
         )
 
     def _scrape_page_html(self, url: str) -> Optional[Dict]:
@@ -427,10 +435,54 @@ class MediaWikiScraper(BaseScraper):
             if cat_name and cat_name not in categories:
                 categories.append(cat_name)
 
+        # Extract internal links
+        internal_links = self._extract_internal_links(content_div)
+
         return {
             "content": content,
-            "categories": categories
+            "categories": categories,
+            "internal_links": internal_links
         }
+
+    def _extract_internal_links(self, content_elem) -> List[str]:
+        """
+        Extract internal wiki links from content.
+        Returns list of page titles that this page links to.
+        """
+        if not content_elem:
+            return []
+
+        internal_links = []
+        seen = set()
+
+        for link in content_elem.find_all("a", href=True):
+            href = link["href"]
+
+            # Only include wiki article links
+            if "/wiki/" not in href:
+                continue
+
+            # Skip special pages, files, categories
+            if any(x in href for x in ["/wiki/Special:", "/wiki/File:", "/wiki/Category:",
+                                         "/wiki/Template:", "/wiki/Help:", "/wiki/Talk:"]):
+                continue
+
+            # Skip external wiki links
+            if href.startswith("http") and self.base_url not in href:
+                continue
+
+            # Extract the page path
+            if "/wiki/" in href:
+                page_path = "/wiki/" + href.split("/wiki/")[-1]
+                # Remove anchor
+                if "#" in page_path:
+                    page_path = page_path.split("#")[0]
+
+                if page_path not in seen:
+                    seen.add(page_path)
+                    internal_links.append(page_path)
+
+        return internal_links
 
     def _title_to_url(self, title: str) -> str:
         """Convert page title to URL"""

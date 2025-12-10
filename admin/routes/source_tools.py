@@ -92,17 +92,43 @@ def get_local_config():
 async def get_local_sources():
     """
     Get ALL local sources with completeness status.
-    Source of truth is the backup folder - discovers all sources from
-    _manifest.json files in each source subfolder.
+
+    Source list comes from BOTH:
+    1. _master.json (to show orphaned entries that need cleanup)
+    2. Backup folder scan (to find new sources not yet in master)
+
+    File counts come from actual folders (so missing folders show 0).
+    This allows users to see and delete orphaned entries via the UI.
     """
     config = get_local_config()
     backup_folder = config.get_backup_folder()
 
-    # Primary discovery: scan backup folder for all sources
+    # Primary discovery: combine _master.json and folder scan
     sources_config = {}
 
     if backup_folder:
         backup_path = Path(backup_folder)
+
+        # 1. First load from _master.json to catch orphaned entries
+        master_file = backup_path / "_master.json"
+        if master_file.exists():
+            try:
+                with open(master_file, 'r', encoding='utf-8') as f:
+                    master_data = json.load(f)
+                for source_id, source_info in master_data.get("sources", {}).items():
+                    sources_config[source_id] = {
+                        "name": source_id,
+                        "description": "",
+                        "license": "Unknown",
+                        "base_url": "",
+                        "license_verified": False,
+                        "tags": source_info.get("topics", []),
+                        "from_master": True,  # Flag to identify orphaned entries
+                    }
+            except Exception:
+                pass
+
+        # 2. Then scan folders to supplement/override with actual data
         if backup_path.exists():
             for source_folder in backup_path.iterdir():
                 if source_folder.is_dir():
@@ -121,13 +147,14 @@ async def get_local_sources():
                                 "base_url": source_data.get("base_url", ""),
                                 "license_verified": source_data.get("license_verified", False),
                                 "tags": source_data.get("tags", []),
+                                "from_master": False,
                             }
                         except Exception:
-                            sources_config[source_id] = {"name": source_id, "tags": []}
+                            sources_config[source_id] = {"name": source_id, "tags": [], "from_master": False}
 
                     # Check for pages folder or any content
                     elif (source_folder / "pages").exists() or list(source_folder.glob("*.html")):
-                        sources_config[source_id] = {"name": source_id}
+                        sources_config[source_id] = {"name": source_id, "tags": [], "from_master": False}
 
     if not sources_config:
         return {"sources": [], "total": 0, "complete_count": 0}
@@ -136,6 +163,11 @@ async def get_local_sources():
     local_sources = []
 
     for source_id, config_data in sources_config.items():
+        # Check if folder exists (orphaned = in master.json but folder missing)
+        source_folder = Path(backup_folder) / source_id if backup_folder else None
+        folder_exists = source_folder and source_folder.exists() and source_folder.is_dir()
+        is_orphaned = config_data.get("from_master", False) and not folder_exists
+
         source_status = {
             "source_id": source_id,
             "name": config_data.get("name", source_id),
@@ -144,7 +176,7 @@ async def get_local_sources():
             "license_verified": config_data.get("license_verified", False),
             "base_url": config_data.get("base_url", ""),
             "tags": config_data.get("tags", []),
-            "has_config": True,
+            "has_config": not is_orphaned,  # No config if orphaned
             "has_metadata": False,
             "has_backup": False,
             "has_embeddings": False,
@@ -158,7 +190,14 @@ async def get_local_sources():
             "has_source_metadata": False,
             "has_documents_file": False,
             "has_embeddings_file": False,
+            "is_orphaned": is_orphaned,  # Flag for UI to show warning
         }
+
+        # Skip detailed checks for orphaned sources - they have no folder
+        if is_orphaned:
+            source_status["missing"] = ["folder deleted - use Delete to clean up"]
+            local_sources.append(source_status)
+            continue
 
         # Check for metadata file
         metadata_path = Path(backup_folder) / source_id / get_metadata_file() if backup_folder else None
@@ -1189,9 +1228,9 @@ async def get_novel_terms(source_id: str, update: bool = False):
                 "needs_analysis": True
             }
 
-        # Get top 50 terms for display
+        # Get top 100 terms for display
         all_terms = result.get("discovered_terms", {})
-        top_terms = dict(list(all_terms.items())[:50])
+        top_terms = dict(list(all_terms.items())[:100])
 
         return {
             "status": "success",
@@ -1207,6 +1246,70 @@ async def get_novel_terms(source_id: str, update: bool = False):
 
     except Exception as e:
         raise HTTPException(500, f"Novel terms analysis failed: {e}")
+
+
+@router.get("/all-suggested-tags/{source_id}")
+async def get_all_suggested_tags(source_id: str):
+    """
+    Get all suggested tags (TOPIC_KEYWORDS + novel terms) combined and sorted by frequency.
+
+    Combines:
+    - TOPIC_KEYWORDS matches with their scores
+    - Novel terms discovered from titles with their counts
+
+    Returns a single sorted list with all tags ranked by occurrence.
+    """
+    try:
+        from offline_tools.source_manager import SourceManager
+
+        manager = SourceManager()
+
+        # Get TOPIC_KEYWORDS suggestions with scores
+        topic_scores = manager.suggest_tags(source_id, return_scores=True)
+        if not isinstance(topic_scores, dict):
+            topic_scores = {}
+
+        # Get novel terms with counts
+        novel_result = manager.analyze_metadata_for_tags(source_id, update_metadata=False)
+        novel_terms = novel_result.get("discovered_terms", {}) if novel_result.get("success") else {}
+
+        # Combine all tags with their scores
+        # Novel terms are word frequencies, TOPIC_KEYWORDS are keyword match counts
+        # They're on similar scales so we can combine them directly
+        combined = {}
+
+        # Add TOPIC_KEYWORDS (these tend to have higher scores)
+        for tag, score in topic_scores.items():
+            combined[tag] = {"score": score, "type": "topic"}
+
+        # Add novel terms (skip any that are already in TOPIC_KEYWORDS)
+        for term, count in novel_terms.items():
+            if term not in combined:
+                combined[term] = {"score": count, "type": "novel"}
+
+        # Sort by score descending
+        sorted_tags = sorted(combined.items(), key=lambda x: x[1]["score"], reverse=True)
+
+        # Return as ordered list with scores
+        result_tags = []
+        for tag, info in sorted_tags[:200]:  # Cap at 200 total
+            result_tags.append({
+                "tag": tag,
+                "score": info["score"],
+                "type": info["type"]
+            })
+
+        return {
+            "status": "success",
+            "source_id": source_id,
+            "tags": result_tags,
+            "total_count": len(result_tags),
+            "topic_count": len(topic_scores),
+            "novel_count": len([t for t in result_tags if t["type"] == "novel"])
+        }
+
+    except Exception as e:
+        raise HTTPException(500, f"Failed to get suggested tags: {e}")
 
 
 # =============================================================================
@@ -1516,7 +1619,7 @@ class ZIMInspectRequest(BaseModel):
 
 
 class ZIMIndexRequest(BaseModel):
-    """Request model for ZIM indexing"""
+    """Request model for ZIM indexing - DEPRECATED: Use /create-index instead"""
     zim_path: str
     source_id: str
     limit: int = 1000
@@ -1760,9 +1863,11 @@ async def get_zim_samples(source_id: str, count: int = 10):
         raise HTTPException(500, f"Failed to sample ZIM: {e}")
 
 
-@router.post("/zim/index")
+@router.post("/zim/index", deprecated=True)
 async def index_zim_file(request: ZIMIndexRequest):
     """
+    DEPRECATED: Use /create-index instead which auto-detects source type.
+
     Index a ZIM file as a new source.
     Runs as a background job with progress tracking.
     """

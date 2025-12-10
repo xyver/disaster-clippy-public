@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Cloud Backup Upload - Disaster Clippy</title>
     <link rel="icon" type="image/png" href="/static/paperclip.png">
-    <link rel="stylesheet" href="/admin/static/admin-common.css">
+    <link rel="stylesheet" href="/admin/static/{{ admin_css }}">
     <style>
         /* Page-specific CSS only */
         .container {
@@ -158,23 +158,7 @@
             <h1 id="pageTitle">Cloud Backup Upload</h1>
             <p id="pageSubtitle">Upload verified source backups to R2 cloud storage</p>
         </div>
-        <nav class="nav-links">
-            <a href="/useradmin/dashboard">Dashboard</a>
-            <a href="/useradmin/sources">Sources</a>
-            <a href="/useradmin/jobs">Jobs</a>
-            <a href="/useradmin/cloud" class="active">Cloud</a>
-            <a href="/useradmin/settings">Settings</a>
-            <a href="/useradmin/submissions">Submissions</a>
-            <a href="/useradmin/pinecone">Pinecone</a>
-            <a href="/">Chat</a>
-            <span class="nav-divider"></span>
-            <label class="mode-toggle" id="modeToggle" title="Switch between Local and Global mode for testing">
-                <input type="checkbox" id="modeCheckbox" onchange="toggleMode()">
-                <span class="mode-label" id="modeLabel">Local</span>
-                <span class="toggle-slider"></span>
-                <span class="mode-badge" id="modeBadge">TEST</span>
-            </label>
-        </nav>
+        {% with active_page='cloud' %}{% include '_nav.html' %}{% endwith %}
     </header>
 
     <!-- Local Mode Warning Banner -->
@@ -396,6 +380,7 @@
                                 <span>${source.document_count || 0} docs</span>
                                 <span>${source.backup_size_mb || 0} MB</span>
                                 <span>${source.backup_type || 'no backup'}</span>
+                                ${source.last_published ? `<span style="color: #4ecca3;">Published: ${formatPublishDate(source.last_published)}</span>` : ''}
                             </div>
 
                             <div class="checklist">
@@ -599,6 +584,28 @@
             const div = document.createElement('div');
             div.textContent = text;
             return div.innerHTML;
+        }
+
+        function formatPublishDate(isoString) {
+            if (!isoString) return '';
+            try {
+                const date = new Date(isoString);
+                const now = new Date();
+                const diffMs = now - date;
+                const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+
+                if (diffDays === 0) {
+                    return 'today';
+                } else if (diffDays === 1) {
+                    return 'yesterday';
+                } else if (diffDays < 7) {
+                    return `${diffDays} days ago`;
+                } else {
+                    return date.toLocaleDateString();
+                }
+            } catch (e) {
+                return isoString.split('T')[0];
+            }
         }
 
         // Global admin mode state (from backend)

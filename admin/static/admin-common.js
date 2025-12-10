@@ -45,8 +45,29 @@ function updateModeUI() {
         badge.style.display = isOverriding ? 'inline' : 'none';
     }
 
+    // Update CSS to match current mode
+    updateAdminCSS(isGlobal);
+
     // Update global-only features visibility
     updateGlobalFeatures();
+}
+
+// Dynamically switch between local-admin.css and global-admin.css
+function updateAdminCSS(isGlobal) {
+    // Find the admin CSS link element
+    const cssLinks = document.querySelectorAll('link[rel="stylesheet"]');
+    for (const link of cssLinks) {
+        const href = link.getAttribute('href');
+        if (href && href.includes('-admin.css')) {
+            const newCss = isGlobal ? 'global-admin.css' : 'local-admin.css';
+            const newHref = href.replace(/(?:local|global)-admin\.css/, newCss);
+            if (link.getAttribute('href') !== newHref) {
+                link.setAttribute('href', newHref);
+                console.log('Switched admin CSS to:', newCss);
+            }
+            break;
+        }
+    }
 }
 
 // Show/hide global-only features based on mode

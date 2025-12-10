@@ -92,8 +92,11 @@ class VectorStore:
 
             # Store metadata (everything except content)
             metadata = {k: v for k, v in doc.items() if k != "content"}
-            # ChromaDB requires string/int/float/bool values
+            # ChromaDB requires string/int/float/bool values - serialize lists
             metadata["categories"] = json.dumps(metadata.get("categories", []))
+            # Remove internal_links from ChromaDB metadata (stored in _metadata.json instead)
+            # This avoids serialization overhead and keeps ChromaDB metadata lean
+            metadata.pop("internal_links", None)
             metadatas.append(metadata)
 
         # Compute embeddings if not provided

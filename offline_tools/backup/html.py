@@ -1178,7 +1178,11 @@ if __name__ == "__main__":
     # Test with Solar Cooking Wiki
     import sys
 
-    backup_path = os.getenv("BACKUP_PATH", "D:\\disaster-backups")
+    backup_path = os.getenv("BACKUP_PATH", "")
+    if not backup_path:
+        print("Error: BACKUP_PATH not configured.")
+        print("Set BACKUP_PATH in .env or configure via Settings page.")
+        sys.exit(1)
 
     result = run_backup(
         backup_path=backup_path,

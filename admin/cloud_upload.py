@@ -156,6 +156,7 @@ async def get_sources_for_upload():
                         "license": source_data.get("license", "Unknown"),
                         "base_url": source_data.get("base_url", ""),
                         "license_verified": source_data.get("license_verified", False),
+                        "last_published": source_data.get("last_published"),
                     }
                 except Exception:
                     sources_config[source_id] = {"name": source_id}
@@ -172,6 +173,7 @@ async def get_sources_for_upload():
             "name": config_data.get("name", source_id),
             "license": config_data.get("license", "Unknown"),
             "license_verified": config_data.get("license_verified", False),
+            "last_published": config_data.get("last_published"),
             "has_config": True,
             "has_metadata": False,
             "has_backup": False,
@@ -642,11 +644,11 @@ def _run_publish_to_production(source_id: str, source_info: dict, sync_mode: str
                         arcname = file_path.relative_to(html_path)
                         zf.write(file_path, arcname)
                         if progress_callback and file_count > 0:
-                            percent = 10 + int((i / file_count) * 30)
+                            percent = 8 + int((i / file_count) * 10)  # 8-18%
                             progress_callback(percent, f"Zipping files... ({i+1}/{file_count})")
 
             if progress_callback:
-                progress_callback(40, "Uploading zip file...")
+                progress_callback(20, "Uploading zip file...")
 
             remote_key = f"{remote_folder}/{source_id}-html.zip"
             success = storage.upload_file(tmp_path, remote_key)
@@ -682,11 +684,11 @@ def _run_publish_to_production(source_id: str, source_info: dict, sync_mode: str
                         arcname = file_path.relative_to(pdf_path)
                         zf.write(file_path, arcname)
                         if progress_callback and file_count > 0:
-                            percent = 10 + int((i / file_count) * 30)
+                            percent = 8 + int((i / file_count) * 10)  # 8-18%
                             progress_callback(percent, f"Zipping files... ({i+1}/{file_count})")
 
             if progress_callback:
-                progress_callback(40, "Uploading zip file...")
+                progress_callback(20, "Uploading zip file...")
 
             remote_key = f"{remote_folder}/{source_id}-pdf.zip"
             success = storage.upload_file(tmp_path, remote_key)
@@ -704,7 +706,7 @@ def _run_publish_to_production(source_id: str, source_info: dict, sync_mode: str
 
     # Upload schema files (manifest, metadata, index, vectors)
     if progress_callback:
-        progress_callback(50, "Uploading metadata files...")
+        progress_callback(25, "Uploading metadata files...")
 
     from .local_config import get_local_config
     config = get_local_config()
@@ -731,19 +733,32 @@ def _run_publish_to_production(source_id: str, source_info: dict, sync_mode: str
 
     # Update _master.json in R2
     if progress_callback:
-        progress_callback(60, "Updating master index in R2...")
+        progress_callback(30, "Updating master index in R2...")
 
     _update_r2_master_json(storage, source_id, source_info, backup_folder)
 
     # Sync to Pinecone
     if progress_callback:
         mode_text = "Replacing" if sync_mode == "replace" else "Syncing"
-        progress_callback(70, f"{mode_text} vectors in Pinecone...")
+        progress_callback(35, f"{mode_text} vectors in Pinecone...")
 
     pinecone_result = _sync_source_to_pinecone(source_id, progress_callback, sync_mode=sync_mode)
 
     if progress_callback:
         progress_callback(100, "Publish complete")
+
+    # Save last_published timestamp to manifest
+    try:
+        from datetime import datetime
+        manifest_path = Path(backup_folder) / source_id / get_manifest_file()
+        if manifest_path.exists():
+            with open(manifest_path, 'r', encoding='utf-8') as f:
+                manifest_data = json.load(f)
+            manifest_data["last_published"] = datetime.now().isoformat()
+            with open(manifest_path, 'w', encoding='utf-8') as f:
+                json.dump(manifest_data, f, indent=2)
+    except Exception as e:
+        print(f"[publish] Warning: could not save last_published timestamp: {e}")
 
     return {
         "status": "success",
@@ -873,7 +888,7 @@ def _sync_source_to_pinecone(source_id: str, progress_callback=None, sync_mode: 
         # If replace mode, delete existing vectors first
         if sync_mode == "replace":
             if progress_callback:
-                progress_callback(75, f"Deleting old vectors for {source_id}...")
+                progress_callback(40, f"Deleting old vectors for {source_id}...")
 
             delete_result = remote.delete_by_source(source_id)
             deleted_count = delete_result.get("deleted_count", 0)
@@ -882,11 +897,21 @@ def _sync_source_to_pinecone(source_id: str, progress_callback=None, sync_mode: 
         sync = SyncManager(local, remote)
         diff = sync.compare(source=source_id)
 
+        total_vectors = len(diff.to_push) + len(diff.to_update)
         if progress_callback:
-            progress_callback(80, f"Pushing {len(diff.to_push)} vectors to Pinecone...")
+            progress_callback(45, f"Pushing {total_vectors} vectors to Pinecone...")
+
+        # Create a wrapper callback to translate batch progress to overall job percent
+        # Pinecone phase is 45-95% of overall job (this is the slow part)
+        def batch_progress(batch_num, total_batches, message):
+            if progress_callback and total_batches > 0:
+                # Map batch progress (0-100%) to job progress (45-95%)
+                batch_percent = (batch_num / total_batches) * 100
+                job_percent = 45 + (batch_percent * 0.50)  # 45% + up to 50% = 95%
+                progress_callback(int(job_percent), f"Uploading batch {batch_num}/{total_batches}")
 
         # Do the push (not dry run)
-        stats = sync.push(diff, dry_run=False, update=True, force=False)
+        stats = sync.push(diff, dry_run=False, update=True, force=False, progress_callback=batch_progress)
 
         return {
             "status": "success",

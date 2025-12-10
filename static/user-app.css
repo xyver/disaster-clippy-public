@@ -1,0 +1,216 @@
+/**
+ * Common CSS - Shared styles for all user-facing pages
+ * This file contains base styles used across the main site.
+ * Edit this file to update the design across all pages.
+ */
+
+/* Google Fonts - Roboto */
+@import url('https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap');
+
+/* CSS Variables for consistent theming */
+:root {
+    --color-bg-dark: #1a1a2e;
+    --color-bg-medium: #16213e;
+    --color-bg-light: #0f3460;
+    --color-text-primary: #eee;
+    --color-text-secondary: #aaa;
+    --color-text-muted: #888;
+    --color-text-faint: #666;
+    --color-accent-red: #e94560;
+    --color-accent-red-hover: #ff6b6b;
+    --color-accent-green: #4ecca3;
+    --color-accent-green-hover: #3db890;
+    --color-border: #0f3460;
+    --font-family: 'Roboto', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+/* Reset and Base */
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    font-family: var(--font-family);
+    background: var(--color-bg-dark);
+    color: var(--color-text-primary);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+}
+
+/* Header */
+header {
+    background: var(--color-bg-medium);
+    padding: 1rem 2rem;
+    border-bottom: 1px solid var(--color-border);
+}
+
+header h1 {
+    font-size: 1.5rem;
+    color: var(--color-accent-red);
+}
+
+header p {
+    font-size: 0.9rem;
+    color: var(--color-text-muted);
+    margin-top: 0.25rem;
+}
+
+header a {
+    color: var(--color-accent-green);
+    text-decoration: none;
+}
+
+header a:hover {
+    text-decoration: underline;
+}
+
+/* Common Links */
+a {
+    color: var(--color-accent-green);
+    text-decoration: none;
+}
+
+a:hover {
+    text-decoration: underline;
+}
+
+/* Common Card Style */
+.card {
+    background: var(--color-bg-medium);
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    padding: 2rem;
+}
+
+.card h2 {
+    color: var(--color-accent-green);
+    margin-bottom: 1rem;
+    font-size: 1.25rem;
+}
+
+.card p {
+    color: var(--color-text-secondary);
+    margin-bottom: 1.5rem;
+    line-height: 1.6;
+}
+
+/* Common Form Elements */
+.form-group {
+    margin-bottom: 1rem;
+}
+
+.form-group label {
+    display: block;
+    color: var(--color-text-muted);
+    font-size: 0.85rem;
+    margin-bottom: 0.5rem;
+}
+
+.form-group input[type="text"],
+.form-group input[type="email"],
+.form-group input[type="url"],
+.form-group textarea {
+    width: 100%;
+    padding: 0.75rem;
+    background: var(--color-bg-dark);
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+    color: var(--color-text-primary);
+    font-size: 1rem;
+    font-family: inherit;
+}
+
+.form-group input:focus,
+.form-group textarea:focus {
+    outline: none;
+    border-color: var(--color-accent-green);
+}
+
+.form-group textarea {
+    min-height: 80px;
+    resize: vertical;
+}
+
+/* Common Buttons */
+.btn {
+    background: var(--color-accent-green);
+    color: var(--color-bg-dark);
+    border: none;
+    padding: 0.75rem 1.5rem;
+    border-radius: 6px;
+    font-size: 1rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.2s;
+    font-family: inherit;
+}
+
+.btn:hover {
+    background: var(--color-accent-green-hover);
+}
+
+.btn:disabled {
+    background: #555;
+    cursor: not-allowed;
+}
+
+.btn-primary {
+    background: var(--color-accent-red);
+    color: white;
+}
+
+.btn-primary:hover {
+    background: var(--color-accent-red-hover);
+}
+
+.btn-secondary {
+    background: transparent;
+    border: 1px solid var(--color-accent-green);
+    color: var(--color-accent-green);
+}
+
+.btn-secondary:hover {
+    background: var(--color-accent-green);
+    color: var(--color-bg-dark);
+}
+
+/* Common Message/Alert Styles */
+.message {
+    padding: 1rem;
+    border-radius: 6px;
+    margin-top: 1rem;
+}
+
+.message.success {
+    background: #1a2e1a;
+    border: 1px solid var(--color-accent-green);
+    color: var(--color-accent-green);
+}
+
+.message.error {
+    background: #2e1a1a;
+    border: 1px solid var(--color-accent-red);
+    color: var(--color-accent-red);
+}
+
+/* Empty/Loading States */
+.empty-state {
+    text-align: center;
+    color: var(--color-text-faint);
+    padding: 2rem;
+}
+
+.loading {
+    text-align: center;
+    padding: 1rem;
+    color: var(--color-text-muted);
+}
+
+/* Utility Classes */
+.text-muted { color: var(--color-text-muted); }
+.text-secondary { color: var(--color-text-secondary); }
+.text-accent { color: var(--color-accent-green); }
+.text-danger { color: var(--color-accent-red); }

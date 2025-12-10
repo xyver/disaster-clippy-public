@@ -110,6 +110,7 @@ from .cloud_upload import router as cloud_upload_router
 from .routes.source_tools import router as source_tools_router
 from .routes.packs import router as packs_router
 from .routes.jobs import router as jobs_router
+from .routes.visualise import router as visualise_router
 
 # Create router with public mode check - blocks all routes when VECTOR_DB_MODE=pinecone
 router = APIRouter(
@@ -121,6 +122,7 @@ router.include_router(cloud_upload_router)
 router.include_router(source_tools_router)
 router.include_router(packs_router)
 router.include_router(jobs_router)
+router.include_router(visualise_router)
 
 
 # =============================================================================
@@ -313,6 +315,27 @@ templates_path = Path(__file__).parent / "templates"
 templates = Jinja2Templates(directory=str(templates_path))
 
 
+def get_template_context(request, config=None):
+    """
+    Build common template context including admin_mode for CSS selection.
+
+    Returns dict with:
+        - request: FastAPI request object
+        - config: local config dict (optional)
+        - admin_mode: "local" or "global" based on VECTOR_DB_MODE env var
+        - admin_css: CSS filename to load based on mode
+    """
+    mode = get_admin_mode()
+    ctx = {
+        "request": request,
+        "admin_mode": mode,
+        "admin_css": f"{mode}-admin.css"
+    }
+    if config is not None:
+        ctx["config"] = config
+    return ctx
+
+
 # Pydantic models for requests
 class BackupPathUpdate(BaseModel):
     path_type: str  # zim_folder, html_folder, pdf_folder
@@ -344,12 +367,9 @@ async def admin_home(request: Request):
     """Main admin panel page"""
     config = get_local_config()
     internet_available = check_internet_available()
-
-    return templates.TemplateResponse("settings.html", {
-        "request": request,
-        "config": config.config,
-        "internet_available": internet_available
-    })
+    ctx = get_template_context(request, config.config)
+    ctx["internet_available"] = internet_available
+    return templates.TemplateResponse("settings.html", ctx)
 
 
 @router.get("/api/settings")
@@ -725,12 +745,9 @@ async def source_packs_page(request: Request):
     """Source packs browser page"""
     config = get_local_config()
     internet_available = check_internet_available()
-
-    return templates.TemplateResponse("packs.html", {
-        "request": request,
-        "config": config.config,
-        "internet_available": internet_available
-    })
+    ctx = get_template_context(request, config.config)
+    ctx["internet_available"] = internet_available
+    return templates.TemplateResponse("packs.html", ctx)
 
 
 # =============================================================================
@@ -789,30 +806,21 @@ async def source_tools_page(request: Request):
 async def dashboard_page(request: Request):
     """Dashboard - overview of system status"""
     config = get_local_config()
-    return templates.TemplateResponse("dashboard.html", {
-        "request": request,
-        "config": config.config
-    })
+    return templates.TemplateResponse("dashboard.html", get_template_context(request, config.config))
 
 
 @router.get("/sources", response_class=HTMLResponse)
 async def sources_page(request: Request):
     """Sources - manage content sources"""
     config = get_local_config()
-    return templates.TemplateResponse("sources.html", {
-        "request": request,
-        "config": config.config
-    })
+    return templates.TemplateResponse("sources.html", get_template_context(request, config.config))
 
 
 @router.get("/sources/tools", response_class=HTMLResponse)
 async def sources_tools_page(request: Request):
     """Source Tools - indexing, packaging, validation"""
     config = get_local_config()
-    return templates.TemplateResponse("source_tools.html", {
-        "request": request,
-        "config": config.config
-    })
+    return templates.TemplateResponse("source_tools.html", get_template_context(request, config.config))
 
 
 @router.get("/sources/create")
@@ -826,20 +834,14 @@ async def sources_create_page():
 async def jobs_page(request: Request):
     """Jobs - background job manager"""
     config = get_local_config()
-    return templates.TemplateResponse("jobs.html", {
-        "request": request,
-        "config": config.config
-    })
+    return templates.TemplateResponse("jobs.html", get_template_context(request, config.config))
 
 
 @router.get("/cloud", response_class=HTMLResponse)
 async def cloud_page(request: Request):
     """Cloud - R2 and cloud storage management"""
     config = get_local_config()
-    return templates.TemplateResponse("cloud_upload.html", {
-        "request": request,
-        "config": config.config
-    })
+    return templates.TemplateResponse("cloud_upload.html", get_template_context(request, config.config))
 
 
 @router.get("/settings", response_class=HTMLResponse)
@@ -847,28 +849,27 @@ async def settings_page(request: Request):
     """Settings - app configuration"""
     config = get_local_config()
     internet_available = check_internet_available()
-    return templates.TemplateResponse("settings.html", {
-        "request": request,
-        "config": config.config,
-        "internet_available": internet_available
-    })
+    ctx = get_template_context(request, config.config)
+    ctx["internet_available"] = internet_available
+    return templates.TemplateResponse("settings.html", ctx)
 
 
 @router.get("/submissions", response_class=HTMLResponse)
 async def submissions_page(request: Request):
     """Submissions - review incoming source submissions"""
     config = get_local_config()
-    return templates.TemplateResponse("submissions.html", {
-        "request": request,
-        "config": config.config
-    })
+    return templates.TemplateResponse("submissions.html", get_template_context(request, config.config))
 
 
 @router.get("/pinecone", response_class=HTMLResponse)
 async def pinecone_page(request: Request):
     """Pinecone - vector database settings and sync"""
     config = get_local_config()
-    return templates.TemplateResponse("pinecone.html", {
-        "request": request,
-        "config": config.config
-    })
+    return templates.TemplateResponse("pinecone.html", get_template_context(request, config.config))
+
+
+@router.get("/visualise", response_class=HTMLResponse)
+async def visualise_page(request: Request):
+    """Knowledge Map - 3D visualization of document embeddings"""
+    config = get_local_config()
+    return templates.TemplateResponse("visualise.html", get_template_context(request, config.config))

@@ -146,14 +146,30 @@ class PDFCollectionManager:
         """
         Args:
             inbox_path: Directory for incoming unsorted PDFs
-                        Defaults to BACKUP_PATH/pdf_inbox or D:/disaster-backups/pdf_inbox
+                        Defaults to BACKUP_PATH/pdf_inbox
             collections_path: Directory for organized collections
-                              Defaults to BACKUP_PATH/pdf_collections or D:/disaster-backups/pdf_collections
+                              Defaults to BACKUP_PATH/pdf_collections
+
+        Raises:
+            ValueError: If backup path is not configured in Settings or .env
         """
-        # Determine base backup path
-        backup_path = os.getenv("BACKUP_PATH", "")
+        # Determine base backup path - try local_config first, then env
+        backup_path = ""
+        try:
+            from admin.local_config import get_local_config
+            config = get_local_config()
+            backup_path = config.get_backup_folder() or ""
+        except ImportError:
+            pass
+
         if not backup_path:
-            backup_path = "D:/disaster-backups"
+            backup_path = os.getenv("BACKUP_PATH", "")
+
+        if not backup_path:
+            raise ValueError(
+                "Backup path not configured. "
+                "Please set it in Settings page or BACKUP_PATH in .env"
+            )
 
         backup_base = Path(backup_path)
 

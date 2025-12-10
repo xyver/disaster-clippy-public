@@ -190,7 +190,8 @@ class SyncManager:
         print("\n" + "=" * 60)
 
     def push(self, diff: SyncDiff, dry_run: bool = True,
-             update: bool = True, force: bool = False) -> Dict[str, int]:
+             update: bool = True, force: bool = False,
+             progress_callback=None) -> Dict[str, int]:
         """
         Push local changes to remote.
 
@@ -199,6 +200,7 @@ class SyncManager:
             dry_run: If True, only show what would be done
             update: If True, also push updates (not just new docs)
             force: If True, push even if there are conflicts
+            progress_callback: Optional callback(current, total, message) for progress
 
         Returns:
             Stats dict with counts of pushed/updated documents
@@ -238,7 +240,7 @@ class SyncManager:
 
             if not dry_run and docs_to_push:
                 try:
-                    count = self.remote_store.add_documents(docs_to_push)
+                    count = self.remote_store.add_documents(docs_to_push, progress_callback=progress_callback)
                     stats["pushed"] = count
                     print(f"  [OK] Pushed {count} documents")
                 except Exception as e:
@@ -267,7 +269,7 @@ class SyncManager:
                         # Will need to implement for each store type
 
                     # Add new versions (Pinecone upsert handles updates)
-                    count = self.remote_store.add_documents(docs_to_update)
+                    count = self.remote_store.add_documents(docs_to_update, progress_callback=progress_callback)
                     stats["updated"] = count
                     print(f"  [OK] Updated {count} documents")
                 except Exception as e:

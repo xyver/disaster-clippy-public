@@ -448,6 +448,7 @@ def generate_metadata_from_html(
         Metadata dict with document info
     """
     from bs4 import BeautifulSoup
+    from .indexer import extract_internal_links_from_html
 
     html_path = Path(backup_path)
     if not html_path.exists() or not html_path.is_dir():
@@ -514,9 +515,12 @@ def generate_metadata_from_html(
             # Build local_url for offline serving
             local_url = f"/backup/{source_id}/{filename}"
 
+            # Extract internal links from HTML content
+            internal_links = extract_internal_links_from_html(content)
+
             # Use same ID format as indexer: MD5 hash of source_id:url
             doc_id = hashlib.md5(f"{source_id}:{url}".encode()).hexdigest()
-            documents[doc_id] = {
+            doc_entry = {
                 "title": title,
                 "url": url,
                 "local_url": local_url,
@@ -526,6 +530,12 @@ def generate_metadata_from_html(
                 "categories": [],
                 "doc_type": "article"
             }
+
+            # Only add internal_links if there are any (to save space)
+            if internal_links:
+                doc_entry["internal_links"] = internal_links
+
+            documents[doc_id] = doc_entry
 
         except Exception as e:
             print(f"Warning: Failed to process {html_file}: {e}")

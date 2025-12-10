@@ -1310,7 +1310,7 @@ class SourceManager:
         import re
         from collections import Counter
         from .schemas import get_metadata_file
-        from .indexer import should_include_article, extract_text_lenient
+        from .indexer import should_include_article, extract_text_lenient, extract_internal_links_from_html
 
         # Import checkpoint functions
         try:
@@ -1434,9 +1434,12 @@ class SourceManager:
                 if len(text) < 100:  # Skip very short articles
                     continue
 
+                # Extract internal links from HTML content
+                internal_links = extract_internal_links_from_html(content)
+
                 # Use same ID format as indexer: MD5 hash of source_id:url
                 doc_id = hashlib.md5(f"{source_id}:{url}".encode()).hexdigest()
-                documents[doc_id] = {
+                doc_entry = {
                     "title": title[:200] if title else url[:200],
                     "url": f"/zim/{source_id}/{url}",
                     "snippet": text[:500],
@@ -1445,6 +1448,12 @@ class SourceManager:
                     "zim_index": i,
                     "zim_url": url
                 }
+
+                # Only add internal_links if there are any (to save space)
+                if internal_links:
+                    doc_entry["internal_links"] = internal_links
+
+                documents[doc_id] = doc_entry
                 processed += 1
                 articles_since_checkpoint += 1
 
@@ -2300,15 +2309,19 @@ class SourceManager:
 
         return None
 
-    def suggest_tags(self, source_id: str) -> List[str]:
+    def suggest_tags(self, source_id: str, return_scores: bool = False) -> List[str]:
         """
         Suggest tags based on source content.
 
         Scans titles and content for topic keywords.
         For PDF sources, also checks _collection.json topics.
 
+        Args:
+            source_id: Source identifier
+            return_scores: If True, returns dict of {tag: score} instead of list
+
         Returns:
-            List of suggested tag strings
+            List of suggested tag strings, or dict of {tag: score} if return_scores=True
         """
         from .schemas import get_metadata_file
 
@@ -2389,14 +2402,21 @@ class SourceManager:
                 files = [f.name for f in source_path.iterdir() if f.is_file()]
                 print(f"[suggest_tags] Files in {source_path}: {files[:10]}")
 
-        # Check source_id for priority tags (these should always be included)
-        source_lower = source_id.lower()
+        # Check source_id for priority tags (only complete word matches, not substrings)
+        # Split source_id into words by common delimiters (e.g., "build-it-solar" -> ["build", "it", "solar"])
+        source_words = set(re.split(r'[-_\s]+', source_id.lower()))
         priority_tags = set()
+        priority_matches = {}  # Debug: track which keyword matched
         for tag, keywords in self.TOPIC_KEYWORDS.items():
             for keyword in keywords:
-                if keyword in source_lower:
+                # Only match if keyword is a complete word in the source_id
+                if keyword.lower() in source_words:
                     priority_tags.add(tag)
+                    priority_matches[tag] = keyword  # Debug: log the match
                     break
+
+        if priority_matches:
+            print(f"[suggest_tags] Priority matches found (word boundary): {priority_matches}")
 
         # Combine: priority tags first, then highest-scoring content tags
         # Priority tags from source_id always included at the front
@@ -2415,9 +2435,21 @@ class SourceManager:
         all_tags = list(priority_tags) + content_tags
 
         print(f"[suggest_tags] Priority tags from source_id: {priority_tags}")
-        print(f"[suggest_tags] Total tags: {len(all_tags)}, returning top 10")
+        print(f"[suggest_tags] Total tags: {len(all_tags)}, returning top 100")
 
-        return all_tags[:10]  # Return top 10 (priority + highest-scoring content)
+        # Return scores dict if requested
+        if return_scores:
+            # Build scores dict for all tags (priority tags get a boost)
+            result_scores = {}
+            priority_boost = max(tag_scores.values()) + 1 if tag_scores else 10000
+            for tag in all_tags[:100]:
+                if tag in priority_tags:
+                    result_scores[tag] = tag_scores.get(tag, 0) + priority_boost
+                else:
+                    result_scores[tag] = tag_scores.get(tag, 0)
+            return result_scores
+
+        return all_tags[:100]  # Return top 100 (priority + highest-scoring content)
 
     def analyze_metadata_for_tags(self, source_id: str, update_metadata: bool = False) -> Dict[str, Any]:
         """

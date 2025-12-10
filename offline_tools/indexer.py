@@ -178,7 +178,7 @@ def save_metadata(output_folder: Path, source_id: str,
             char_count = doc.get("char_count", len(doc.get("content", "")))
             total_chars += char_count
 
-            doc_metadata[doc_id] = {
+            doc_entry = {
                 "title": doc.get("title", "Unknown"),
                 "url": doc.get("url", ""),
                 "local_url": doc.get("local_url", ""),  # Local URL for offline use
@@ -188,6 +188,10 @@ def save_metadata(output_folder: Path, source_id: str,
                 "doc_type": doc.get("doc_type", "article"),
                 "scraped_at": doc.get("scraped_at", datetime.now().isoformat()),
             }
+            # Include internal links if present
+            if doc.get("internal_links"):
+                doc_entry["internal_links"] = doc["internal_links"]
+            doc_metadata[doc_id] = doc_entry
 
         metadata = {
             "schema_version": CURRENT_SCHEMA_VERSION,
@@ -226,7 +230,7 @@ def save_index(output_folder: Path, source_id: str,
 
         for doc in documents:
             doc_id = doc.get("id", doc.get("content_hash", ""))
-            doc_content[doc_id] = {
+            doc_entry = {
                 "title": doc.get("title", "Unknown"),
                 "url": doc.get("url", ""),
                 "local_url": doc.get("local_url", ""),  # Local URL for offline use
@@ -234,6 +238,10 @@ def save_index(output_folder: Path, source_id: str,
                 "categories": doc.get("categories", []),
                 "doc_type": doc.get("doc_type", "article"),
             }
+            # Include internal links if present
+            if doc.get("internal_links"):
+                doc_entry["internal_links"] = doc["internal_links"]
+            doc_content[doc_id] = doc_entry
 
         index_data = {
             "schema_version": CURRENT_SCHEMA_VERSION,
@@ -609,6 +617,78 @@ def should_include_article(url: str, title: str, language_filter: Optional[str],
 
 
 # =============================================================================
+# LINK EXTRACTION
+# =============================================================================
+
+def extract_internal_links_from_html(html_content: str, base_path: str = "") -> List[str]:
+    """
+    Extract internal links from HTML content.
+
+    Args:
+        html_content: Raw HTML string
+        base_path: Base path for resolving relative URLs
+
+    Returns:
+        List of internal link paths (e.g., ["/wiki/Solar_panel", "/wiki/Energy"])
+    """
+    try:
+        soup = BeautifulSoup(html_content, 'html.parser')
+
+        # Find main content area if possible
+        content = (
+            soup.find("div", class_="mw-parser-output") or
+            soup.find("div", id="mw-content-text") or
+            soup.find("div", id="content") or
+            soup.find("article") or
+            soup.body or
+            soup
+        )
+
+        internal_links = []
+        seen = set()
+
+        for link in content.find_all("a", href=True):
+            href = link["href"]
+
+            # Skip empty, anchor-only, external, or special links
+            if not href or href.startswith("#"):
+                continue
+            if href.startswith("http://") or href.startswith("https://"):
+                continue
+            if href.startswith("javascript:") or href.startswith("mailto:") or href.startswith("tel:"):
+                continue
+
+            # Skip special wiki pages
+            if any(x in href for x in ["/Special:", "/File:", "/Category:",
+                                        "/Template:", "/Help:", "/Talk:",
+                                        "/User:", "/Wikipedia:", "/Portal:"]):
+                continue
+
+            # Clean the path
+            path = href.split("#")[0]  # Remove anchor
+            path = path.split("?")[0]  # Remove query string
+
+            if not path:
+                continue
+
+            # Normalize path
+            if not path.startswith("/"):
+                # Relative path - could resolve with base_path but keep simple for now
+                path = "/" + path
+
+            # Deduplicate
+            if path not in seen:
+                seen.add(path)
+                internal_links.append(path)
+
+        return internal_links
+
+    except Exception as e:
+        print(f"Error extracting links: {e}")
+        return []
+
+
+# =============================================================================
 # ZIM INDEXER
 # =============================================================================
 
@@ -941,7 +1021,10 @@ class ZIMIndexer:
                         seen_ids.add(final_doc_id)
                         indexed_doc_ids.add(final_doc_id)  # Track for checkpoint
 
-                        documents.append({
+                        # Extract internal links from HTML content
+                        internal_links = extract_internal_links_from_html(content)
+
+                        doc_entry = {
                             "id": final_doc_id,
                             "content": text[:50000],
                             "title": title,
@@ -953,7 +1036,11 @@ class ZIMIndexer:
                             "scraped_at": datetime.now().isoformat(),
                             "char_count": len(text),
                             "doc_type": "article",
-                        })
+                        }
+                        if internal_links:
+                            doc_entry["internal_links"] = internal_links
+
+                        documents.append(doc_entry)
 
                         indexed += 1
                         docs_since_checkpoint += 1
@@ -1086,7 +1173,10 @@ class ZIMIndexer:
                         seen_ids.add(doc_id)
                         indexed_doc_ids.add(doc_id)  # Track for checkpoint
 
-                        documents.append({
+                        # Extract internal links from HTML content
+                        internal_links = extract_internal_links_from_html(content)
+
+                        doc_entry = {
                             "id": doc_id,
                             "content": text[:50000],
                             "title": title,
@@ -1098,7 +1188,11 @@ class ZIMIndexer:
                             "scraped_at": datetime.now().isoformat(),
                             "char_count": len(text),
                             "doc_type": "article",
-                        })
+                        }
+                        if internal_links:
+                            doc_entry["internal_links"] = internal_links
+
+                        documents.append(doc_entry)
 
                         indexed += 1
                         docs_since_checkpoint += 1
