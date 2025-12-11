@@ -39,34 +39,6 @@
 
 ---
 
-## Architecture Overview
-
-| Layer | Purpose |
-|-------|---------|
-| Frontend | Web chat interface (FastAPI + Jinja2) |
-| Optional Local Admin | Source management panel at /useradmin/ |
-| Search | Vector similarity search (ChromaDB local / Pinecone cloud) |
-| AI | Language model for answers (Claude or GPT) |
-| Storage | Source backups and metadata (Cloudflare R2) |
-| CLI | Command-line tools for indexing, scraping, sync |
-
-### Folder Structure
-
-```
-disaster-clippy/
-|-- app.py                    # Main chat app
-|-- cli/                      # Command-line tools
-|-- admin/                    # Admin panel (/useradmin/)
-|-- offline_tools/            # Core business logic
-|   |-- indexer.py            # HTML/ZIM/PDF indexing
-|   |-- source_manager.py     # Source CRUD
-|   |-- scraper/              # Web scrapers
-|   |-- vectordb/             # ChromaDB/Pinecone
-|   |-- cloud/                # R2 storage
-```
-
----
-
 ## User Types
 
 | User | What They Do |
@@ -79,43 +51,38 @@ disaster-clippy/
 
 ## Current State (v0.9 Pre-release)
 
-**Completed:**
-- Chat with source citations
-- 10+ indexed sources (wikis, guides, newsletters)
-- FastAPI admin panel with Source Tools wizard
-- Cloud deployment on Railway
-- Offline ZIM/HTML/PDF backup support
-- Web scrapers (MediaWiki, Fandom, static sites, PDF)
-- CLI tools for local admin, scraping, sync
-- Cloudflare R2 cloud storage
-- Unified codebase (merged private/public repos)
-- Source validation with status boxes
-- Install/download cloud source packs
-- Pinecone sync functionality
+**What Works Now:**
+- Chat interface with source citations and filtering
+- 10+ curated sources (Appropedia, Wikipedia, medical guides, disaster prep)
+- Admin panel with 5-step Source Tools wizard
+- Three connection modes: Online Only, Hybrid (recommended), Offline Only
+- Knowledge Map 3D visualization showing document relationships
+- ZIM/HTML/PDF file support with metadata extraction
+- Web scrapers for adding new sources (MediaWiki, static sites, PDF)
+- Personal cloud backup (connect your own S3/R2/Backblaze storage)
+- Job management with checkpoint/resume for interrupted tasks
+- Source validation with status indicators
+- Download pre-packaged source packs
+- Public cloud deployment (Railway) + local self-hosting options
 
-**In Progress:**
-- Final testing and validation
-- Documentation cleanup
+**Currently:**
+- Final testing and polish for v1.0 release
 
 ---
 
 ## Roadmap Highlights
 
-### Current (v0.9)
-- Final testing and documentation cleanup
-- Pipeline validation with real data sources
-
 ### Next (v1.0 Official Release)
-- Stable public API
-- ZIM as primary distribution format
-- PDF collection system
-- Offline AI assistant (local LLMs)
+- Stable release with comprehensive testing
+- Expanded source library (more medical, survival, DIY guides)
+- Performance optimizations for large ZIM files
+- Improved mobile experience
 
 ### Future (v2.0+)
-- Community contributions and source voting
-- Mobile app with offline-first design
-- Source pack marketplace
-- Multi-user platform with accounts
+- Community contributions and source submissions
+- Mobile app with offline-first capability
+- Enhanced visualizations and analytics
+- Multi-language interface support
 
 ---
 
@@ -137,4 +104,4 @@ disaster-clippy/
 
 ---
 
-*Last Updated: December 2025*
+*Last Updated: December 10, 2025*

@@ -238,8 +238,8 @@ File naming is centralized in `offline_tools/schemas.py` via getter functions.
 | `OPENAI_API_KEY` | Embeddings and chat | Yes (unless EMBEDDING_MODE=local) |
 | `ANTHROPIC_API_KEY` | Claude chat (optional) | No |
 | `PINECONE_API_KEY` | Cloud vector DB | If VECTOR_DB_MODE=pinecone or global |
-| `R2_ACCESS_KEY_ID` | Cloud storage | For R2 upload/download |
-| `R2_SECRET_ACCESS_KEY` | Cloud storage | For R2 upload/download |
+| `R2_ACCESS_KEY_ID` | Cloud storage (official) | For official R2 bucket (global admin) |
+| `R2_SECRET_ACCESS_KEY` | Cloud storage (official) | For official R2 bucket (global admin) |
 | `EMBEDDING_MODE` | "openai" or "local" | No (defaults to openai) |
 | `VECTOR_DB_MODE` | "local", "pinecone", or "global" | No (defaults to local) |
 
@@ -247,6 +247,13 @@ File naming is centralized in `offline_tools/schemas.py` via getter functions.
 - `local` - Admin UI visible, local ChromaDB, R2 read backups + R/W submissions
 - `pinecone` - Admin UI blocked (public mode), Pinecone cloud search only
 - `global` - Admin UI visible, Pinecone R/W, R2 full access
+
+**Personal Cloud Backup (Optional):**
+Users can configure their own S3-compatible cloud storage via Settings UI (`/useradmin/settings`). This overrides R2 environment variables when enabled. Supports:
+- Cloudflare R2, AWS S3, Backblaze B2, DigitalOcean Spaces
+- Custom S3-compatible endpoints (MinIO, self-hosted)
+- Credentials stored in `local_settings.json` (gitignored)
+- See [DEVELOPER.md](DEVELOPER.md#deployment-scenarios) for deployment scenarios
 
 ---
 
@@ -278,6 +285,7 @@ The codebase was recently consolidated from two repos (private + public):
 - Job checkpoint/resume system (metadata + ZIM indexing)
 - Dashboard mode toggle (watches VECTOR_DB_MODE env var)
 - Jobs page with interrupted job resume functionality
+- Personal Cloud Backup (configure any S3-compatible storage via Settings UI)
 
 ### Security (Complete)
 

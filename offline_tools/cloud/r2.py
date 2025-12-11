@@ -39,13 +39,53 @@ class R2Config:
                  default_bucket: str = "disaster-clippy-backups",
                  key_prefix: str = "") -> Optional['R2Config']:
         """
-        Load config from environment variables.
+        Load config from local_settings.json personal_cloud OR environment variables.
+
+        Priority:
+        1. Check local_settings.json personal_cloud (if enabled)
+        2. Fall back to .env environment variables
+        3. Return None (not configured)
 
         Args:
             bucket_env_var: Environment variable name for bucket
             default_bucket: Default bucket name if env var not set
             key_prefix: Prefix for credential env vars (e.g., "SUBMISSIONS_" for R2_SUBMISSIONS_ACCESS_KEY_ID)
         """
+        # First check local_settings.json personal_cloud
+        try:
+            # Avoid circular import by importing inside function
+            import sys
+            from pathlib import Path
+
+            # Add admin directory to path if not already there
+            admin_dir = Path(__file__).parent.parent.parent / "admin"
+            if str(admin_dir) not in sys.path:
+                sys.path.insert(0, str(admin_dir))
+
+            from local_config import get_local_config
+
+            config = get_local_config()
+            cloud = config.get_personal_cloud_config()
+
+            if cloud.get("enabled") and all([
+                cloud.get("access_key_id"),
+                cloud.get("secret_access_key"),
+                cloud.get("endpoint_url"),
+                cloud.get("bucket_name")
+            ]):
+                logger.info("Using personal cloud storage from local_settings.json")
+                return cls(
+                    access_key_id=cloud["access_key_id"],
+                    secret_access_key=cloud["secret_access_key"],
+                    endpoint_url=cloud["endpoint_url"],
+                    bucket_name=cloud["bucket_name"],
+                    token_expires=None
+                )
+        except (ImportError, Exception) as e:
+            # local_config not available or error reading it, fall back to env vars
+            logger.debug(f"Personal cloud config not available, using env vars: {e}")
+
+        # Fall back to environment variables (existing code)
         # Build credential env var names with optional prefix
         if key_prefix:
             access_key_var = f"R2_{key_prefix}ACCESS_KEY_ID"

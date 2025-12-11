@@ -8,8 +8,6 @@
     <link rel="stylesheet" href="/admin/static/{{ admin_css }}">
     <style>
         /* Page-specific styles for settings.html */
-        .container { max-width: 900px; }
-
         .status-bar {
             background: #0f3460;
             border-radius: 8px;
@@ -457,17 +455,83 @@
             </div>
         </div>
 
-        <!-- Personal Cloud Backup (Placeholder) -->
+        <!-- Personal Cloud Backup -->
         <div class="section">
             <h2>Personal Cloud Backup</h2>
             <p class="description">
-                Configure your own cloud storage for personal backups.
-                This is separate from the Global Cloud Backup used for sharing with others.
+                Connect your own S3-compatible cloud storage for personal backups and sync.
+                Supports Cloudflare R2, AWS S3, Backblaze B2, and other S3-compatible services.
             </p>
 
-            <div style="background: #1a1a2e; border: 1px dashed #0f3460; border-radius: 6px; padding: 1.5rem; text-align: center; color: #666;">
-                <p style="margin-bottom: 0.5rem;">Personal cloud backup coming soon</p>
-                <p style="font-size: 0.8rem;">You'll be able to configure your own R2/S3 bucket for private backups</p>
+            <div class="form-group">
+                <label class="checkbox-option">
+                    <input type="checkbox" id="cloudEnabled">
+                    <span>Enable Personal Cloud Backup</span>
+                </label>
+            </div>
+
+            <div id="cloudSettings" style="display: none;">
+                <div class="form-group">
+                    <label>Cloud Storage Provider</label>
+                    <select id="cloudProvider">
+                        <option value="r2">Cloudflare R2</option>
+                        <option value="s3">Amazon S3</option>
+                        <option value="backblaze">Backblaze B2</option>
+                        <option value="digitalocean">DigitalOcean Spaces</option>
+                        <option value="custom">Custom S3-Compatible</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label>Endpoint URL</label>
+                    <input type="text" id="cloudEndpoint" placeholder="https://...">
+                    <p class="description">Auto-filled based on provider. For R2, use: https://YOUR-ACCOUNT-ID.r2.cloudflarestorage.com</p>
+                </div>
+
+                <p style="font-size: 0.85rem; color: #888; margin-top: 1rem; font-style: italic;">
+                    Prefer manual configuration? See <code>DEVELOPER.md - Personal Cloud Backup</code> for JSON-based setup and CLI integration.
+                </p>
+
+                <div class="form-group">
+                    <label>Access Key ID</label>
+                    <input type="password" id="cloudAccessKey" placeholder="Enter access key">
+                </div>
+
+                <div class="form-group">
+                    <label>Secret Access Key</label>
+                    <input type="password" id="cloudSecretKey" placeholder="Enter secret key">
+                </div>
+
+                <div class="form-group">
+                    <label>Bucket Name</label>
+                    <input type="text" id="cloudBucket" placeholder="my-backup-bucket">
+                </div>
+
+                <div class="form-group">
+                    <label>Region (Optional)</label>
+                    <input type="text" id="cloudRegion" value="auto" placeholder="auto">
+                    <p class="description">Use "auto" for R2, or specify region like "us-east-1" for S3</p>
+                </div>
+
+                <div class="prompt-actions">
+                    <button class="btn btn-secondary btn-small" onclick="testCloudConnection()">Test Connection</button>
+                    <button class="btn btn-primary btn-small" onclick="saveCloudSettings()">Save Cloud Settings</button>
+                </div>
+
+                <div id="cloudTestResult" style="display: none; margin-top: 1rem; padding: 1rem; border-radius: 6px;">
+                </div>
+
+                <div style="background: #1a1a2e; border: 1px solid #0f3460; border-radius: 6px; padding: 1rem; margin-top: 1rem;">
+                    <strong style="color: #e94560;">Security Note:</strong>
+                    <p style="color: #888; font-size: 0.85rem; margin-top: 0.5rem;">
+                        Your cloud credentials are stored in <code>local_settings.json</code>. Keep this file secure:
+                    </p>
+                    <ul style="color: #888; font-size: 0.85rem; margin-top: 0.5rem; margin-left: 1.5rem;">
+                        <li>Never commit it to git (already protected by .gitignore)</li>
+                        <li>Never share it publicly</li>
+                        <li>On Linux/Mac: Run <code>chmod 600 local_settings.json</code></li>
+                    </ul>
+                </div>
             </div>
         </div>
 
@@ -534,6 +598,11 @@
                 // Load prompts from settings
                 if (currentSettings.prompts) {
                     currentPrompts = { ...currentSettings.prompts };
+                }
+
+                // Load cloud settings
+                if (currentSettings.personal_cloud) {
+                    loadCloudSettings(currentSettings.personal_cloud);
                 }
 
                 // Also fetch default prompts
@@ -885,6 +954,121 @@
             const div = document.createElement('div');
             div.textContent = text;
             return div.innerHTML;
+        }
+
+        // Personal Cloud Backup functions
+        const providerEndpoints = {
+            'r2': 'https://YOUR-ACCOUNT-ID.r2.cloudflarestorage.com',
+            's3': 'https://s3.amazonaws.com',
+            'backblaze': 'https://s3.us-west-002.backblazeb2.com',
+            'digitalocean': 'https://nyc3.digitaloceanspaces.com'
+        };
+
+        document.getElementById('cloudEnabled').addEventListener('change', function(e) {
+            const settings = document.getElementById('cloudSettings');
+            settings.style.display = e.target.checked ? 'block' : 'none';
+        });
+
+        document.getElementById('cloudProvider').addEventListener('change', function(e) {
+            const endpoint = providerEndpoints[e.target.value];
+            if (endpoint) {
+                document.getElementById('cloudEndpoint').value = endpoint;
+            }
+        });
+
+        async function testCloudConnection() {
+            const resultDiv = document.getElementById('cloudTestResult');
+            resultDiv.style.display = 'block';
+            resultDiv.innerHTML = '<p>Testing connection...</p>';
+            resultDiv.style.background = '#1a1a2e';
+            resultDiv.style.border = '1px solid #0f3460';
+
+            const config = {
+                provider: document.getElementById('cloudProvider').value,
+                endpoint_url: document.getElementById('cloudEndpoint').value,
+                access_key_id: document.getElementById('cloudAccessKey').value,
+                secret_access_key: document.getElementById('cloudSecretKey').value,
+                bucket_name: document.getElementById('cloudBucket').value,
+                region: document.getElementById('cloudRegion').value
+            };
+
+            try {
+                const response = await fetch('/useradmin/api/test-cloud-connection', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(config)
+                });
+
+                const data = await response.json();
+
+                if (data.connected && data.bucket_exists) {
+                    resultDiv.innerHTML = '<p style="color: #4ecca3;">Connection successful! Bucket found.</p>';
+                    resultDiv.style.background = '#0f3460';
+                    resultDiv.style.border = '1px solid #4ecca3';
+                } else if (data.connected) {
+                    resultDiv.innerHTML = '<p style="color: #f9a825;">Connected, but bucket not found. Check bucket name.</p>';
+                    resultDiv.style.background = '#1a1a2e';
+                    resultDiv.style.border = '1px solid #f9a825';
+                } else {
+                    resultDiv.innerHTML = `<p style="color: #e94560;">Connection failed: ${data.error || 'Unknown error'}</p>`;
+                    resultDiv.style.background = '#1a1a2e';
+                    resultDiv.style.border = '1px solid #e94560';
+                }
+            } catch (e) {
+                resultDiv.innerHTML = `<p style="color: #e94560;">Test failed: ${e.message}</p>`;
+                resultDiv.style.background = '#1a1a2e';
+                resultDiv.style.border = '1px solid #e94560';
+            }
+        }
+
+        async function saveCloudSettings() {
+            const config = {
+                enabled: document.getElementById('cloudEnabled').checked,
+                provider: document.getElementById('cloudProvider').value,
+                endpoint_url: document.getElementById('cloudEndpoint').value,
+                access_key_id: document.getElementById('cloudAccessKey').value,
+                secret_access_key: document.getElementById('cloudSecretKey').value,
+                bucket_name: document.getElementById('cloudBucket').value,
+                region: document.getElementById('cloudRegion').value
+            };
+
+            try {
+                const response = await fetch('/useradmin/api/settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ personal_cloud: config })
+                });
+
+                const data = await response.json();
+                if (data.status === 'success') {
+                    showToast('Cloud settings saved successfully');
+                } else {
+                    showToast('Failed to save cloud settings', true);
+                }
+            } catch (e) {
+                showToast('Error saving cloud settings', true);
+            }
+        }
+
+        function loadCloudSettings(cloud) {
+            if (!cloud) return;
+
+            document.getElementById('cloudEnabled').checked = cloud.enabled || false;
+            document.getElementById('cloudSettings').style.display = cloud.enabled ? 'block' : 'none';
+            document.getElementById('cloudProvider').value = cloud.provider || 'r2';
+            document.getElementById('cloudEndpoint').value = cloud.endpoint_url || '';
+            document.getElementById('cloudBucket').value = cloud.bucket_name || '';
+            document.getElementById('cloudRegion').value = cloud.region || 'auto';
+
+            // Access keys are masked - only show if they exist
+            if (cloud.access_key_id) {
+                document.getElementById('cloudAccessKey').value = cloud.access_key_id;
+                document.getElementById('cloudAccessKey').placeholder = 'Already configured (masked)';
+            }
+            if (cloud.secret_access_key) {
+                document.getElementById('cloudSecretKey').value = cloud.secret_access_key;
+                document.getElementById('cloudSecretKey').placeholder = 'Already configured (masked)';
+            }
         }
 
         // Initialize

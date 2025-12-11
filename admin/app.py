@@ -358,6 +358,7 @@ class SettingsUpdate(BaseModel):
     selected_sources: Optional[List[str]] = None
     cache_responses: Optional[bool] = None
     prompts: Optional[Dict[str, str]] = None  # {"online": "...", "offline": "..."}
+    personal_cloud: Optional[Dict[str, Any]] = None  # Personal cloud storage config
 
 
 # Routes
@@ -414,10 +415,45 @@ async def update_settings(updates: SettingsUpdate):
             if mode in ["online", "offline"]:
                 config.set_prompt(mode, prompt)
 
+    if updates.personal_cloud is not None:
+        config.set_personal_cloud_config(**updates.personal_cloud)
+
     if config.save():
         return {"status": "success", "settings": config.config}
     else:
         raise HTTPException(status_code=500, detail="Failed to save settings")
+
+
+@router.post("/api/test-cloud-connection")
+async def test_cloud_connection(config_data: Dict[str, Any]):
+    """Test connection to personal cloud storage without saving"""
+    try:
+        from offline_tools.cloud.r2 import R2Config, R2Storage
+
+        # Create temporary R2Config from provided settings
+        temp_config = R2Config(
+            access_key_id=config_data.get("access_key_id", ""),
+            secret_access_key=config_data.get("secret_access_key", ""),
+            endpoint_url=config_data.get("endpoint_url", ""),
+            bucket_name=config_data.get("bucket_name", ""),
+            token_expires=None
+        )
+
+        # Create temporary storage instance
+        temp_storage = R2Storage(config=temp_config)
+
+        # Test connection
+        result = temp_storage.test_connection()
+
+        return result
+
+    except Exception as e:
+        return {
+            "configured": False,
+            "connected": False,
+            "bucket_exists": False,
+            "error": str(e)
+        }
 
 
 @router.post("/api/backup-path")

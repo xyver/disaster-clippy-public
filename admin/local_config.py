@@ -72,6 +72,15 @@ IMPORTANT: You can ONLY recommend articles that are provided to you in the conte
 Your role is to help users find relevant articles and answer questions based on the provided context.
 Be concise, practical, and helpful. Focus on actionable information.
 Only recommend articles that are in the provided context - do not make up articles."""
+        },
+        "personal_cloud": {
+            "enabled": False,
+            "provider": "r2",  # r2, s3, backblaze, digitalocean, custom
+            "endpoint_url": "",
+            "access_key_id": "",
+            "secret_access_key": "",
+            "bucket_name": "",
+            "region": "auto"
         }
     }
 
@@ -372,6 +381,36 @@ Only recommend articles that are in the provided context - do not make up articl
         default_prompt = self.DEFAULT_CONFIG["prompts"].get(mode, "")
         self.set_prompt(mode, default_prompt)
         return default_prompt
+
+    # Personal Cloud Backup settings
+    def get_personal_cloud_config(self) -> Dict[str, Any]:
+        """Get personal cloud backup configuration"""
+        return self.config.get("personal_cloud", self.DEFAULT_CONFIG["personal_cloud"])
+
+    def get_personal_cloud_config_for_ui(self) -> Dict[str, Any]:
+        """Get cloud config with masked credentials for UI display"""
+        cloud = self.get_personal_cloud_config().copy()
+        if cloud.get("access_key_id"):
+            key = cloud["access_key_id"]
+            if len(key) > 4:
+                cloud["access_key_id"] = "*" * (len(key) - 4) + key[-4:]
+            else:
+                cloud["access_key_id"] = "*" * len(key)
+        if cloud.get("secret_access_key"):
+            cloud["secret_access_key"] = "*" * 20
+        return cloud
+
+    def set_personal_cloud_config(self, **kwargs) -> None:
+        """Update personal cloud configuration with provided values"""
+        if "personal_cloud" not in self.config:
+            self.config["personal_cloud"] = self.DEFAULT_CONFIG["personal_cloud"].copy()
+        for key, value in kwargs.items():
+            if key in self.config["personal_cloud"]:
+                self.config["personal_cloud"][key] = value
+
+    def is_personal_cloud_enabled(self) -> bool:
+        """Check if personal cloud backup is enabled"""
+        return self.config.get("personal_cloud", {}).get("enabled", False)
 
 
 def scan_backup_folder(folder_path: str, file_type: str = "zim") -> List[Dict[str, Any]]:

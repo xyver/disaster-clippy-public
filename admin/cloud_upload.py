@@ -1430,6 +1430,34 @@ async def pinecone_push(
         # Do the push
         stats = sync.push(diff, dry_run=dry_run, update=True, force=False)
 
+        # Auto-trigger visualization regeneration after successful push (non-dry-run only)
+        vis_job_id = None
+        running_vis_job = None
+        if not dry_run and (stats.get("pushed", 0) > 0 or stats.get("updated", 0) > 0):
+            try:
+                from .job_manager import get_job_manager
+                from .routes.visualise import generate_and_publish_visualisation_job
+                
+                manager = get_job_manager()
+                
+                # Check if visualization job is already running
+                active_jobs = manager.get_active_jobs()
+                running_vis_job = next((job for job in active_jobs if job.get("job_type") == "visualisation"), None)
+                
+                if running_vis_job:
+                    # Return info about running job so frontend can ask user about publishing
+                    vis_job_id = running_vis_job.get("id")
+                    print(f"[PineconePush] Visualization job already running: {vis_job_id}")
+                else:
+                    vis_job_id = manager.submit(
+                        job_type="visualisation",
+                        source_id="_system",
+                        func=generate_and_publish_visualisation_job
+                    )
+                    print(f"[PineconePush] Auto-started visualization job: {vis_job_id}")
+            except Exception as vis_err:
+                print(f"[PineconePush] Error starting visualization: {vis_err}")
+
         return {
             "status": "success",
             "dry_run": dry_run,
@@ -1437,7 +1465,9 @@ async def pinecone_push(
             "updated": stats.get("updated", 0),
             "skipped": stats.get("skipped", 0),
             "errors": stats.get("errors", 0),
-            "message": "Dry run complete - no changes made" if dry_run else "Push complete"
+            "message": "Dry run complete - no changes made" if dry_run else "Push complete",
+            "visualization_job_id": vis_job_id,
+            "visualization_already_running": bool(running_vis_job)
         }
 
     except ImportError as e:

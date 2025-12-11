@@ -67,7 +67,7 @@
         <div class="section">
             <h2>Sync Operations</h2>
             <p style="color: #888; margin-bottom: 1rem;">
-                Sync local ChromaDB vectors to Pinecone for cloud-based search.
+                Sync local ChromaDB vectors to Pinecone for cloud-based search. <strong>After a successful push</strong>, the knowledge map visualization will automatically regenerate and publish to R2 (runs as a background job).
             </p>
 
             <!-- Sync Status Panel -->
@@ -297,11 +297,28 @@
                 let msg = commit ? 'Push complete!' : 'Dry run complete (no changes made)';
                 let color = commit ? '#4ecca3' : '#888';
 
+                let visMsg = '';
+                if (commit && data.visualization_job_id) {
+                    if (data.visualization_already_running) {
+                        visMsg = '<br><span style="color: #f9a825; font-size: 0.85rem;">Visualization regeneration already in progress...</span>';
+                        // Ask user if they want to publish when it finishes
+                        const shouldPublish = confirm('A visualization regeneration is already running.
+
+Would you like to automatically publish it to R2 when it finishes?');
+                        if (shouldPublish) {
+                            visMsg = '<br><span style="color: #4ecca3; font-size: 0.85rem;">Waiting for visualization to complete, then publishing...</span>';
+                            waitForVisualizationAndPublish(data.visualization_job_id, statusDiv);
+                        }
+                    } else {
+                        visMsg = '<br><span style="color: #4ecca3; font-size: 0.85rem;">Visualization regenerating and publishing to R2...</span>';
+                    }
+                }
+
                 statusDiv.innerHTML = `
                     <span style="color: ${color};">${msg}</span><br>
                     <span style="color: #888; font-size: 0.85rem;">
                         Pushed: ${data.pushed} | Updated: ${data.updated} | Errors: ${data.errors || 0}
-                    </span>
+                    </span>${visMsg}
                 `;
 
                 if (commit && (data.pushed > 0 || data.updated > 0)) {
@@ -318,6 +335,44 @@
                 btnSync.disabled = false;
                 btnCommit.disabled = false;
             }
+        }
+
+        async function waitForVisualizationAndPublish(jobId, statusDiv) {
+            // Poll job status every 2 seconds
+            const pollInterval = setInterval(async () => {
+                try {
+                    const resp = await fetch('/useradmin/api/jobs/' + jobId);
+                    const job = await resp.json();
+
+                    if (job.status === 'completed') {
+                        clearInterval(pollInterval);
+                        
+                        // Job completed, now publish to R2
+                        statusDiv.innerHTML += '<br><span style="color: #4ecca3; font-size: 0.85rem;">Visualization complete\! Publishing to R2...</span>';
+                        
+                        try {
+                            const pubResp = await fetch('/useradmin/api/visualise/publish', { method: 'POST' });
+                            const pubData = await pubResp.json();
+                            
+                            if (pubData.status === 'success') {
+                                statusDiv.innerHTML += '<br><span style="color: #4ecca3; font-size: 0.85rem;">Published successfully\! (' + pubData.point_count.toLocaleString() + ' points)</span>';
+                            } else {
+                                statusDiv.innerHTML += '<br><span style="color: #e94560; font-size: 0.85rem;">Publish failed: ' + (pubData.message || 'Unknown error') + '</span>';
+                            }
+                        } catch (pubErr) {
+                            statusDiv.innerHTML += '<br><span style="color: #e94560; font-size: 0.85rem;">Publish error: ' + pubErr.message + '</span>';
+                        }
+                    } else if (job.status === 'failed') {
+                        clearInterval(pollInterval);
+                        statusDiv.innerHTML += '<br><span style="color: #e94560; font-size: 0.85rem;">Visualization job failed</span>';
+                    } else if (job.status === 'cancelled') {
+                        clearInterval(pollInterval);
+                        statusDiv.innerHTML += '<br><span style="color: #888; font-size: 0.85rem;">Visualization job cancelled</span>';
+                    }
+                } catch (e) {
+                    console.error('Error polling job:', e);
+                }
+            }, 2000);
         }
 
         async function deleteNamespace() {

@@ -407,6 +407,87 @@ def generate_visualisation_job(
         return {"success": False, "error": str(e)}
 
 
+def generate_and_publish_visualisation_job(
+    progress_callback=None,
+    cancel_checker=None
+) -> Dict[str, Any]:
+    """
+    Chained job: Generate visualization then publish to R2.
+    Used when triggered from Pinecone push.
+
+    Args:
+        progress_callback: Function(current, total, message) for progress
+        cancel_checker: Function() returns True if job should cancel
+
+    Returns:
+        Dict with success status and stats
+    """
+    # Step 1: Generate visualization (0-90% of progress)
+    def gen_progress(current, total, message):
+        if progress_callback:
+            # Map to 0-90% range
+            scaled_current = int((current / total) * 90)
+            progress_callback(scaled_current, 100, f"Generating: {message}")
+
+    result = generate_visualisation_job(
+        progress_callback=gen_progress,
+        cancel_checker=cancel_checker
+    )
+
+    if not result.get("success"):
+        return result
+
+    # Check for cancellation
+    if cancel_checker and cancel_checker():
+        return {"status": "cancelled"}
+
+    # Step 2: Publish to R2 (90-100% of progress)
+    if progress_callback:
+        progress_callback(90, 100, "Publishing to R2...")
+
+    try:
+        from offline_tools.cloud.r2 import get_r2_storage
+        storage = get_r2_storage()
+
+        if not storage.is_configured():
+            print("[Visualisation] R2 not configured, skipping publish")
+            result["publish"] = {"published": False, "reason": "R2 not configured"}
+            return result
+
+        conn_status = storage.test_connection()
+        if not conn_status["connected"]:
+            print(f"[Visualisation] R2 not connected: {conn_status.get('error')}")
+            result["publish"] = {"published": False, "reason": "R2 connection failed"}
+            return result
+
+        vis_path = get_visualisation_path()
+        if not vis_path or not vis_path.exists():
+            result["publish"] = {"published": False, "reason": "Visualization file not found"}
+            return result
+
+        r2_key = "published/visualisation.json"
+        success = storage.upload_file(str(vis_path), r2_key)
+
+        if success:
+            file_size_mb = result.get("file_size_mb", 0)
+            point_count = result.get("point_count", 0)
+            print(f"[Visualisation] Published to R2: {r2_key} ({file_size_mb:.2f} MB, {point_count} points)")
+            result["publish"] = {"published": True, "r2_key": r2_key}
+        else:
+            print("[Visualisation] Failed to upload to R2")
+            result["publish"] = {"published": False, "reason": "Upload failed"}
+
+        if progress_callback:
+            progress_callback(100, 100, "Complete! Visualization published to R2")
+
+        return result
+
+    except Exception as e:
+        print(f"[Visualisation] Error publishing: {e}")
+        result["publish"] = {"published": False, "error": str(e)}
+        return result
+
+
 # =============================================================================
 # API ENDPOINTS
 # =============================================================================

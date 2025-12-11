@@ -87,7 +87,7 @@ header p { font-size: 0.9rem; color: #888; margin-top: 0.25rem; }
 
 /* Container */
 .container {
-    max-width: 1200px;
+    max-width: 1000px;
     margin: 0 auto;
     padding: 2rem;
 }
