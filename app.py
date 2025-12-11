@@ -389,32 +389,43 @@ async def public_visualise_status():
     """
     Get visualization status for public view (fetches from R2).
     Returns basic metadata without fetching the full file.
+    Uses S3 API (same as source pack downloads).
     """
-    import requests
-
-    r2_url = os.getenv("R2_PUBLIC_URL", "")
-    if not r2_url:
-        return {
-            "has_data": False,
-            "error": "R2_PUBLIC_URL not configured"
-        }
-
-    vis_url = f"{r2_url}/published/visualisation.json"
-
     try:
-        # HEAD request to check if file exists
-        resp = requests.head(vis_url, timeout=5)
+        from offline_tools.cloud.r2 import get_backups_storage
+        storage = get_backups_storage()
 
-        if resp.status_code == 200:
+        if not storage.is_configured():
             return {
-                "has_data": True,
-                "url": vis_url
+                "has_data": False,
+                "error": "Cloud storage not configured"
             }
-        else:
+
+        remote_key = "published/visualisation.json"
+
+        # Check if file exists using S3 API
+        client = storage._get_client()
+
+        try:
+            # HEAD request to check existence
+            client.head_object(
+                Bucket=storage.config.bucket_name,
+                Key=remote_key
+            )
+            return {
+                "has_data": True
+            }
+        except client.exceptions.NoSuchKey:
             return {
                 "has_data": False,
                 "message": "No visualization published yet"
             }
+        except Exception as e:
+            return {
+                "has_data": False,
+                "error": str(e)
+            }
+
     except Exception as e:
         return {
             "has_data": False,
@@ -426,25 +437,39 @@ async def public_visualise_status():
 async def public_visualise_data():
     """
     Fetch visualization data from R2 for public viewing.
+    Uses S3 API (same as source pack downloads).
     """
-    import requests
-
-    r2_url = os.getenv("R2_PUBLIC_URL", "")
-    if not r2_url:
-        raise HTTPException(500, "R2_PUBLIC_URL not configured")
-
-    vis_url = f"{r2_url}/published/visualisation.json"
-
     try:
-        resp = requests.get(vis_url, timeout=30)
+        from offline_tools.cloud.r2 import get_backups_storage
+        storage = get_backups_storage()
 
-        if resp.status_code == 404:
+        if not storage.is_configured():
+            raise HTTPException(503, "Cloud storage not configured")
+
+        remote_key = "published/visualisation.json"
+
+        # Get the S3 client to fetch the file
+        client = storage._get_client()
+
+        try:
+            response = client.get_object(
+                Bucket=storage.config.bucket_name,
+                Key=remote_key
+            )
+
+            # Read and parse JSON
+            content = response["Body"].read()
+            data = json.loads(content)
+            return data
+
+        except client.exceptions.NoSuchKey:
             raise HTTPException(404, "No visualization published yet. Contact admin to publish one.")
+        except Exception as e:
+            raise HTTPException(500, f"Error reading visualization: {e}")
 
-        resp.raise_for_status()
-        return resp.json()
-
-    except requests.RequestException as e:
+    except HTTPException:
+        raise
+    except Exception as e:
         raise HTTPException(500, f"Error fetching visualization from R2: {e}")
 
 
