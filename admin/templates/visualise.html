@@ -531,23 +531,29 @@
             if (status.job_active) {
                 document.getElementById('statusValue').textContent = 'Generating...';
                 document.getElementById('statusValue').style.color = '#f9a825';
-                document.getElementById('generateBtn').disabled = true;
-                document.getElementById('generateBtn').textContent = 'Generating...';
-                document.getElementById('progressContainer').style.display = 'block';
-                document.getElementById('progressFill').style.width = status.job_progress + '%';
-                document.getElementById('progressText').textContent = status.job_message || 'Processing...';
+                if (IS_ADMIN) {
+                    document.getElementById('generateBtn').disabled = true;
+                    document.getElementById('generateBtn').textContent = 'Generating...';
+                    document.getElementById('progressContainer').style.display = 'block';
+                    document.getElementById('progressFill').style.width = status.job_progress + '%';
+                    document.getElementById('progressText').textContent = status.job_message || 'Processing...';
+                }
             } else if (status.has_data) {
                 document.getElementById('statusValue').textContent = 'Ready';
                 document.getElementById('statusValue').style.color = '#4ecca3';
-                document.getElementById('generateBtn').disabled = false;
-                document.getElementById('generateBtn').textContent = 'Regenerate';
-                document.getElementById('progressContainer').style.display = 'none';
+                if (IS_ADMIN) {
+                    document.getElementById('generateBtn').disabled = false;
+                    document.getElementById('generateBtn').textContent = 'Regenerate';
+                    document.getElementById('progressContainer').style.display = 'none';
+                }
             } else {
                 document.getElementById('statusValue').textContent = 'No Data';
                 document.getElementById('statusValue').style.color = '#888';
-                document.getElementById('generateBtn').disabled = false;
-                document.getElementById('generateBtn').textContent = 'Generate Visualization';
-                document.getElementById('progressContainer').style.display = 'none';
+                if (IS_ADMIN) {
+                    document.getElementById('generateBtn').disabled = false;
+                    document.getElementById('generateBtn').textContent = 'Generate Visualization';
+                    document.getElementById('progressContainer').style.display = 'none';
+                }
             }
 
             document.getElementById('pointsValue').textContent = status.point_count ? status.point_count.toLocaleString() : '-';
@@ -638,7 +644,9 @@
         function startPolling() {
             if (pollingInterval) return;
 
-            document.getElementById('progressContainer').style.display = 'block';
+            if (IS_ADMIN) {
+                document.getElementById('progressContainer').style.display = 'block';
+            }
 
             pollingInterval = setInterval(async () => {
                 try {
