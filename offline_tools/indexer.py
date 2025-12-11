@@ -939,15 +939,23 @@ class ZIMIndexer:
         CHECKPOINT_INTERVAL_DOCS = 500
 
         try:
-            # Progress reporting helpers
-            # Each phase reports its own progress independently
+            # Progress reporting helpers with unified scale
+            # Extraction: 0-70%, Embedding: 70-100%
+            extraction_total = 0  # Will be set when we know document count
+            
             def report_extraction_progress(current, total, message):
-                if progress_callback:
-                    progress_callback(current, total, message)
+                nonlocal extraction_total
+                extraction_total = total
+                if progress_callback and total > 0:
+                    # Map to 0-70% range
+                    unified_progress = int((current / total) * 70)
+                    progress_callback(unified_progress, 100, message)
 
             def report_embedding_progress(current, total, message):
-                if progress_callback:
-                    progress_callback(current, total, message)
+                if progress_callback and total > 0:
+                    # Map to 70-100% range (30% of scale)
+                    unified_progress = 70 + int((current / total) * 30)
+                    progress_callback(unified_progress, 100, message)
 
             report_extraction_progress(0, 1, "Opening ZIM file...")
 
@@ -1046,7 +1054,7 @@ class ZIMIndexer:
                         docs_since_checkpoint += 1
 
                         if indexed % 10 == 0:
-                            report_extraction_progress(indexed, target_count,
+                            report_extraction_progress(idx, target_count,
                                             f"Extracting: {title[:50]}...")
 
                         # Check for cancellation
@@ -1198,7 +1206,7 @@ class ZIMIndexer:
                         docs_since_checkpoint += 1
 
                         if indexed % 10 == 0:
-                            report_extraction_progress(indexed, target_count,
+                            report_extraction_progress(idx, target_count,
                                             f"Extracting: {title[:50]}...")
 
                         # Check for cancellation

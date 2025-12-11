@@ -872,4 +872,6 @@ async def pinecone_page(request: Request):
 async def visualise_page(request: Request):
     """Knowledge Map - 3D visualization of document embeddings"""
     config = get_local_config()
-    return templates.TemplateResponse("visualise.html", get_template_context(request, config.config))
+    ctx = get_template_context(request, config.config)
+    ctx["is_admin"] = True
+    return templates.TemplateResponse("visualise.html", ctx)

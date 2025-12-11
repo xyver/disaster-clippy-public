@@ -360,7 +360,8 @@ class VectorStore:
                 ids.append(doc_id)
                 contents.append(doc["content"])
 
-                metadata = {k: v for k, v in doc.items() if k != "content"}
+                # Exclude content and internal_links (lists not allowed in ChromaDB metadata)
+                metadata = {k: v for k, v in doc.items() if k not in ("content", "internal_links")}
                 metadata["categories"] = json.dumps(metadata.get("categories", []))
                 metadatas.append(metadata)
 
@@ -445,10 +446,7 @@ class VectorStore:
             Dict with deletion stats: {deleted_count, batches}
         """
         try:
-            # Debug: Show what sources exist
-            stats = self.get_stats()
-            print(f"[VectorStore] Current sources in DB: {list(stats.get('sources', {}).keys())}")
-            print(f"[VectorStore] Looking for source: '{source_id}'")
+            print(f"[VectorStore] Deleting documents for source: '{source_id}'")
 
             # Get all document IDs for this source
             result = self.collection.get(

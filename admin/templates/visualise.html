@@ -3,9 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Knowledge Map - Disaster Clippy Admin</title>
+    <title>Knowledge Map - Disaster Clippy{% if is_admin %} Admin{% endif %}</title>
     <link rel="icon" type="image/png" href="/static/paperclip.png">
+    {% if is_admin %}
     <link rel="stylesheet" href="/admin/static/{{ admin_css }}">
+    {% else %}
+    <link rel="stylesheet" href="/static/user-app.css">
+    {% endif %}
     <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
     <style>
         /* Full-screen layout */
@@ -91,12 +95,13 @@
         /* Actions */
         .vis-actions button {
             width: 100%;
-            padding: 0.6rem;
+            padding: 0.75rem 1.2rem;
             margin-bottom: 0.5rem;
             border: none;
-            border-radius: 4px;
+            border-radius: 8px;
             cursor: pointer;
-            font-size: 0.85rem;
+            font-size: 0.9rem;
+            font-weight: 500;
         }
         .vis-actions button:last-child {
             margin-bottom: 0;
@@ -324,7 +329,16 @@
             <h1>Knowledge Map</h1>
             <p>3D visualization of document embeddings</p>
         </div>
+        {% if is_admin %}
         {% with active_page='visualise' %}{% include '_nav.html' %}{% endwith %}
+        {% else %}
+        <nav style="margin-top: 0.5rem;">
+            <a href="/" style="color: #4ecca3; text-decoration: none; margin-right: 1rem;">Chat</a>
+            <a href="/suggest" style="color: #4ecca3; text-decoration: none; margin-right: 1rem;">Suggest a Site</a>
+            <a href="/visualise" style="color: #e94560; text-decoration: none; margin-right: 1rem;">Visualize</a>
+            <a href="/useradmin/" style="color: #4ecca3; text-decoration: none;">Local Settings</a>
+        </nav>
+        {% endif %}
     </header>
 
     <!-- Full-screen 3D Plot -->
@@ -349,10 +363,15 @@
             <button class="panel-toggle" id="panelToggle" onclick="togglePanel()">-</button>
         </div>
         <div class="panel-content" id="panelContent">
-            <!-- Generate Button -->
-            <div class="panel-section vis-actions">
-                <button id="generateBtn" class="btn-primary" onclick="generateVisualisation()">
-                    Generate Visualization
+            <!-- About -->
+            <div class="panel-section">
+                <h4>About</h4>
+                <p style="font-size: 0.8rem; line-height: 1.4; color: #aaa; margin-bottom: 0.75rem;">
+                    This 3D map visualizes document relationships based on semantic similarity. Each point represents a document, colored by source. Clusters indicate related content.
+                </p>
+                {% if is_admin %}
+                <button id="generateBtn" class="btn-primary" onclick="generateVisualisation()" style="border-radius: 8px;">
+                    Regenerate Visualization
                 </button>
                 <div id="progressContainer" style="display: none;">
                     <div class="progress-bar">
@@ -360,6 +379,7 @@
                     </div>
                     <div class="progress-text" id="progressText">Starting...</div>
                 </div>
+                {% endif %}
             </div>
 
             <!-- Info -->
@@ -411,6 +431,30 @@
                     <p style="color: #666; font-size: 0.8rem;">No data loaded</p>
                 </div>
             </div>
+
+            <!-- Link Visibility -->
+            <div class="panel-section">
+                <h4>Show Links For</h4>
+                <div class="filter-actions">
+                    <button onclick="selectAllLinks()">All</button>
+                    <button onclick="selectNoneLinks()">None</button>
+                </div>
+                <div class="source-filters" id="linkList">
+                    <p style="color: #666; font-size: 0.8rem;">No data loaded</p>
+                </div>
+            </div>
+
+            <!-- Publish to Production -->
+            {% if is_admin %}
+            <div class="panel-section" style="border-top: 1px solid #0f3460; padding-top: 1rem; margin-top: 1rem;">
+                <button id="publishBtn" class="btn-primary" onclick="publishToProduction()" style="background: #e94560; width: 100%; border-radius: 8px;">
+                    Publish to Production
+                </button>
+                <p style="font-size: 0.7rem; color: #666; margin-top: 0.5rem; line-height: 1.3;">
+                    Uploads current visualization to R2 for public viewing at /visualise
+                </p>
+            </div>
+            {% endif %}
         </div>
     </div>
 
@@ -429,8 +473,10 @@
         <a href="#" class="doc-popup-link" id="popupLink" target="_blank">Open Document</a>
     </div>
 
-    <script src="/admin/static/admin-common.js"></script>
+    {% if is_admin %}<script src="/admin/static/admin-common.js"></script>{% endif %}
     <script>
+        const IS_ADMIN = {{ 'true' if is_admin else 'false' }};
+        const API_PREFIX = IS_ADMIN ? '/useradmin' : '';
         // State
         let visData = null;
         let selectedSources = new Set();
@@ -465,7 +511,7 @@
 
         async function loadStatus() {
             try {
-                const resp = await fetch('/useradmin/api/visualise/status');
+                const resp = await fetch(API_PREFIX + '/api/visualise/status');
                 const status = await resp.json();
 
                 updateStatusDisplay(status);
@@ -532,11 +578,13 @@
         }
 
         async function generateVisualisation() {
+            if (!IS_ADMIN) return;
+
             try {
                 document.getElementById('generateBtn').disabled = true;
                 document.getElementById('generateBtn').textContent = 'Starting...';
 
-                const resp = await fetch('/useradmin/api/visualise/generate', { method: 'POST' });
+                const resp = await fetch(API_PREFIX + '/api/visualise/generate', { method: 'POST' });
                 const result = await resp.json();
 
                 if (result.status === 'started' || result.status === 'already_running') {
@@ -554,6 +602,39 @@
             }
         }
 
+        async function publishToProduction() {
+            if (!IS_ADMIN) return;
+
+            if (!confirm('Upload the current visualization to R2 for public viewing?\n\nMake sure you have regenerated it recently.')) {
+                return;
+            }
+
+            try {
+                document.getElementById('publishBtn').disabled = true;
+                document.getElementById('publishBtn').textContent = 'Publishing...';
+
+                const resp = await fetch(API_PREFIX + '/api/visualise/publish', { method: 'POST' });
+                const result = await resp.json();
+
+                if (result.status === 'success') {
+                    alert('Successfully published to production!\n\n' + result.point_count.toLocaleString() + ' points, ' + result.file_size_mb + ' MB');
+                } else {
+                    alert('Error: ' + (result.message || 'Unknown error'));
+                }
+            } catch (e) {
+                console.error('Error publishing:', e);
+                const errorMsg = e.message || 'Unknown error';
+                if (errorMsg.includes('No local visualization found')) {
+                    alert('No visualization to publish. Click "Regenerate Visualization" first.');
+                } else {
+                    alert('Error publishing: ' + errorMsg);
+                }
+            } finally {
+                document.getElementById('publishBtn').disabled = false;
+                document.getElementById('publishBtn').textContent = 'Publish to Production';
+            }
+        }
+
         function startPolling() {
             if (pollingInterval) return;
 
@@ -561,7 +642,7 @@
 
             pollingInterval = setInterval(async () => {
                 try {
-                    const resp = await fetch('/useradmin/api/visualise/status');
+                    const resp = await fetch(API_PREFIX + '/api/visualise/status');
                     const status = await resp.json();
 
                     updateStatusDisplay(status);
@@ -591,18 +672,26 @@
                 document.getElementById('loadingText').textContent = 'Loading visualization data...';
                 document.getElementById('emptyState').style.display = 'none';
 
-                const resp = await fetch('/useradmin/api/visualise/data');
+                const resp = await fetch(API_PREFIX + '/api/visualise/data');
                 if (!resp.ok) {
                     throw new Error('Failed to load data');
                 }
 
                 visData = await resp.json();
 
+                // Build source-to-color mapping FIRST (consistent across all UI)
+                sourceColorMap = {};
+                visData.sources.forEach((source, idx) => {
+                    sourceColorMap[source] = colorPalette[idx % colorPalette.length];
+                });
+
                 // Initialize selected sources (all selected)
                 selectedSources = new Set(visData.sources);
+                selectedLinkSources = new Set();  // Start with no links visible
 
                 // Build source filter UI
                 buildSourceFilters();
+                buildLinkFilters();
 
                 // Render plot
                 renderPlot();
@@ -623,7 +712,7 @@
             visData.sources.forEach((source, idx) => {
                 const count = counts[source] || 0;
                 const checked = selectedSources.has(source) ? 'checked' : '';
-                const color = colorPalette[idx % colorPalette.length];
+                const color = sourceColorMap[source];  // Use mapped color
 
                 html += `
                     <div class="source-item">
@@ -648,14 +737,72 @@
         }
 
         function selectAllSources() {
+            // Build source-to-color mapping FIRST (consistent across all UI)
+            sourceColorMap = {};
+            visData.sources.forEach((source, idx) => {
+                sourceColorMap[source] = colorPalette[idx % colorPalette.length];
+            });
+            
             selectedSources = new Set(visData.sources);
+            selectedLinkSources = new Set();  // Start with no links visible
+            
             buildSourceFilters();
+            buildLinkFilters();
             renderPlot();
         }
 
         function selectNoneSources() {
             selectedSources = new Set();
             buildSourceFilters();
+            buildLinkFilters();
+            renderPlot();
+        }
+
+        // Link visibility controls
+        function buildLinkFilters() {
+            if (!visData || !visData.sources) return;
+
+            const linkList = document.getElementById('linkList');
+            const counts = visData.source_counts || {};
+            const colorPalette = ['#4ecca3', '#e94560', '#ffb344', '#3498db', '#9b59b6', '#1abc9c', '#e67e22', '#95a5a6'];
+
+            let html = '';
+            visData.sources.forEach((source, idx) => {
+                const count = counts[source] || 0;
+                const checked = selectedLinkSources.has(source) ? 'checked' : '';
+                const color = sourceColorMap[source];  // Use mapped color
+
+                html += `
+                    <div class="source-item">
+                        <input type="checkbox" id="link_${idx}" value="${source}" ${checked}
+                               onchange="toggleLink('${source}')" style="accent-color: ${color}">
+                        <label for="link_${idx}" style="color: ${color}">${source}</label>
+                        <span class="source-count">(links)</span>
+                    </div>
+                `;
+            });
+
+            linkList.innerHTML = html;
+        }
+
+        function toggleLink(source) {
+            if (selectedLinkSources.has(source)) {
+                selectedLinkSources.delete(source);
+            } else {
+                selectedLinkSources.add(source);
+            }
+            renderPlot();
+        }
+
+        function selectAllLinks() {
+            selectedLinkSources = new Set(visData.sources);
+            buildLinkFilters();
+            renderPlot();
+        }
+
+        function selectNoneLinks() {
+            selectedLinkSources = new Set();
+            buildLinkFilters();
             renderPlot();
         }
 
@@ -694,7 +841,7 @@
                 const sourcePoints = filteredPoints.filter(p => p.source === source);
                 if (sourcePoints.length === 0) return;
 
-                const color = colorPalette[idx % colorPalette.length];
+                const color = sourceColorMap[source];  // Use mapped color
 
                 traces.push({
                     type: 'scatter3d',
@@ -731,10 +878,17 @@
                         const fromPoint = visData.points[edge.from];
                         const toPoint = visData.points[edge.to];
 
-                        // Add line segment: from -> to -> null (to break between segments)
-                        edgeX.push(fromPoint.x, toPoint.x, null);
-                        edgeY.push(fromPoint.y, toPoint.y, null);
-                        edgeZ.push(fromPoint.z, toPoint.z, null);
+                        // Check if both source's links are enabled
+                        const fromSource = fromPoint.source;
+                        const toSource = toPoint.source;
+                        
+                        // Show edge only if at least one endpoint's source has links enabled
+                        if (selectedLinkSources.has(fromSource) || selectedLinkSources.has(toSource)) {
+                            // Add line segment: from -> to -> null (to break between segments)
+                            edgeX.push(fromPoint.x, toPoint.x, null);
+                            edgeY.push(fromPoint.y, toPoint.y, null);
+                            edgeZ.push(fromPoint.z, toPoint.z, null);
+                        }
                     }
                 });
 
@@ -829,17 +983,33 @@
             }
 
             // Position popup near click, but keep on screen
-            let x = event.clientX + 10;
-            let y = event.clientY + 10;
+            // Handle case where event may be undefined
+            let x, y;
+            if (event && event.clientX !== undefined) {
+                x = event.clientX + 10;
+                y = event.clientY + 10;
+            } else {
+                // Fallback to center of screen if event is undefined
+                x = window.innerWidth / 2 - 175;
+                y = window.innerHeight / 2 - 60;
+            }
 
             // Ensure popup stays on screen
             const popupWidth = 350;
             const popupHeight = 120;
-            if (x + popupWidth > window.innerWidth) {
-                x = event.clientX - popupWidth - 10;
-            }
-            if (y + popupHeight > window.innerHeight) {
-                y = event.clientY - popupHeight - 10;
+            if (event && event.clientX !== undefined) {
+                if (x + popupWidth > window.innerWidth) {
+                    x = event.clientX - popupWidth - 10;
+                }
+                if (y + popupHeight > window.innerHeight) {
+                    y = event.clientY - popupHeight - 10;
+                }
+            } else {
+                // Keep centered fallback on screen
+                if (x < 0) x = 10;
+                if (y < 0) y = 10;
+                if (x + popupWidth > window.innerWidth) x = window.innerWidth - popupWidth - 10;
+                if (y + popupHeight > window.innerHeight) y = window.innerHeight - popupHeight - 10;
             }
 
             popup.style.left = x + 'px';

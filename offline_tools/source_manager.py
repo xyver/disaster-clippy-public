@@ -1309,7 +1309,7 @@ class SourceManager:
         import time as time_module
         import re
         from collections import Counter
-        from .schemas import get_metadata_file
+        from .schemas import get_metadata_file, get_manifest_file
         from .indexer import should_include_article, extract_text_lenient, extract_internal_links_from_html
 
         # Import checkpoint functions
@@ -1400,6 +1400,20 @@ class SourceManager:
         if language_filter:
             print(f"Language filter: {language_filter} (only including {language_filter} articles in metadata)")
 
+        # Setup URL building - extract ZIM metadata and manifest base_url once
+        from .indexer import ZIMIndexer
+        indexer_instance = ZIMIndexer(zim_path=str(zim_path), source_id=source_id, backup_folder=str(source_path))
+        zim_metadata = indexer_instance._extract_zim_metadata(zim.header_fields)
+        manifest_path = source_path / get_manifest_file()
+        manifest_base_url = None
+        if manifest_path.exists():
+            try:
+                with open(manifest_path, 'r', encoding='utf-8') as mf:
+                    manifest = json.load(mf)
+                    manifest_base_url = manifest.get("base_url")
+            except:
+                pass
+
         for i in range(start_index, article_count):
             try:
                 article = zim.get_article_by_id(i)
@@ -1437,11 +1451,16 @@ class SourceManager:
                 # Extract internal links from HTML content
                 internal_links = extract_internal_links_from_html(content)
 
+                # Build URLs - local for offline viewer, online for ChromaDB
+                local_url = f"/zim/{source_id}/{url}"
+                online_url = indexer_instance._build_online_url(url, zim_metadata, manifest_base_url) or local_url
+
                 # Use same ID format as indexer: MD5 hash of source_id:url
                 doc_id = hashlib.md5(f"{source_id}:{url}".encode()).hexdigest()
                 doc_entry = {
                     "title": title[:200] if title else url[:200],
-                    "url": f"/zim/{source_id}/{url}",
+                    "url": online_url,  # Use online URL
+                    "local_url": local_url,  # Store local path
                     "snippet": text[:500],
                     "char_count": len(text),
                     "source_id": source_id,

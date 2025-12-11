@@ -69,6 +69,17 @@ def build_link_edges(points: List[Dict], sources: set, progress_callback=None) -
     edges = []
     edge_set = set()  # Deduplicate edges
 
+    # Also build mapping with local_url for ZIM sources
+    local_url_to_idx = {}
+    for idx, point in enumerate(points):
+        local_url = point.get("local_url", "")
+        if local_url:
+            local_url_to_idx[local_url] = idx
+            if local_url.startswith("/"):
+                local_url_to_idx[local_url[1:]] = idx
+            else:
+                local_url_to_idx["/" + local_url] = idx
+
     # Load metadata from each source and build edges
     for source_id in sources:
         source_path = backup_path / source_id
@@ -83,29 +94,112 @@ def build_link_edges(points: List[Dict], sources: set, progress_callback=None) -
 
             docs = metadata.get("documents", {})
 
+            # Load manifest to get base_url for constructing full URLs from relative paths
+            manifest_file = source_path / "_manifest.json"
+            base_url = None
+            if manifest_file.exists():
+                try:
+                    with open(manifest_file, 'r', encoding='utf-8') as mf:
+                        manifest_data = json.load(mf)
+                        base_url = manifest_data.get("base_url", "").rstrip("/")
+                except:
+                    pass
+            
+            print(f"[{source_id}] Loaded base_url: '{base_url}'")
+
+            # Debug: Show sample URLs from ChromaDB for this source
+            print(f"\n[{source_id}] Sample URLs in ChromaDB:")
+            source_points = [p for p in points if p.get("source") == source_id]
+            for p in source_points[:3]:
+                print(f"  - url: '{p.get('url', '')}', local_url: '{p.get('local_url', '')}'")
+            print(f"[{source_id}] Sample URLs in metadata:")
+            docs_with_links = 0
+            matched_links = 0
+            failed_links = 0
+
+            # Debug: sample first doc with links
+            sample_logged = False
+            sample_metadata_logged = 0
+            docs_without_from_idx = 0
+
             for doc_id, doc_data in docs.items():
                 internal_links = doc_data.get("internal_links", [])
                 if not internal_links:
                     continue
 
-                # Find the source point index
+                docs_with_links += 1
+
+                # Log first 3 docs from metadata for comparison
+                if sample_metadata_logged < 3:
+                    print(f"  - url: '{doc_data.get('url', '')}', local_url: '{doc_data.get('local_url', '')}'")
+                    sample_metadata_logged += 1
+
+                # Find the source point index - try both url and local_url
                 from_idx = None
                 doc_url = doc_data.get("url", "")
-                if doc_url in url_to_idx:
+                doc_local_url = doc_data.get("local_url", "")
+
+                # If metadata's url field starts with /zim/, it's actually a local_url
+                # Look it up in local_url_to_idx instead
+                if doc_url.startswith("/zim/"):
+                    from_idx = local_url_to_idx.get(doc_url)
+                    if from_idx is None:
+                        # Try with/without leading slash
+                        if doc_url.startswith("/"):
+                            from_idx = local_url_to_idx.get(doc_url[1:])
+                        else:
+                            from_idx = local_url_to_idx.get("/" + doc_url)
+                # Otherwise try normal URL lookup
+                elif doc_url in url_to_idx:
                     from_idx = url_to_idx[doc_url]
+                elif doc_local_url in local_url_to_idx:
+                    from_idx = local_url_to_idx[doc_local_url]
 
                 if from_idx is None:
+                    docs_without_from_idx += 1
+                    # Log first failure to debug
+                    if not sample_logged:
+                        print(f"  [DEBUG] Can't find doc: url='{doc_url}', local_url='{doc_local_url}'")
+                        sample_logged = True
                     continue
 
                 # Resolve each link to a target point
                 for link_url in internal_links:
-                    to_idx = url_to_idx.get(link_url)
-                    if to_idx is None:
-                        # Try with/without leading slash
-                        if link_url.startswith("/"):
-                            to_idx = url_to_idx.get(link_url[1:])
-                        else:
-                            to_idx = url_to_idx.get("/" + link_url)
+                    to_idx = None
+
+                    # If link is a relative path and we have base_url, construct full URL
+                    if base_url and link_url.startswith("/") and not link_url.startswith("/zim/") and not link_url.startswith("/backup/"):
+                        # Relative path like /Bitcoin -> https://en.bitcoin.it/wiki/Bitcoin
+                        full_url = base_url + link_url
+                        to_idx = url_to_idx.get(full_url)
+
+
+                    # If link starts with /zim/, look it up as local_url
+                    if to_idx is None and link_url.startswith("/zim/"):
+                        to_idx = local_url_to_idx.get(link_url)
+                        if to_idx is None:
+                            if link_url.startswith("/"):
+                                to_idx = local_url_to_idx.get(link_url[1:])
+                            else:
+                                to_idx = local_url_to_idx.get("/" + link_url)
+                    elif to_idx is None:
+                        # Otherwise try normal URL lookup
+                        to_idx = url_to_idx.get(link_url)
+                        if to_idx is None:
+                            # Try with/without leading slash
+                            if link_url.startswith("/"):
+                                to_idx = url_to_idx.get(link_url[1:])
+                            else:
+                                to_idx = url_to_idx.get("/" + link_url)
+
+                        # Also try local_url mapping as fallback
+                        if to_idx is None:
+                            to_idx = local_url_to_idx.get(link_url)
+                            if to_idx is None:
+                                if link_url.startswith("/"):
+                                    to_idx = local_url_to_idx.get(link_url[1:])
+                                else:
+                                    to_idx = local_url_to_idx.get("/" + link_url)
 
                     if to_idx is not None and to_idx != from_idx:
                         # Create edge key to avoid duplicates
@@ -116,6 +210,11 @@ def build_link_edges(points: List[Dict], sources: set, progress_callback=None) -
                                 "from": from_idx,
                                 "to": to_idx
                             })
+                            matched_links += 1
+                    else:
+                        failed_links += 1
+
+            print(f"[{source_id}] {docs_with_links} docs with links, {matched_links} matched, {failed_links} failed, {docs_without_from_idx} docs not found in points")
 
         except Exception as e:
             print(f"Error loading metadata for {source_id}: {e}")
@@ -158,8 +257,7 @@ def generate_visualisation_job(
 
         # Get vector store
         store = get_vector_store(mode="local")
-        stats = store.get_stats()
-        total_docs = stats.get("total_documents", 0)
+        total_docs = store.collection.count()
 
         if total_docs == 0:
             return {"success": False, "error": "No documents in ChromaDB"}
@@ -225,6 +323,10 @@ def generate_visualisation_job(
                 except:
                     categories = []
 
+            # Prefer url over local_url for link matching
+            url = metadata.get("url", "")
+            local_url = metadata.get("local_url", "")
+
             point = {
                 "x": float(coords_3d[i][0]),
                 "y": float(coords_3d[i][1]),
@@ -233,8 +335,8 @@ def generate_visualisation_job(
                 "title": metadata.get("title", "Untitled"),
                 "source": source,
                 "doc_type": metadata.get("doc_type", "article"),
-                "url": metadata.get("url", ""),
-                "local_url": metadata.get("local_url", "")
+                "url": url if url else local_url,  # Use online URL for display and linking
+                "local_url": local_url
             }
             points.append(point)
 
@@ -276,9 +378,14 @@ def generate_visualisation_job(
             "edges": edges
         }
 
-        # Save to file
-        with open(output_path, 'w', encoding='utf-8') as f:
+        # Save to file using atomic write (temp file + rename)
+        # This prevents corruption if cancelled or interrupted during write
+        temp_path = output_path.with_suffix('.tmp')
+        with open(temp_path, 'w', encoding='utf-8') as f:
             json.dump(output, f)
+
+        # Atomic rename - if this succeeds, file is valid
+        temp_path.replace(output_path)
 
         # Calculate file size
         file_size_mb = output_path.stat().st_size / (1024 * 1024)
@@ -451,3 +558,62 @@ async def delete_visualisation():
         return {"status": "deleted", "message": "Visualization data deleted"}
     except Exception as e:
         raise HTTPException(500, f"Error deleting visualization: {e}")
+
+
+@router.post("/publish")
+async def publish_to_r2():
+    """
+    Publish existing visualization to R2 for public access.
+
+    Uploads the current local visualization file to R2.
+    Does NOT regenerate - use "Regenerate Visualization" button first if needed.
+    """
+    from offline_tools.cloud.r2 import get_r2_storage
+
+    # Check if local visualization exists
+    vis_path = get_visualisation_path()
+    if not vis_path or not vis_path.exists():
+        raise HTTPException(400, "No local visualization found. Generate one first using 'Regenerate Visualization'.")
+
+    try:
+        # Load local file to get stats
+        with open(vis_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+
+        point_count = data.get("point_count", 0)
+        file_size_mb = round(vis_path.stat().st_size / (1024 * 1024), 2)
+
+        # Get R2 storage
+        storage = get_r2_storage()
+
+        if not storage.is_configured():
+            raise HTTPException(400, "R2 cloud storage not configured")
+
+        # Test connection
+        conn_status = storage.test_connection()
+        if not conn_status["connected"]:
+            raise HTTPException(500, f"R2 connection failed: {conn_status.get('error', 'Unknown error')}")
+
+        # Upload to R2
+        r2_key = "published/visualisation.json"
+        success = storage.upload_file(str(vis_path), r2_key)
+
+        if not success:
+            raise Exception("Upload failed")
+
+        print(f"Published {r2_key} to R2 ({file_size_mb} MB, {point_count} points)")
+
+        return {
+            "status": "success",
+            "message": "Visualization published to R2",
+            "r2_key": r2_key,
+            "point_count": point_count,
+            "file_size_mb": file_size_mb
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(500, f"Error publishing visualization: {e}")

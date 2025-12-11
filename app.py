@@ -13,6 +13,7 @@ from fastapi import FastAPI, Request, Header, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
@@ -77,6 +78,9 @@ def verify_admin(x_admin_key: Optional[str] = Header(None)) -> bool:
 
 # Base directory
 BASE_DIR = Path(__file__).resolve().parent
+
+# Initialize Jinja2 templates (using admin templates folder for shared visualise.html)
+templates = Jinja2Templates(directory=str(BASE_DIR / "admin" / "templates"))
 
 # Initialize FastAPI
 app = FastAPI(
@@ -297,6 +301,15 @@ async def serve_suggest():
     return template_path.read_text(encoding='utf-8')
 
 
+@app.get("/visualise", response_class=HTMLResponse)
+async def serve_visualise(request: Request):
+    """Serve the public knowledge map visualization"""
+    return templates.TemplateResponse("visualise.html", {
+        "request": request,
+        "is_admin": False
+    })
+
+
 class SiteSuggestion(BaseModel):
     url: str
     description: str = ""
@@ -365,6 +378,74 @@ async def get_site_suggestions():
         }
     except:
         return {"suggestions": [], "count": 0, "error": "Failed to load suggestions"}
+
+
+# =============================================================================
+# PUBLIC VISUALIZATION API - Fetches from R2
+# =============================================================================
+
+@app.get("/api/visualise/status")
+async def public_visualise_status():
+    """
+    Get visualization status for public view (fetches from R2).
+    Returns basic metadata without fetching the full file.
+    """
+    import requests
+
+    r2_url = os.getenv("R2_PUBLIC_URL", "")
+    if not r2_url:
+        return {
+            "has_data": False,
+            "error": "R2_PUBLIC_URL not configured"
+        }
+
+    vis_url = f"{r2_url}/published/visualisation.json"
+
+    try:
+        # HEAD request to check if file exists
+        resp = requests.head(vis_url, timeout=5)
+
+        if resp.status_code == 200:
+            return {
+                "has_data": True,
+                "url": vis_url
+            }
+        else:
+            return {
+                "has_data": False,
+                "message": "No visualization published yet"
+            }
+    except Exception as e:
+        return {
+            "has_data": False,
+            "error": str(e)
+        }
+
+
+@app.get("/api/visualise/data")
+async def public_visualise_data():
+    """
+    Fetch visualization data from R2 for public viewing.
+    """
+    import requests
+
+    r2_url = os.getenv("R2_PUBLIC_URL", "")
+    if not r2_url:
+        raise HTTPException(500, "R2_PUBLIC_URL not configured")
+
+    vis_url = f"{r2_url}/published/visualisation.json"
+
+    try:
+        resp = requests.get(vis_url, timeout=30)
+
+        if resp.status_code == 404:
+            raise HTTPException(404, "No visualization published yet. Contact admin to publish one.")
+
+        resp.raise_for_status()
+        return resp.json()
+
+    except requests.RequestException as e:
+        raise HTTPException(500, f"Error fetching visualization from R2: {e}")
 
 
 @app.get("/health")
