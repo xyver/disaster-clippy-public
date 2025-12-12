@@ -627,7 +627,7 @@ async def get_welcome():
             from offline_tools.cloud.r2 import get_backups_storage
             storage = get_backups_storage()
             if storage.is_configured():
-                master_content = storage.download_file_content("_master.json")
+                master_content = storage.download_file_content("backups/_master.json")
                 if master_content:
                     master = json.loads(master_content)
                     print("Loaded _master.json from R2")
