@@ -10,7 +10,7 @@ from fastapi import APIRouter, HTTPException, Request, Depends
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, Dict, Any
 from pathlib import Path
 import os
 import json
@@ -1370,7 +1370,12 @@ def pinecone_sync_job(dry_run: bool = True, source_filter: str = None,
         if is_cancelled():
             return {"status": "cancelled"}
 
-        update(40, 100, "Analyzing differences...")
+        # Calculate totals for progress
+        to_push_count = len(diff.to_push) if hasattr(diff, 'to_push') else 0
+        to_update_count = len(diff.to_update) if hasattr(diff, 'to_update') else 0
+        total_vectors = to_push_count + to_update_count
+
+        update(40, 100, f"Found {to_push_count:,} new + {to_update_count:,} updates")
 
         # Check for conflicts
         if diff.conflicts:
@@ -1382,7 +1387,7 @@ def pinecone_sync_job(dry_run: bool = True, source_filter: str = None,
 
         # Nothing to push?
         if not diff.to_push and not diff.to_update:
-            update(100, 100, "Already in sync")
+            update(100, 100, "Already in sync - nothing to push")
             return {
                 "success": True,
                 "status": "success",
@@ -1396,66 +1401,51 @@ def pinecone_sync_job(dry_run: bool = True, source_filter: str = None,
 
         # For dry run, we're done after comparison
         if dry_run:
-            update(100, 100, "Dry run complete")
+            update(100, 100, f"Dry run: {to_push_count:,} to push, {to_update_count:,} to update")
             return {
                 "success": True,
                 "status": "success",
                 "dry_run": True,
                 "pushed": 0,
                 "updated": 0,
-                "to_push": len(diff.to_push) if hasattr(diff, 'to_push') else 0,
-                "to_update": len(diff.to_update) if hasattr(diff, 'to_update') else 0,
-                "message": f"Dry run: {len(diff.to_push)} to push, {len(diff.to_update)} to update"
+                "to_push": to_push_count,
+                "to_update": to_update_count,
+                "message": f"Dry run: {to_push_count:,} to push, {to_update_count:,} to update"
             }
 
         if is_cancelled():
             return {"status": "cancelled"}
 
-        # Do the actual push
-        update(50, 100, "Pushing to Pinecone...")
-        stats = sync.push(diff, dry_run=False, update=True, force=False)
+        # Do the actual push with progress callback
+        update(50, total_vectors, f"Pushing {total_vectors:,} vectors to Pinecone...")
 
-        update(90, 100, "Finalizing...")
+        # Create wrapper to show batch progress
+        def batch_progress(batch_num, total_batches, message):
+            if progress_callback and total_batches > 0:
+                # Map batch progress to 50-90 range
+                pct = 50 + int((batch_num / total_batches) * 40)
+                update(pct, 100, f"Uploading batch {batch_num}/{total_batches} ({total_vectors:,} total)")
 
-        # Auto-trigger visualization regeneration after successful push
-        vis_job_id = None
-        vis_already_running = False
-        if stats.get("pushed", 0) > 0 or stats.get("updated", 0) > 0:
-            try:
-                from .job_manager import get_job_manager
-                from .routes.visualise import generate_and_publish_visualisation_job
+        stats = sync.push(diff, dry_run=False, update=True, force=False, progress_callback=batch_progress)
 
-                manager = get_job_manager()
-                active_jobs = manager.get_active_jobs()
-                running_vis_job = next((job for job in active_jobs if job.get("job_type") == "visualisation"), None)
+        pushed = stats.get("pushed", 0)
+        updated = stats.get("updated", 0)
+        update(90, 100, f"Pushed {pushed:,} + updated {updated:,} vectors")
 
-                if running_vis_job:
-                    vis_job_id = running_vis_job.get("id")
-                    vis_already_running = True
-                    print(f"[PineconeSync] Visualization job already running: {vis_job_id}")
-                else:
-                    vis_job_id = manager.submit(
-                        job_type="visualisation",
-                        source_id="_system",
-                        func=generate_and_publish_visualisation_job
-                    )
-                    print(f"[PineconeSync] Auto-started visualization job: {vis_job_id}")
-            except Exception as vis_err:
-                print(f"[PineconeSync] Error starting visualization: {vis_err}")
-
-        update(100, 100, "Push complete")
+        # Note: Visualization is NOT auto-triggered here.
+        # Use cloud_publish_job for combined sync + visualization.
+        final_msg = f"Complete: {pushed:,} pushed, {updated:,} updated"
+        update(100, 100, final_msg)
 
         return {
             "success": True,
             "status": "success",
             "dry_run": False,
-            "pushed": stats.get("pushed", 0),
-            "updated": stats.get("updated", 0),
+            "pushed": pushed,
+            "updated": updated,
             "skipped": stats.get("skipped", 0),
             "errors": stats.get("errors", 0),
-            "message": "Push complete",
-            "visualization_job_id": vis_job_id,
-            "visualization_already_running": vis_already_running
+            "message": final_msg
         }
 
     except ImportError as e:
@@ -1464,6 +1454,61 @@ def pinecone_sync_job(dry_run: bool = True, source_filter: str = None,
         import traceback
         traceback.print_exc()
         return {"success": False, "error": str(e)}
+
+
+def cloud_publish_job(
+    dry_run: bool = False,
+    source_filter: str = None,
+    progress_callback=None,
+    cancel_checker=None
+) -> Dict[str, Any]:
+    """
+    Combined job: Pinecone sync + Visualization generation.
+
+    Uses the combined job framework to run both operations as a single job
+    with unified progress tracking.
+
+    Args:
+        dry_run: If True, only check what would sync (no visualization)
+        source_filter: Optional source ID to filter sync to
+        progress_callback: Function for progress updates
+        cancel_checker: Function to check for cancellation
+
+    Returns:
+        Dict with combined results from both phases
+    """
+    from .job_manager import JobPhase, run_combined_job
+    from .routes.visualise import generate_and_publish_visualisation_job
+
+    # For dry run, only run sync phase
+    if dry_run:
+        return pinecone_sync_job(
+            dry_run=True,
+            source_filter=source_filter,
+            progress_callback=progress_callback,
+            cancel_checker=cancel_checker
+        )
+
+    # Define phases: Sync (70%) + Visualization (30%)
+    phases = [
+        JobPhase(
+            name="Sync to Pinecone",
+            func=pinecone_sync_job,
+            weight=70,
+            kwargs={"dry_run": False, "source_filter": source_filter}
+        ),
+        JobPhase(
+            name="Generate Visualization",
+            func=generate_and_publish_visualisation_job,
+            weight=30
+        )
+    ]
+
+    return run_combined_job(
+        phases=phases,
+        progress_callback=progress_callback,
+        cancel_checker=cancel_checker
+    )
 
 
 @router.get("/api/pinecone-check-source/{source_id}")
@@ -1613,6 +1658,10 @@ async def pinecone_push(
     Push local ChromaDB changes to Pinecone (runs as background job).
     Uploads new and updated documents from local to remote.
 
+    For actual push (not dry_run), uses cloud_publish_job which combines:
+    - Pinecone sync (70% of progress)
+    - Visualization regeneration (30% of progress)
+
     Returns a job_id to poll for progress.
 
     REQUIRES: VECTOR_DB_MODE=global
@@ -1635,33 +1684,51 @@ async def pinecone_push(
 
         manager = get_job_manager()
 
-        # Check if a pinecone sync job is already running
+        # Check if a related job is already running
         active_jobs = manager.get_active_jobs()
-        existing_job = next((job for job in active_jobs if job.get("job_type") == "pinecone_sync"), None)
+        existing_job = next(
+            (job for job in active_jobs if job.get("job_type") in ["pinecone_sync", "cloud_publish"]),
+            None
+        )
         if existing_job:
             return JSONResponse(
                 status_code=409,
                 content={
-                    "error": "A Pinecone sync job is already running",
+                    "error": f"A {existing_job.get('job_type')} job is already running",
                     "job_id": existing_job.get("id")
                 }
             )
 
         # Submit the background job
-        job_type = "pinecone_sync_dry" if dry_run else "pinecone_sync"
-        job_id = manager.submit(
-            job_type=job_type,
-            source_id="_pinecone",
-            func=pinecone_sync_job,
-            dry_run=dry_run,
-            source_filter=source_filter
-        )
+        # Dry run: just check sync status
+        # Actual push: combined job (sync + visualization)
+        if dry_run:
+            job_type = "pinecone_sync_dry"
+            job_id = manager.submit(
+                job_type=job_type,
+                source_id="_pinecone",
+                func=pinecone_sync_job,
+                dry_run=True,
+                source_filter=source_filter
+            )
+            message = "Dry run job started"
+        else:
+            job_type = "cloud_publish"
+            job_id = manager.submit(
+                job_type=job_type,
+                source_id="_pinecone",
+                func=cloud_publish_job,
+                dry_run=False,
+                source_filter=source_filter
+            )
+            message = "Cloud publish job started (sync + visualization)"
 
         return {
             "status": "started",
             "job_id": job_id,
             "dry_run": dry_run,
-            "message": f"{'Dry run' if dry_run else 'Sync'} job started"
+            "job_type": job_type,
+            "message": message
         }
 
     except ValueError as e:

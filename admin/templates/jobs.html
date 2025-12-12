@@ -48,6 +48,10 @@
         .tag-metadata { background: #5c4a1a; color: #cdb44e; }
         .tag-scan { background: #1a4a5c; color: #4eb4cd; }
         .tag-validate { background: #5c1a3a; color: #cd4e8c; }
+        .tag-pinecone_sync { background: #2a1a5c; color: #8b5cf6; }
+        .tag-pinecone_sync_dry { background: #2a1a5c; color: #a78bfa; }
+        .tag-visualisation { background: #1a5c5c; color: #4ecdb4; }
+        .tag-cloud_publish { background: #1a3a5c; color: #5cb8f6; }
         .job-source { color: #4ecca3; font-weight: 500; }
         .job-message { font-size: 0.8rem; color: #888; margin-top: 0.25rem; }
         .job-actions { display: flex; gap: 0.5rem; align-items: center; }
@@ -117,8 +121,21 @@
             'index': { label: 'Index', desc: 'Creating vector embeddings for search' },
             'metadata': { label: 'Metadata', desc: 'Generating document metadata' },
             'scan': { label: 'Scan', desc: 'Scanning backup files' },
-            'validate': { label: 'Validate', desc: 'Validating source for distribution' }
+            'validate': { label: 'Validate', desc: 'Validating source for distribution' },
+            'pinecone_sync': { label: 'Pinecone', desc: 'Syncing vectors to Pinecone cloud' },
+            'pinecone_sync_dry': { label: 'Pinecone (Dry)', desc: 'Checking what would sync to Pinecone' },
+            'visualisation': { label: 'Visualize', desc: 'Generating 3D knowledge map' },
+            'cloud_publish': { label: 'Cloud Publish', desc: 'Syncing to Pinecone + regenerating visualization' }
         };
+
+        // Special source IDs that should be displayed nicely
+        function formatSourceId(sourceId) {
+            const specialSources = {
+                '_pinecone': 'All Sources',
+                '_system': 'System'
+            };
+            return specialSources[sourceId] || sourceId;
+        }
 
         function getJobTypeTag(jobType) {
             const info = JOB_TYPES[jobType] || { label: jobType, desc: '' };
@@ -140,7 +157,7 @@
                             <div class="job-info">
                                 <div class="job-name">
                                     ${getJobTypeTag(job.job_type)}
-                                    <span class="job-source">${job.source_id}</span>
+                                    <span class="job-source">${formatSourceId(job.source_id)}</span>
                                 </div>
                                 <div class="job-message">${job.message || JOB_TYPES[job.job_type]?.desc || ''}</div>
                                 <div class="job-meta">
@@ -200,7 +217,7 @@
                             <div class="job-info">
                                 <div class="job-name">
                                     ${getJobTypeTag(job.job_type)}
-                                    <span class="job-source">${job.source_id}</span>
+                                    <span class="job-source">${formatSourceId(job.source_id)}</span>
                                 </div>
                                 <div class="job-meta">
                                     ${job.completed_at ? new Date(job.completed_at).toLocaleString() : ''}

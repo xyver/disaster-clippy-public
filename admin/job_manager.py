@@ -721,3 +721,172 @@ def get_job_manager() -> JobManager:
     if _job_manager is None:
         _job_manager = JobManager()
     return _job_manager
+
+
+# =============================================================================
+# COMBINED JOB FRAMEWORK
+# =============================================================================
+
+@dataclass
+class JobPhase:
+    """
+    Defines a phase in a combined job.
+
+    Attributes:
+        name: Display name for this phase (e.g., "Syncing vectors")
+        func: The job function to call. Must accept progress_callback and cancel_checker kwargs.
+        weight: Percentage weight of this phase (0-100). All weights should sum to 100.
+        args: Positional arguments to pass to func
+        kwargs: Keyword arguments to pass to func (progress_callback/cancel_checker added automatically)
+    """
+    name: str
+    func: Callable
+    weight: int = 50  # Default equal weight
+    args: tuple = field(default_factory=tuple)
+    kwargs: Dict[str, Any] = field(default_factory=dict)
+
+
+def run_combined_job(
+    phases: List[JobPhase],
+    progress_callback=None,
+    cancel_checker=None
+) -> Dict[str, Any]:
+    """
+    Run multiple job phases as a single combined job.
+
+    Progress is mapped across all phases based on their weights.
+    Results from all phases are aggregated.
+
+    Args:
+        phases: List of JobPhase objects defining the phases to run
+        progress_callback: Function(current, total, message) for overall progress
+        cancel_checker: Function() returns True if job should cancel
+
+    Returns:
+        Dict with:
+            - success: True if all phases completed successfully
+            - phase_results: List of results from each phase
+            - current_phase: Index of last completed phase (or where it failed)
+            - message: Summary message
+    """
+    if not phases:
+        return {"success": False, "error": "No phases provided"}
+
+    # Normalize weights to sum to 100
+    total_weight = sum(p.weight for p in phases)
+    if total_weight == 0:
+        total_weight = len(phases) * 50  # Default weights
+        for p in phases:
+            p.weight = 50
+
+    def update(current, total, msg):
+        if progress_callback:
+            progress_callback(current, total, msg)
+
+    def is_cancelled():
+        return cancel_checker() if cancel_checker else False
+
+    phase_results = []
+    progress_offset = 0
+
+    for i, phase in enumerate(phases):
+        if is_cancelled():
+            return {
+                "success": False,
+                "status": "cancelled",
+                "current_phase": i,
+                "phase_name": phase.name,
+                "phase_results": phase_results,
+                "message": f"Cancelled during: {phase.name}"
+            }
+
+        # Calculate this phase's progress range
+        phase_progress_range = (phase.weight / total_weight) * 100
+
+        # Create progress callback that maps to overall progress
+        def phase_progress(current, total, msg, _offset=progress_offset, _range=phase_progress_range, _name=phase.name):
+            if progress_callback:
+                if total > 0:
+                    phase_pct = (current / total) * _range
+                else:
+                    phase_pct = 0
+                overall_pct = _offset + phase_pct
+                progress_callback(int(overall_pct), 100, f"[{_name}] {msg}")
+
+        update(int(progress_offset), 100, f"Starting: {phase.name}")
+
+        try:
+            # Prepare kwargs with callbacks
+            run_kwargs = dict(phase.kwargs)
+            run_kwargs['progress_callback'] = phase_progress
+            run_kwargs['cancel_checker'] = cancel_checker
+
+            # Run the phase
+            result = phase.func(*phase.args, **run_kwargs)
+
+            # Convert result to dict if needed
+            result_dict = _result_to_dict(result)
+            phase_results.append({
+                "phase": phase.name,
+                "index": i,
+                "result": result_dict
+            })
+
+            # Check if phase failed
+            if result_dict.get("status") == "cancelled":
+                return {
+                    "success": False,
+                    "status": "cancelled",
+                    "current_phase": i,
+                    "phase_name": phase.name,
+                    "phase_results": phase_results,
+                    "message": f"Cancelled during: {phase.name}"
+                }
+
+            if result_dict.get("success") is False:
+                return {
+                    "success": False,
+                    "current_phase": i,
+                    "phase_name": phase.name,
+                    "phase_results": phase_results,
+                    "error": result_dict.get("error", f"Phase '{phase.name}' failed"),
+                    "message": f"Failed at: {phase.name}"
+                }
+
+        except Exception as e:
+            phase_results.append({
+                "phase": phase.name,
+                "index": i,
+                "error": str(e)
+            })
+            return {
+                "success": False,
+                "current_phase": i,
+                "phase_name": phase.name,
+                "phase_results": phase_results,
+                "error": str(e),
+                "message": f"Error in {phase.name}: {str(e)}"
+            }
+
+        progress_offset += phase_progress_range
+
+    update(100, 100, "All phases complete")
+
+    # Build summary from phase results
+    summary_parts = []
+    for pr in phase_results:
+        result = pr.get("result", {})
+        if "pushed" in result:
+            summary_parts.append(f"{result.get('pushed', 0)} pushed")
+        if "updated" in result:
+            summary_parts.append(f"{result.get('updated', 0)} updated")
+        if "points" in result:
+            summary_parts.append(f"{result.get('points', 0)} points")
+
+    return {
+        "success": True,
+        "status": "success",
+        "phases_completed": len(phases),
+        "phase_results": phase_results,
+        "message": "Complete: " + ", ".join(summary_parts) if summary_parts else "All phases complete"
+    }

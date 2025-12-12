@@ -41,7 +41,53 @@ function toggleEdges() {
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
     loadStatus();
+    initDraggablePanel();
 });
+
+// Make panel draggable
+function initDraggablePanel() {
+    const panel = document.getElementById('controlPanel');
+    const header = panel.querySelector('.panel-header');
+
+    let isDragging = false;
+    let offsetX = 0;
+    let offsetY = 0;
+
+    header.addEventListener('mousedown', (e) => {
+        // Don't drag if clicking the toggle button
+        if (e.target.classList.contains('panel-toggle')) return;
+
+        isDragging = true;
+        offsetX = e.clientX - panel.offsetLeft;
+        offsetY = e.clientY - panel.offsetTop;
+        header.style.cursor = 'grabbing';
+        e.preventDefault();
+    });
+
+    document.addEventListener('mousemove', (e) => {
+        if (!isDragging) return;
+
+        let newX = e.clientX - offsetX;
+        let newY = e.clientY - offsetY;
+
+        // Keep panel within viewport bounds
+        const maxX = window.innerWidth - panel.offsetWidth - 10;
+        const maxY = window.innerHeight - panel.offsetHeight - 10;
+        newX = Math.max(10, Math.min(newX, maxX));
+        newY = Math.max(10, Math.min(newY, maxY));
+
+        panel.style.left = newX + 'px';
+        panel.style.top = newY + 'px';
+    });
+
+    document.addEventListener('mouseup', () => {
+        isDragging = false;
+        header.style.cursor = 'grab';
+    });
+
+    // Set initial cursor
+    header.style.cursor = 'grab';
+}
 
 async function loadStatus() {
     try {
@@ -145,40 +191,6 @@ async function generateVisualisation() {
         alert('Error starting generation: ' + e.message);
         generateBtn.disabled = false;
         generateBtn.textContent = 'Generate Visualization';
-    }
-}
-
-async function publishToProduction() {
-    if (!IS_ADMIN) return;
-
-    if (!confirm('Upload the current visualization to R2 for public viewing?\n\nMake sure you have regenerated it recently.')) {
-        return;
-    }
-
-    const publishBtn = document.getElementById('publishBtn');
-    try {
-        publishBtn.disabled = true;
-        publishBtn.textContent = 'Publishing...';
-
-        const resp = await fetch(API_PREFIX + '/api/visualise/publish', { method: 'POST' });
-        const result = await resp.json();
-
-        if (result.status === 'success') {
-            alert('Successfully published to production!\n\n' + result.point_count.toLocaleString() + ' points, ' + result.file_size_mb + ' MB');
-        } else {
-            alert('Error: ' + (result.message || 'Unknown error'));
-        }
-    } catch (e) {
-        console.error('Error publishing:', e);
-        const errorMsg = e.message || 'Unknown error';
-        if (errorMsg.includes('No local visualization found')) {
-            alert('No visualization to publish. Click "Regenerate Visualization" first.');
-        } else {
-            alert('Error publishing: ' + errorMsg);
-        }
-    } finally {
-        publishBtn.disabled = false;
-        publishBtn.textContent = 'Publish to Production';
     }
 }
 
