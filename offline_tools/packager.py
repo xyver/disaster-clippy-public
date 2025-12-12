@@ -81,6 +81,62 @@ def get_backup_path() -> Path:
 
 
 # =============================================================================
+# FAST JSON HEADER READING - Avoid loading full document dicts
+# =============================================================================
+
+def read_json_header_only(file_path: Path) -> dict:
+    """
+    Read only header fields from a JSON file without loading full documents/vectors.
+
+    This is critical for performance - metadata files can be 50-200MB with 100k docs.
+    This function reads just the first few KB to extract counts.
+
+    Returns dict with: document_count, total_chars, schema_version
+    """
+    import re
+
+    if not file_path or not file_path.exists():
+        return {}
+
+    try:
+        file_size = file_path.stat().st_size
+
+        # Small files (under 10KB) - just load normally
+        if file_size < 10000:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            return {
+                "document_count": data.get("document_count", len(data.get("documents", data.get("vectors", {})))),
+                "total_chars": data.get("total_chars", 0),
+                "schema_version": data.get("schema_version", 1)
+            }
+
+        # Large files - read just the header (first 5KB)
+        with open(file_path, 'r', encoding='utf-8') as f:
+            header_chunk = f.read(5000)
+
+        result = {}
+
+        count_match = re.search(r'"document_count"\s*:\s*(\d+)', header_chunk)
+        if count_match:
+            result["document_count"] = int(count_match.group(1))
+
+        chars_match = re.search(r'"total_chars"\s*:\s*(\d+)', header_chunk)
+        if chars_match:
+            result["total_chars"] = int(chars_match.group(1))
+
+        version_match = re.search(r'"schema_version"\s*:\s*(\d+)', header_chunk)
+        if version_match:
+            result["schema_version"] = int(version_match.group(1))
+
+        return result
+
+    except Exception as e:
+        print(f"[read_json_header_only] Error reading {file_path}: {e}")
+        return {}
+
+
+# =============================================================================
 # BACKUP DETECTION - Unified logic for detecting backup type and status
 # =============================================================================
 
@@ -684,29 +740,21 @@ def sync_master_metadata() -> Dict[str, Any]:
             if not zim_files and not metadata_path.exists():
                 continue  # Not a valid source
 
-        # Get document count
+        # Get document count - use fast header reading (don't load full documents dict)
         doc_count = 0
         total_chars = 0
 
         if metadata_path.exists():
-            try:
-                with open(metadata_path, 'r', encoding='utf-8') as f:
-                    meta = json.load(f)
-                doc_count = meta.get("document_count", len(meta.get("documents", {})))
-                total_chars = meta.get("total_chars", 0)
-            except Exception:
-                pass
+            meta_header = read_json_header_only(metadata_path)
+            doc_count = meta_header.get("document_count", 0)
+            total_chars = meta_header.get("total_chars", 0)
 
         # Fallback: check vectors file for count
         if doc_count == 0 and vectors_path.exists():
-            try:
-                with open(vectors_path, 'r', encoding='utf-8') as f:
-                    vec = json.load(f)
-                doc_count = vec.get("document_count", len(vec.get("vectors", {})))
-            except Exception:
-                pass
+            vec_header = read_json_header_only(vectors_path)
+            doc_count = vec_header.get("document_count", 0)
 
-        # Get tags from manifest
+        # Get tags from manifest (manifests are small, safe to load fully)
         tags = []
         if manifest_path.exists():
             try:

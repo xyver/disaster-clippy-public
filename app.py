@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 from typing import List, Optional
 from datetime import datetime
+from collections import Counter
 
 from fastapi import FastAPI, Request, Header, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
@@ -388,8 +389,7 @@ async def get_site_suggestions():
 async def public_visualise_status():
     """
     Get visualization status for public view (fetches from R2).
-    Returns basic metadata without fetching the full file.
-    Uses S3 API (same as source pack downloads).
+    Returns metadata from the published visualization file.
     """
     try:
         from offline_tools.cloud.r2 import get_backups_storage
@@ -402,18 +402,29 @@ async def public_visualise_status():
             }
 
         remote_key = "published/visualisation.json"
-
-        # Check if file exists using S3 API
         client = storage._get_client()
 
         try:
-            # HEAD request to check existence
-            client.head_object(
+            # Fetch the file to get metadata
+            response = client.get_object(
                 Bucket=storage.config.bucket_name,
                 Key=remote_key
             )
+            content = response["Body"].read()
+            data = json.loads(content)
+
+            # Return status with metadata from the file
             return {
-                "has_data": True
+                "has_data": True,
+                "generated_at": data.get("generated_at"),
+                "point_count": data.get("point_count", 0),
+                "edge_count": data.get("edge_count", 0),
+                "sources": data.get("sources", []),
+                "source_counts": data.get("source_counts", {}),
+                "variance_explained": data.get("total_variance", 0),
+                "job_active": False,
+                "job_progress": 0,
+                "job_message": ""
             }
         except client.exceptions.NoSuchKey:
             return {
@@ -473,6 +484,78 @@ async def public_visualise_data():
         raise HTTPException(500, f"Error fetching visualization from R2: {e}")
 
 
+@app.get("/api/visualise/urls/{source_id}")
+async def public_visualise_urls(source_id: str):
+    """
+    Fetch per-source URL data from R2 for public viewing.
+    Loaded on-demand when user clicks a point from this source.
+    """
+    try:
+        from offline_tools.cloud.r2 import get_backups_storage
+        storage = get_backups_storage()
+
+        if not storage.is_configured():
+            return {"source": source_id, "urls": {}}
+
+        # Sanitize source_id for filename
+        safe_source = source_id.replace("/", "_").replace("\\", "_")
+        remote_key = f"published/_visualisation_urls_{safe_source}.json"
+        client = storage._get_client()
+
+        try:
+            response = client.get_object(
+                Bucket=storage.config.bucket_name,
+                Key=remote_key
+            )
+            content = response["Body"].read()
+            data = json.loads(content)
+            return data
+        except client.exceptions.NoSuchKey:
+            # Source has no URLs - return empty (not an error)
+            return {"source": source_id, "urls": {}}
+        except Exception as e:
+            return {"source": source_id, "urls": {}, "error": str(e)}
+
+    except Exception as e:
+        return {"source": source_id, "urls": {}, "error": str(e)}
+
+
+@app.get("/api/visualise/edges/{source_id}")
+async def public_visualise_edges(source_id: str):
+    """
+    Fetch per-source edge data from R2 for public viewing.
+    Loaded on-demand when user enables link lines for this source.
+    """
+    try:
+        from offline_tools.cloud.r2 import get_backups_storage
+        storage = get_backups_storage()
+
+        if not storage.is_configured():
+            return {"source": source_id, "edges": [], "edge_count": 0}
+
+        # Sanitize source_id for filename
+        safe_source = source_id.replace("/", "_").replace("\\", "_")
+        remote_key = f"published/_visualisation_edges_{safe_source}.json"
+        client = storage._get_client()
+
+        try:
+            response = client.get_object(
+                Bucket=storage.config.bucket_name,
+                Key=remote_key
+            )
+            content = response["Body"].read()
+            data = json.loads(content)
+            return data
+        except client.exceptions.NoSuchKey:
+            # Source has no edges - return empty (not an error)
+            return {"source": source_id, "edges": [], "edge_count": 0}
+        except Exception as e:
+            return {"source": source_id, "edges": [], "edge_count": 0, "error": str(e)}
+
+    except Exception as e:
+        return {"source": source_id, "edges": [], "edge_count": 0, "error": str(e)}
+
+
 @app.get("/health")
 async def health_check():
     """Health check endpoint - lightweight, no DB access"""
@@ -516,7 +599,7 @@ async def get_welcome():
 
     total_docs = 0
     sources = {}
-    topics_set = set()
+    topics_counter = Counter()  # Track tag frequency for better display order
     last_updated = None
 
     if backup_folder:
@@ -534,7 +617,7 @@ async def get_welcome():
                     if isinstance(source_info, dict):
                         source_topics = source_info.get("topics", [])
                         if source_topics:
-                            topics_set.update(source_topics)
+                            topics_counter.update(source_topics)
             except Exception as e:
                 print(f"Warning: Could not load _master.json: {e}")
 
@@ -556,7 +639,7 @@ async def get_welcome():
         }
 
     # If no topics from _master.json, extract from source manifests
-    if not topics_set and backup_folder:
+    if not topics_counter and backup_folder:
         backup_path = Path(backup_folder)
         for source_id in sources.keys():
             manifest_file = backup_path / source_id / get_manifest_file()
@@ -566,7 +649,7 @@ async def get_welcome():
                         manifest = json.load(f)
                     tags = manifest.get("tags", [])
                     if tags:
-                        topics_set.update(tags)
+                        topics_counter.update(tags)
                 except Exception:
                     pass
 
@@ -580,11 +663,13 @@ async def get_welcome():
     }
 
     topics_list = []
-    for tag in sorted(topics_set):
+    # Sort by frequency (most common first) instead of alphabetically
+    for tag, count in topics_counter.most_common():
         display = topic_display.get(tag.lower(), tag.replace("-", " ").replace("_", " ").title())
         if display not in topics_list:
             topics_list.append(display)
-    topics_list = topics_list[:6]  # Limit to 6
+        if len(topics_list) >= 6:  # Limit to 6
+            break
 
     # Build dynamic welcome message
     if topics_list:

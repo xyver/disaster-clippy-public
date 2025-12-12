@@ -5,12 +5,13 @@ Endpoints for generating and viewing 3D visualization of document embeddings.
 Uses PCA to reduce 1536-dim vectors to 3D for Plotly scatter plot.
 """
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Response
 from fastapi.responses import JSONResponse
 from typing import Optional, Dict, Any, List
 from pathlib import Path
 from datetime import datetime
 import json
+import gzip
 import numpy as np
 
 router = APIRouter(prefix="/api/visualise", tags=["Visualization"])
@@ -22,13 +23,46 @@ def get_local_config():
     return _get_config()
 
 
-def get_visualisation_path() -> Optional[Path]:
-    """Get the path for the visualization JSON file."""
+def get_visualisation_folder() -> Optional[Path]:
+    """Get the folder for visualization files."""
     config = get_local_config()
     backup_folder = config.get_backup_folder()
     if not backup_folder:
         return None
-    return Path(backup_folder) / "_visualisation.json"
+    vis_folder = Path(backup_folder) / "visualisation"
+    vis_folder.mkdir(parents=True, exist_ok=True)
+
+    # Migrate old files from backup root to visualisation folder
+    backup_path = Path(backup_folder)
+    old_main = backup_path / "_visualisation.json"
+    if old_main.exists():
+        new_main = vis_folder / "_visualisation.json"
+        if not new_main.exists():
+            old_main.rename(new_main)
+            print(f"[Visualisation] Migrated _visualisation.json to visualisation folder")
+
+    # Migrate per-source files
+    for old_file in backup_path.glob("_visualisation_urls_*.json"):
+        new_file = vis_folder / old_file.name
+        if not new_file.exists():
+            old_file.rename(new_file)
+            print(f"[Visualisation] Migrated {old_file.name} to visualisation folder")
+
+    for old_file in backup_path.glob("_visualisation_edges_*.json"):
+        new_file = vis_folder / old_file.name
+        if not new_file.exists():
+            old_file.rename(new_file)
+            print(f"[Visualisation] Migrated {old_file.name} to visualisation folder")
+
+    return vis_folder
+
+
+def get_visualisation_path() -> Optional[Path]:
+    """Get the path for the main visualization JSON file."""
+    vis_folder = get_visualisation_folder()
+    if not vis_folder:
+        return None
+    return vis_folder / "_visualisation.json"
 
 
 def get_job_manager():
@@ -55,9 +89,10 @@ def build_link_edges(points: List[Dict], sources: set, progress_callback=None) -
     backup_path = Path(backup_folder)
 
     # Build URL-to-point-index mapping for fast lookup
+    # Note: uses _url and _local_url fields (temporary, stripped before save)
     url_to_idx = {}
     for idx, point in enumerate(points):
-        url = point.get("url", "")
+        url = point.get("_url", "") or point.get("url", "")
         if url:
             # Store both with and without leading slash for matching
             url_to_idx[url] = idx
@@ -72,7 +107,7 @@ def build_link_edges(points: List[Dict], sources: set, progress_callback=None) -
     # Also build mapping with local_url for ZIM sources
     local_url_to_idx = {}
     for idx, point in enumerate(points):
-        local_url = point.get("local_url", "")
+        local_url = point.get("_local_url", "") or point.get("local_url", "")
         if local_url:
             local_url_to_idx[local_url] = idx
             if local_url.startswith("/"):
@@ -255,34 +290,53 @@ def generate_visualisation_job(
         if progress_callback:
             progress_callback(0, 100, "Connecting to ChromaDB...")
 
-        # Get vector store
-        store = get_vector_store(mode="local")
+        # Get vector store in read_only mode to skip embedding model loading
+        store = get_vector_store(mode="local", read_only=True)
         total_docs = store.collection.count()
 
         if total_docs == 0:
             return {"success": False, "error": "No documents in ChromaDB"}
 
         if progress_callback:
-            progress_callback(5, 100, f"Found {total_docs} documents, fetching embeddings...")
+            progress_callback(5, 100, f"Found {total_docs:,} documents, fetching embeddings...")
 
-        # Check for cancellation
-        if cancel_checker and cancel_checker():
-            return {"status": "cancelled"}
+        # Fetch embeddings in batches to show progress (ChromaDB get() is blocking)
+        BATCH_SIZE = 10000
+        all_ids = []
+        all_embeddings = []
+        all_metadatas = []
 
-        # Fetch all documents with embeddings
-        result = store.collection.get(
-            include=["embeddings", "metadatas"]
-        )
+        for offset in range(0, total_docs, BATCH_SIZE):
+            # Check for cancellation
+            if cancel_checker and cancel_checker():
+                return {"status": "cancelled"}
 
-        ids = result.get("ids", [])
-        embeddings = result.get("embeddings", [])
-        metadatas = result.get("metadatas", [])
+            batch_num = (offset // BATCH_SIZE) + 1
+            total_batches = (total_docs + BATCH_SIZE - 1) // BATCH_SIZE
+            pct = 5 + int((offset / total_docs) * 15)  # 5% to 20%
 
-        if embeddings is None or len(embeddings) == 0:
+            if progress_callback:
+                progress_callback(pct, 100, f"Fetching batch {batch_num}/{total_batches} ({offset:,}/{total_docs:,})...")
+
+            result = store.collection.get(
+                include=["embeddings", "metadatas"],
+                limit=BATCH_SIZE,
+                offset=offset
+            )
+
+            all_ids.extend(result.get("ids", []))
+            all_embeddings.extend(result.get("embeddings", []))
+            all_metadatas.extend(result.get("metadatas", []))
+
+        ids = all_ids
+        embeddings = all_embeddings
+        metadatas = all_metadatas
+
+        if not embeddings:
             return {"success": False, "error": "No embeddings found in ChromaDB"}
 
         if progress_callback:
-            progress_callback(20, 100, f"Loaded {len(embeddings)} embeddings, running PCA...")
+            progress_callback(20, 100, f"Loaded {len(embeddings):,} embeddings, running PCA...")
 
         # Check for cancellation
         if cancel_checker and cancel_checker():
@@ -307,7 +361,12 @@ def generate_visualisation_job(
             return {"status": "cancelled"}
 
         # Build points list
+        # OPTIMIZATION: Split into per-source files for lazy loading
+        # - Core: x,y,z (3 decimals), source, truncated title - always loaded
+        # - URLs: per-source files, loaded on-demand when clicking points from that source
+        # - Edges: per-source files, loaded when enabling links for that source
         points = []
+        urls_by_source = {}  # {source_id: {point_index: url}}
         sources_set = set()
 
         for i, doc_id in enumerate(ids):
@@ -315,30 +374,34 @@ def generate_visualisation_job(
             source = metadata.get("source", "unknown")
             sources_set.add(source)
 
-            # Parse categories if JSON string
-            categories = metadata.get("categories", [])
-            if isinstance(categories, str):
-                try:
-                    categories = json.loads(categories)
-                except:
-                    categories = []
+            # Get URL - prefer online URL, fall back to local_url
+            url = metadata.get("url", "") or metadata.get("local_url", "")
 
-            # Prefer url over local_url for link matching
-            url = metadata.get("url", "")
-            local_url = metadata.get("local_url", "")
+            # Truncate title to save space (max 80 chars)
+            title = metadata.get("title", "Untitled")
+            if len(title) > 80:
+                title = title[:77] + "..."
 
+            # Compact point format - coordinates rounded to 3 decimal places
+            # Only essential fields for rendering
             point = {
-                "x": float(coords_3d[i][0]),
-                "y": float(coords_3d[i][1]),
-                "z": float(coords_3d[i][2]),
+                "x": round(float(coords_3d[i][0]), 3),
+                "y": round(float(coords_3d[i][1]), 3),
+                "z": round(float(coords_3d[i][2]), 3),
                 "id": doc_id,
-                "title": metadata.get("title", "Untitled"),
+                "title": title,
                 "source": source,
-                "doc_type": metadata.get("doc_type", "article"),
-                "url": url if url else local_url,  # Use online URL for display and linking
-                "local_url": local_url
+                # Keep url and local_url for edge building (will be stripped before save)
+                "_url": url,
+                "_local_url": metadata.get("local_url", "")
             }
             points.append(point)
+
+            # Store URL in per-source lookup (only if exists)
+            if url:
+                if source not in urls_by_source:
+                    urls_by_source[source] = {}
+                urls_by_source[source][i] = url
 
             # Progress update every 1000 docs
             if i > 0 and i % 1000 == 0:
@@ -364,9 +427,31 @@ def generate_visualisation_job(
         if progress_callback:
             progress_callback(95, 100, "Saving visualization data...")
 
-        # Build output structure
-        output = {
-            "generated_at": datetime.now().isoformat(),
+        # Group edges by source (based on 'from' point's source)
+        edges_by_source = {}
+        for edge in edges:
+            from_idx = edge["from"]
+            if from_idx < len(points):
+                source = points[from_idx]["source"]
+                if source not in edges_by_source:
+                    edges_by_source[source] = []
+                edges_by_source[source].append(edge)
+
+        # Strip temporary URL fields from points (used only for edge building)
+        for point in points:
+            point.pop("_url", None)
+            point.pop("_local_url", None)
+
+        # PER-SOURCE FILE STRUCTURE:
+        # - Core: _visualisation.json (always loaded)
+        # - URLs: _visualisation_urls_{source_id}.json (per source, loaded on click)
+        # - Edges: _visualisation_edges_{source_id}.json (per source, loaded on toggle)
+
+        generated_at = datetime.now().isoformat()
+
+        # File 1: Core visualization data (points without URLs/edges)
+        core_output = {
+            "generated_at": generated_at,
             "algorithm": "pca",
             "point_count": len(points),
             "edge_count": len(edges),
@@ -374,21 +459,57 @@ def generate_visualisation_job(
             "source_counts": source_counts,
             "variance_explained": variance_explained,
             "total_variance": total_variance,
-            "points": points,
-            "edges": edges
+            "points": points
+            # Note: URLs and edges loaded separately per-source
         }
 
-        # Save to file using atomic write (temp file + rename)
-        # This prevents corruption if cancelled or interrupted during write
+        # Save core file (atomic write)
         temp_path = output_path.with_suffix('.tmp')
         with open(temp_path, 'w', encoding='utf-8') as f:
-            json.dump(output, f)
-
-        # Atomic rename - if this succeeds, file is valid
+            json.dump(core_output, f, separators=(',', ':'))  # Compact JSON
         temp_path.replace(output_path)
+        core_size_mb = output_path.stat().st_size / (1024 * 1024)
 
-        # Calculate file size
-        file_size_mb = output_path.stat().st_size / (1024 * 1024)
+        # Save per-source URL files
+        urls_total_size = 0
+        for source_id, source_urls in urls_by_source.items():
+            urls_output = {
+                "generated_at": generated_at,
+                "source": source_id,
+                "urls": source_urls  # {point_index: url}
+            }
+            # Sanitize source_id for filename (replace problematic chars)
+            safe_source = source_id.replace("/", "_").replace("\\", "_")
+            urls_path = output_path.parent / f"_visualisation_urls_{safe_source}.json"
+            temp_path = urls_path.with_suffix('.tmp')
+            with open(temp_path, 'w', encoding='utf-8') as f:
+                json.dump(urls_output, f, separators=(',', ':'))
+            temp_path.replace(urls_path)
+            urls_total_size += urls_path.stat().st_size
+
+        # Save per-source edge files
+        edges_total_size = 0
+        for source_id, source_edges in edges_by_source.items():
+            edges_output = {
+                "generated_at": generated_at,
+                "source": source_id,
+                "edge_count": len(source_edges),
+                "edges": source_edges
+            }
+            safe_source = source_id.replace("/", "_").replace("\\", "_")
+            edges_path = output_path.parent / f"_visualisation_edges_{safe_source}.json"
+            temp_path = edges_path.with_suffix('.tmp')
+            with open(temp_path, 'w', encoding='utf-8') as f:
+                json.dump(edges_output, f, separators=(',', ':'))
+            temp_path.replace(edges_path)
+            edges_total_size += edges_path.stat().st_size
+
+        # Calculate total file sizes
+        urls_size_mb = urls_total_size / (1024 * 1024)
+        edges_size_mb = edges_total_size / (1024 * 1024)
+        total_size_mb = core_size_mb + urls_size_mb + edges_size_mb
+
+        print(f"[Visualisation] Saved: core={core_size_mb:.1f}MB, urls={urls_size_mb:.1f}MB ({len(urls_by_source)} files), edges={edges_size_mb:.1f}MB ({len(edges_by_source)} files)")
 
         if progress_callback:
             progress_callback(100, 100, "Visualization complete!")
@@ -397,7 +518,7 @@ def generate_visualisation_job(
             "success": True,
             "point_count": len(points),
             "source_count": len(sources_set),
-            "file_size_mb": round(file_size_mb, 2),
+            "file_size_mb": round(total_size_mb, 2),
             "variance_explained": total_variance
         }
 
@@ -465,16 +586,37 @@ def generate_and_publish_visualisation_job(
             result["publish"] = {"published": False, "reason": "Visualization file not found"}
             return result
 
-        r2_key = "published/visualisation.json"
-        success = storage.upload_file(str(vis_path), r2_key)
+        # Build list of files: core + all per-source files
+        backup_folder = vis_path.parent
+        files_to_upload = [(vis_path, "published/visualisation.json")]
 
-        if success:
+        # Find all per-source URL files
+        for urls_file in backup_folder.glob("_visualisation_urls_*.json"):
+            r2_key = f"published/{urls_file.name}"
+            files_to_upload.append((urls_file, r2_key))
+
+        # Find all per-source edge files
+        for edges_file in backup_folder.glob("_visualisation_edges_*.json"):
+            r2_key = f"published/{edges_file.name}"
+            files_to_upload.append((edges_file, r2_key))
+
+        uploaded_files = []
+        for local_path, r2_key in files_to_upload:
+            if local_path.exists():
+                success = storage.upload_file(str(local_path), r2_key)
+                if success:
+                    uploaded_files.append(r2_key)
+                    print(f"[Visualisation] Published {r2_key} to R2")
+                else:
+                    print(f"[Visualisation] Failed to upload {r2_key}")
+
+        if uploaded_files:
             file_size_mb = result.get("file_size_mb", 0)
             point_count = result.get("point_count", 0)
-            print(f"[Visualisation] Published to R2: {r2_key} ({file_size_mb:.2f} MB, {point_count} points)")
-            result["publish"] = {"published": True, "r2_key": r2_key}
+            print(f"[Visualisation] Published {len(uploaded_files)} files to R2 ({file_size_mb:.2f} MB, {point_count} points)")
+            result["publish"] = {"published": True, "files": uploaded_files}
         else:
-            print("[Visualisation] Failed to upload to R2")
+            print("[Visualisation] Failed to upload any files to R2")
             result["publish"] = {"published": False, "reason": "Upload failed"}
 
         if progress_callback:
@@ -584,6 +726,62 @@ async def get_visualisation_data(
         raise HTTPException(500, f"Error loading visualization data: {e}")
 
 
+@router.get("/urls/{source_id}")
+async def get_visualisation_urls(source_id: str):
+    """
+    Get URL lookup data for a specific source.
+
+    Loaded on-demand when user clicks a point from this source.
+    Returns: {source: source_id, urls: {point_index: url, ...}}
+    """
+    vis_folder = get_visualisation_folder()
+    if not vis_folder:
+        raise HTTPException(404, "No backup folder configured")
+
+    # Sanitize source_id for filename
+    safe_source = source_id.replace("/", "_").replace("\\", "_")
+    urls_path = vis_folder / f"_visualisation_urls_{safe_source}.json"
+
+    if not urls_path.exists():
+        # Return empty data if source has no URLs (not an error)
+        return {"source": source_id, "urls": {}}
+
+    try:
+        with open(urls_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        return data
+    except Exception as e:
+        raise HTTPException(500, f"Error loading URL data: {e}")
+
+
+@router.get("/edges/{source_id}")
+async def get_visualisation_edges(source_id: str):
+    """
+    Get edge/connection data for a specific source.
+
+    Loaded on-demand when user enables connection lines for this source.
+    Returns: {source: source_id, edges: [{from: idx, to: idx}, ...], edge_count: N}
+    """
+    vis_folder = get_visualisation_folder()
+    if not vis_folder:
+        raise HTTPException(404, "No backup folder configured")
+
+    # Sanitize source_id for filename
+    safe_source = source_id.replace("/", "_").replace("\\", "_")
+    edges_path = vis_folder / f"_visualisation_edges_{safe_source}.json"
+
+    if not edges_path.exists():
+        # Return empty data if source has no edges (not an error)
+        return {"source": source_id, "edges": [], "edge_count": 0}
+
+    try:
+        with open(edges_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        return data
+    except Exception as e:
+        raise HTTPException(500, f"Error loading edge data: {e}")
+
+
 @router.post("/generate")
 async def generate_visualisation():
     """
@@ -629,14 +827,28 @@ async def generate_visualisation():
 
 @router.delete("/data")
 async def delete_visualisation():
-    """Delete the visualization data file."""
+    """Delete the visualization data file and all per-source files."""
+    vis_folder = get_visualisation_folder()
     vis_path = get_visualisation_path()
     if not vis_path or not vis_path.exists():
         return {"status": "not_found", "message": "No visualization data to delete"}
 
     try:
+        deleted_count = 0
+        # Delete main file
         vis_path.unlink()
-        return {"status": "deleted", "message": "Visualization data deleted"}
+        deleted_count += 1
+
+        # Delete all per-source URL and edge files
+        if vis_folder:
+            for f in vis_folder.glob("_visualisation_urls_*.json"):
+                f.unlink()
+                deleted_count += 1
+            for f in vis_folder.glob("_visualisation_edges_*.json"):
+                f.unlink()
+                deleted_count += 1
+
+        return {"status": "deleted", "message": f"Deleted {deleted_count} visualization files"}
     except Exception as e:
         raise HTTPException(500, f"Error deleting visualization: {e}")
 
@@ -644,25 +856,49 @@ async def delete_visualisation():
 @router.post("/publish")
 async def publish_to_r2():
     """
-    Publish existing visualization to R2 for public access.
+    Publish existing visualization files to R2 for public access.
 
-    Uploads the current local visualization file to R2.
+    Uploads core file plus all per-source URL and edge files.
     Does NOT regenerate - use "Regenerate Visualization" button first if needed.
     """
     from offline_tools.cloud.r2 import get_r2_storage
+    import glob
 
     # Check if local visualization exists
     vis_path = get_visualisation_path()
     if not vis_path or not vis_path.exists():
         raise HTTPException(400, "No local visualization found. Generate one first using 'Regenerate Visualization'.")
 
+    backup_folder = vis_path.parent
+
+    # Build list of files to upload: core + all per-source files
+    files_to_upload = [(vis_path, "published/visualisation.json")]
+
+    # Find all per-source URL files
+    for urls_file in backup_folder.glob("_visualisation_urls_*.json"):
+        r2_key = f"published/{urls_file.name}"
+        files_to_upload.append((urls_file, r2_key))
+
+    # Find all per-source edge files
+    for edges_file in backup_folder.glob("_visualisation_edges_*.json"):
+        r2_key = f"published/{edges_file.name}"
+        files_to_upload.append((edges_file, r2_key))
+
     try:
-        # Load local file to get stats
+        # Load core file to get stats
         with open(vis_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
 
         point_count = data.get("point_count", 0)
-        file_size_mb = round(vis_path.stat().st_size / (1024 * 1024), 2)
+        edge_count = data.get("edge_count", 0)
+        source_count = len(data.get("sources", []))
+
+        # Calculate total file size
+        total_size_mb = 0
+        for local_path, _ in files_to_upload:
+            if local_path.exists():
+                total_size_mb += local_path.stat().st_size / (1024 * 1024)
+        total_size_mb = round(total_size_mb, 2)
 
         # Get R2 storage
         storage = get_r2_storage()
@@ -675,21 +911,25 @@ async def publish_to_r2():
         if not conn_status["connected"]:
             raise HTTPException(500, f"R2 connection failed: {conn_status.get('error', 'Unknown error')}")
 
-        # Upload to R2
-        r2_key = "published/visualisation.json"
-        success = storage.upload_file(str(vis_path), r2_key)
+        # Upload all files to R2
+        uploaded_files = []
+        for local_path, r2_key in files_to_upload:
+            if local_path.exists():
+                success = storage.upload_file(str(local_path), r2_key)
+                if not success:
+                    raise Exception(f"Upload failed for {r2_key}")
+                uploaded_files.append(r2_key)
+                print(f"Published {r2_key} to R2")
 
-        if not success:
-            raise Exception("Upload failed")
-
-        print(f"Published {r2_key} to R2 ({file_size_mb} MB, {point_count} points)")
+        print(f"Published visualization to R2 ({total_size_mb} MB total, {len(uploaded_files)} files, {point_count} points, {edge_count} edges)")
 
         return {
             "status": "success",
-            "message": "Visualization published to R2",
-            "r2_key": r2_key,
+            "message": f"Visualization published to R2 ({len(uploaded_files)} files for {source_count} sources)",
+            "files": uploaded_files,
             "point_count": point_count,
-            "file_size_mb": file_size_mb
+            "edge_count": edge_count,
+            "file_size_mb": total_size_mb
         }
 
     except HTTPException:

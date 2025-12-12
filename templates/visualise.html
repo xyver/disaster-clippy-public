@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Knowledge Map - Disaster Clippy</title>
+    <link rel="icon" type="image/png" href="/static/paperclip.png">
+    <link rel="stylesheet" href="/static/user-app.css">
+    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+    <style>
+        /* Full-screen layout */
+        body {
+            overflow: hidden;
+        }
+        .vis-fullscreen {
+            position: fixed;
+            top: 120px; /* Below header */
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: #1a1a2e;
+        }
+        #plotContainer {
+            width: 100%;
+            height: 100%;
+        }
+
+        /* Floating control panel */
+        .floating-panel {
+            position: fixed;
+            top: 140px;
+            left: 20px;
+            width: 280px;
+            max-height: 70vh;
+            background: rgba(22, 33, 62, 0.95);
+            border: 1px solid #0f3460;
+            border-radius: 8px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+            z-index: 100;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        .panel-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.75rem 1rem;
+            background: #0f3460;
+            cursor: move;
+        }
+        .panel-header h3 {
+            margin: 0;
+            font-size: 0.9rem;
+            color: #4ecca3;
+        }
+        .panel-toggle {
+            background: none;
+            border: none;
+            color: #888;
+            cursor: pointer;
+            font-size: 1.2rem;
+            padding: 0;
+            line-height: 1;
+        }
+        .panel-toggle:hover {
+            color: #fff;
+        }
+        .panel-content {
+            padding: 1rem;
+            overflow-y: auto;
+            flex: 1;
+        }
+        .panel-content.collapsed {
+            display: none;
+        }
+        .panel-section {
+            margin-bottom: 1rem;
+        }
+        .panel-section:last-child {
+            margin-bottom: 0;
+        }
+        .panel-section h4 {
+            margin: 0 0 0.5rem 0;
+            font-size: 0.8rem;
+            color: #888;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        /* Info rows */
+        .info-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 0.25rem 0;
+            font-size: 0.8rem;
+        }
+        .info-label {
+            color: #888;
+        }
+        .info-value {
+            color: #fff;
+        }
+
+        /* Source filters */
+        .source-filters {
+            max-height: 40vh;
+            overflow-y: auto;
+        }
+        .filter-actions {
+            display: flex;
+            gap: 0.5rem;
+            margin-bottom: 0.5rem;
+        }
+        .filter-actions button {
+            flex: 1;
+            padding: 0.3rem;
+            font-size: 0.7rem;
+            background: #2a2a4a;
+            border: none;
+            border-radius: 4px;
+            color: #ccc;
+            cursor: pointer;
+        }
+        .filter-actions button:hover {
+            background: #3a3a5a;
+        }
+        .source-item {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.3rem 0;
+            cursor: pointer;
+        }
+        .source-item:hover {
+            background: rgba(255,255,255,0.05);
+        }
+        .source-item input[type="checkbox"] {
+            cursor: pointer;
+        }
+        .source-item label {
+            flex: 1;
+            cursor: pointer;
+            font-size: 0.8rem;
+        }
+        .source-count {
+            color: #666;
+            font-size: 0.75rem;
+        }
+
+        /* Empty state */
+        .empty-state {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            color: #666;
+            text-align: center;
+            padding: 2rem;
+        }
+        .empty-state h2 {
+            margin: 0 0 0.5rem 0;
+            color: #888;
+        }
+        .empty-state p {
+            margin: 0 0 1rem 0;
+        }
+
+        /* Loading overlay */
+        .loading-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(26, 26, 46, 0.9);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 10;
+        }
+        .loading-overlay.hidden {
+            display: none;
+        }
+        .spinner {
+            width: 40px;
+            height: 40px;
+            border: 3px solid #2a2a4a;
+            border-top-color: #4a9eff;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        .loading-text {
+            margin-top: 1rem;
+            color: #888;
+        }
+
+        /* Point count overlay */
+        .point-count-overlay {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            background: rgba(22, 33, 62, 0.9);
+            border: 1px solid #0f3460;
+            border-radius: 6px;
+            padding: 0.5rem 1rem;
+            font-size: 0.85rem;
+            color: #4ecca3;
+            z-index: 100;
+        }
+
+        /* Document popup */
+        .doc-popup {
+            position: fixed;
+            background: rgba(22, 33, 62, 0.98);
+            border: 1px solid #4ecca3;
+            border-radius: 8px;
+            padding: 1rem;
+            max-width: 350px;
+            z-index: 200;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+        }
+        .doc-popup.hidden {
+            display: none;
+        }
+        .doc-popup-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 0.5rem;
+            margin-bottom: 0.75rem;
+        }
+        .doc-popup-title {
+            color: #4ecca3;
+            font-weight: 600;
+            font-size: 0.95rem;
+            line-height: 1.3;
+            word-break: break-word;
+        }
+        .doc-popup-close {
+            background: none;
+            border: none;
+            color: #888;
+            cursor: pointer;
+            font-size: 1.2rem;
+            padding: 0;
+            line-height: 1;
+            flex-shrink: 0;
+        }
+        .doc-popup-close:hover {
+            color: #fff;
+        }
+        .doc-popup-meta {
+            font-size: 0.8rem;
+            color: #888;
+            margin-bottom: 0.75rem;
+        }
+        .doc-popup-link {
+            display: inline-block;
+            background: #4a9eff;
+            color: #fff;
+            padding: 0.5rem 1rem;
+            border-radius: 4px;
+            text-decoration: none;
+            font-size: 0.85rem;
+            transition: background 0.2s;
+        }
+        .doc-popup-link:hover {
+            background: #3a8eef;
+        }
+    </style>
+</head>
+<body>
+    <!-- Same header as index.html -->
+    <header>
+        <h1>Disaster Clippy</h1>
+        <p>Conversational search for DIY guides and humanitarian resources</p>
+        <p style="margin-top: 0.5rem;">
+            <a href="https://github.com/xyver/disaster-clippy-public#readme" target="_blank" style="color: #4ecca3; text-decoration: none;">About this project</a>
+            | <a href="/" style="color: #4ecca3; text-decoration: none;">Chat</a>
+            | <a href="/suggest" style="color: #4ecca3; text-decoration: none;">Suggest a site</a>
+            | <a href="/visualise" style="color: #e94560; text-decoration: none;">Visualize</a>
+            <span id="adminLink" style="display: none;"> | <a href="/useradmin/" style="color: #4ecca3; text-decoration: none;">Local Settings</a></span>
+        </p>
+    </header>
+
+    <!-- Full-screen 3D Plot -->
+    <div class="vis-fullscreen">
+        <div id="plotContainer">
+            <div class="empty-state" id="emptyState">
+                <h2>Knowledge Map</h2>
+                <p>3D visualization of document embeddings</p>
+                <p style="font-size: 0.85rem; color: #555;">Loading visualization data...</p>
+            </div>
+        </div>
+        <div class="loading-overlay hidden" id="loadingOverlay">
+            <div class="spinner"></div>
+            <div class="loading-text" id="loadingText">Loading visualization...</div>
+        </div>
+    </div>
+
+    <!-- Floating Control Panel -->
+    <div class="floating-panel" id="controlPanel">
+        <div class="panel-header">
+            <h3>Controls</h3>
+            <button class="panel-toggle" id="panelToggle" onclick="togglePanel()">-</button>
+        </div>
+        <div class="panel-content" id="panelContent">
+            <!-- About -->
+            <div class="panel-section">
+                <h4>About</h4>
+                <p style="font-size: 0.8rem; line-height: 1.4; color: #aaa; margin-bottom: 0.75rem;">
+                    This 3D map visualizes document relationships based on semantic similarity. Each point represents a document, colored by source. Clusters indicate related content.
+                </p>
+            </div>
+
+            <!-- Info -->
+            <div class="panel-section">
+                <h4>Info</h4>
+                <div class="info-row">
+                    <span class="info-label">Status</span>
+                    <span class="info-value" id="statusValue">Loading...</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Points</span>
+                    <span class="info-value" id="pointsValue">-</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Sources</span>
+                    <span class="info-value" id="sourcesValue">-</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Variance</span>
+                    <span class="info-value" id="varianceValue">-</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Generated</span>
+                    <span class="info-value" id="generatedValue">-</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Links</span>
+                    <span class="info-value" id="edgesValue">-</span>
+                </div>
+            </div>
+
+            <!-- Display Options -->
+            <div class="panel-section">
+                <h4>Display</h4>
+                <div class="source-item">
+                    <input type="checkbox" id="showEdgesToggle" checked onchange="toggleEdges()">
+                    <label for="showEdgesToggle">Show connection lines</label>
+                </div>
+            </div>
+
+            <!-- Source Filters -->
+            <div class="panel-section">
+                <h4>Filter Sources</h4>
+                <div class="filter-actions">
+                    <button onclick="selectAllSources()">All</button>
+                    <button onclick="selectNoneSources()">None</button>
+                </div>
+                <div class="source-filters" id="sourceList">
+                    <p style="color: #666; font-size: 0.8rem;">No data loaded</p>
+                </div>
+            </div>
+
+            <!-- Link Visibility -->
+            <div class="panel-section">
+                <h4>Show Links For</h4>
+                <div class="filter-actions">
+                    <button onclick="selectAllLinks()">All</button>
+                    <button onclick="selectNoneLinks()">None</button>
+                </div>
+                <div class="source-filters" id="linkList">
+                    <p style="color: #666; font-size: 0.8rem;">No data loaded</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Point count overlay -->
+    <div class="point-count-overlay" id="pointCountOverlay" style="display: none;">
+        <span id="displayedPoints">0</span> points displayed
+    </div>
+
+    <!-- Document popup -->
+    <div class="doc-popup hidden" id="docPopup">
+        <div class="doc-popup-header">
+            <span class="doc-popup-title" id="popupTitle">Document Title</span>
+            <button class="doc-popup-close" onclick="closePopup()">x</button>
+        </div>
+        <div class="doc-popup-meta" id="popupMeta">Source: unknown</div>
+        <a href="#" class="doc-popup-link" id="popupLink" target="_blank">Open Document</a>
+    </div>
+
+    <script>
+        // Configuration for public view
+        const IS_ADMIN = false;
+        const API_PREFIX = '';
+    </script>
+    <script src="/static/visualise.js"></script>
+    <script>
+        // Check if admin panel is available (for local mode)
+        fetch('/useradmin/api/check')
+            .then(r => r.json())
+            .then(data => {
+                if (data.available) {
+                    document.getElementById('adminLink').style.display = 'inline';
+                }
+            })
+            .catch(() => {});
+    </script>
+</body>
+</html>

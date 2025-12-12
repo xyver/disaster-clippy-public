@@ -5,8 +5,10 @@ Drop-in replacement for ChromaDB VectorStore when using Pinecone.
 
 import os
 import json
-from typing import List, Dict, Optional, Any
+from pathlib import Path
+from typing import List, Dict, Optional, Any, Set
 from datetime import datetime
+from dataclasses import dataclass, field, asdict
 
 try:
     from pinecone import Pinecone, ServerlessSpec
@@ -16,6 +18,137 @@ except ImportError:
 
 from offline_tools.embeddings import EmbeddingService
 from .metadata import MetadataIndex
+
+
+# =============================================================================
+# PINECONE SYNC CHECKPOINT SYSTEM
+# =============================================================================
+
+@dataclass
+class PineconeSyncCheckpoint:
+    """
+    Checkpoint for resumable Pinecone sync operations.
+
+    Tracks which batches have been uploaded AND verified to exist in Pinecone.
+    This ensures no data is lost even if interrupted mid-sync.
+    """
+    source_id: str
+    total_docs: int = 0
+    total_batches: int = 0
+    batch_size: int = 100
+
+    # Track completed batches (batch_num -> list of doc IDs in that batch)
+    completed_batches: Dict[int, List[str]] = field(default_factory=dict)
+
+    # All doc IDs that have been verified in Pinecone
+    verified_ids: Set[str] = field(default_factory=set)
+
+    # Progress tracking
+    created_at: str = ""
+    last_saved: str = ""
+    last_verified_at: str = ""
+
+    # Error tracking
+    failed_batches: List[int] = field(default_factory=list)
+    errors: List[Dict[str, str]] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "source_id": self.source_id,
+            "total_docs": self.total_docs,
+            "total_batches": self.total_batches,
+            "batch_size": self.batch_size,
+            "completed_batches": self.completed_batches,
+            "verified_ids": list(self.verified_ids),
+            "created_at": self.created_at,
+            "last_saved": self.last_saved,
+            "last_verified_at": self.last_verified_at,
+            "failed_batches": self.failed_batches,
+            "errors": self.errors
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "PineconeSyncCheckpoint":
+        checkpoint = cls(
+            source_id=data.get("source_id", ""),
+            total_docs=data.get("total_docs", 0),
+            total_batches=data.get("total_batches", 0),
+            batch_size=data.get("batch_size", 100),
+            created_at=data.get("created_at", ""),
+            last_saved=data.get("last_saved", ""),
+            last_verified_at=data.get("last_verified_at", ""),
+            failed_batches=data.get("failed_batches", []),
+            errors=data.get("errors", [])
+        )
+        checkpoint.completed_batches = data.get("completed_batches", {})
+        # Convert string keys back to int (JSON serialization issue)
+        checkpoint.completed_batches = {int(k): v for k, v in checkpoint.completed_batches.items()}
+        checkpoint.verified_ids = set(data.get("verified_ids", []))
+        return checkpoint
+
+
+def _get_pinecone_checkpoint_path(source_id: str) -> Optional[Path]:
+    """Get the path for a Pinecone sync checkpoint file."""
+    try:
+        from admin.job_manager import get_jobs_folder
+        jobs_folder = get_jobs_folder()
+        if jobs_folder:
+            return jobs_folder / f"{source_id}_pinecone_sync.checkpoint.json"
+    except ImportError:
+        pass
+    return None
+
+
+def save_pinecone_checkpoint(checkpoint: PineconeSyncCheckpoint) -> bool:
+    """Save Pinecone sync checkpoint to disk (atomic write)."""
+    checkpoint_path = _get_pinecone_checkpoint_path(checkpoint.source_id)
+    if not checkpoint_path:
+        print("[pinecone-checkpoint] Cannot save - no jobs folder")
+        return False
+
+    checkpoint.last_saved = datetime.now().isoformat()
+    if not checkpoint.created_at:
+        checkpoint.created_at = checkpoint.last_saved
+
+    try:
+        temp_path = checkpoint_path.with_suffix('.tmp')
+        with open(temp_path, 'w', encoding='utf-8') as f:
+            json.dump(checkpoint.to_dict(), f, indent=2)
+        temp_path.replace(checkpoint_path)
+        return True
+    except Exception as e:
+        print(f"[pinecone-checkpoint] Error saving: {e}")
+        return False
+
+
+def load_pinecone_checkpoint(source_id: str) -> Optional[PineconeSyncCheckpoint]:
+    """Load Pinecone sync checkpoint from disk."""
+    checkpoint_path = _get_pinecone_checkpoint_path(source_id)
+    if not checkpoint_path or not checkpoint_path.exists():
+        return None
+
+    try:
+        with open(checkpoint_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        checkpoint = PineconeSyncCheckpoint.from_dict(data)
+        print(f"[pinecone-checkpoint] Loaded: {len(checkpoint.completed_batches)} batches completed, {len(checkpoint.verified_ids)} verified IDs")
+        return checkpoint
+    except Exception as e:
+        print(f"[pinecone-checkpoint] Error loading: {e}")
+        return None
+
+
+def delete_pinecone_checkpoint(source_id: str) -> bool:
+    """Delete Pinecone sync checkpoint after successful completion."""
+    checkpoint_path = _get_pinecone_checkpoint_path(source_id)
+    if checkpoint_path and checkpoint_path.exists():
+        try:
+            checkpoint_path.unlink()
+            print(f"[pinecone-checkpoint] Deleted checkpoint for {source_id}")
+            return True
+        except Exception as e:
+            print(f"[pinecone-checkpoint] Error deleting: {e}")
+    return False
 
 
 class PineconeMetadataWrapper:
@@ -170,20 +303,25 @@ class PineconeStore:
 
     def add_documents(self, documents: List[Dict[str, Any]],
                       embeddings: Optional[List[List[float]]] = None,
-                      progress_callback=None) -> int:
+                      progress_callback=None,
+                      resume: bool = True) -> int:
         """
-        Add documents to the vector store.
+        Add documents to the vector store with checkpoint support.
 
         Args:
             documents: List of dicts with keys: id, content, metadata
             embeddings: Pre-computed embeddings (optional, will compute if not provided)
-            progress_callback: Optional function(current, total) for progress
+            progress_callback: Optional function(batch_num, total_batches, message) for progress
+            resume: If True, attempt to resume from checkpoint (default True)
 
         Returns:
             Number of documents added
         """
         if not documents:
             return 0
+
+        # Extract source_id for checkpointing
+        source_id = documents[0].get("source", "unknown") if documents else "unknown"
 
         ids = []
         contents = []
@@ -218,32 +356,135 @@ class PineconeStore:
                 print(f"Computing embeddings for {len(contents)} documents...")
                 embeddings = self.embedding_service.embed_batch(contents)
 
-        # Prepare vectors for upsert
+        # Prepare vectors for upsert, filtering out zero vectors
         vectors = []
+        skipped_zero_vectors = 0
         for i, (doc_id, embedding, metadata) in enumerate(zip(ids, embeddings, metadatas)):
+            # Check for zero vectors (Pinecone rejects these)
+            if embedding is None or all(v == 0 for v in embedding):
+                skipped_zero_vectors += 1
+                print(f"  [SKIP] Zero vector for doc: {metadata.get('title', doc_id)[:50]}")
+                continue
+
             vectors.append({
                 "id": doc_id,
                 "values": embedding,
                 "metadata": metadata
             })
 
-            if progress_callback:
-                progress_callback(i + 1, len(documents))
+        if skipped_zero_vectors > 0:
+            print(f"[pinecone] Skipped {skipped_zero_vectors} documents with zero/null embeddings")
 
-        # Upsert in batches (Pinecone limit is 100 vectors per request)
+        # Checkpoint setup
         batch_size = 100
         total_batches = (len(vectors) - 1) // batch_size + 1 if vectors else 0
+        checkpoint = None
+        skipped_batches = 0
+        verified_ids_count = 0
+
+        # Try to load checkpoint for resume
+        if resume:
+            checkpoint = load_pinecone_checkpoint(source_id)
+            if checkpoint:
+                # Verify checkpoint matches current upload
+                if checkpoint.total_docs != len(documents):
+                    print(f"[pinecone] Checkpoint mismatch: checkpoint has {checkpoint.total_docs} docs, current has {len(documents)}")
+                    print(f"[pinecone] Starting fresh (document count changed)")
+                    delete_pinecone_checkpoint(source_id)
+                    checkpoint = None
+                else:
+                    # Verify a sample of completed batches actually exist in Pinecone
+                    verified_ids_count = len(checkpoint.verified_ids)
+                    if checkpoint.completed_batches:
+                        print(f"[pinecone] Resuming: {len(checkpoint.completed_batches)} batches already completed")
+                        print(f"[pinecone] Verifying {min(3, len(checkpoint.completed_batches))} sample batches exist in Pinecone...")
+
+                        # Verify a few random batches
+                        sample_batches = list(checkpoint.completed_batches.keys())[:3]
+                        all_verified = True
+                        for batch_num in sample_batches:
+                            batch_ids = checkpoint.completed_batches[batch_num]
+                            # Check if these IDs exist in Pinecone
+                            try:
+                                fetch_result = self.index.fetch(ids=batch_ids[:10], namespace=self.namespace)
+                                found_ids = set(fetch_result.vectors.keys()) if fetch_result.vectors else set()
+                                expected_sample = set(batch_ids[:10])
+                                if not expected_sample.issubset(found_ids):
+                                    print(f"[pinecone] WARNING: Batch {batch_num} verification failed - some IDs missing")
+                                    all_verified = False
+                                    break
+                            except Exception as e:
+                                print(f"[pinecone] Verification error for batch {batch_num}: {e}")
+                                all_verified = False
+                                break
+
+                        if not all_verified:
+                            print(f"[pinecone] Checkpoint verification failed - starting fresh")
+                            delete_pinecone_checkpoint(source_id)
+                            checkpoint = None
+                        else:
+                            print(f"[pinecone] Checkpoint verified - skipping {len(checkpoint.completed_batches)} completed batches")
+
+        # Create new checkpoint if needed
+        if checkpoint is None:
+            checkpoint = PineconeSyncCheckpoint(
+                source_id=source_id,
+                total_docs=len(documents),
+                total_batches=total_batches,
+                batch_size=batch_size
+            )
+
+        # Upsert in batches with checkpoint support
+        uploaded_count = 0
         for i in range(0, len(vectors), batch_size):
-            batch = vectors[i:i + batch_size]
-            self.index.upsert(vectors=batch, namespace=self.namespace)
             batch_num = i // batch_size + 1
-            print(f"  Uploaded batch {batch_num}/{total_batches}")
-            # Report batch progress if callback provided
-            if progress_callback:
-                progress_callback(batch_num, total_batches, f"Uploading batch {batch_num}/{total_batches}")
+
+            # Skip already-completed batches
+            if batch_num in checkpoint.completed_batches:
+                skipped_batches += 1
+                if progress_callback:
+                    progress_callback(batch_num, total_batches, f"Skipping batch {batch_num}/{total_batches} (already uploaded)")
+                continue
+
+            batch = vectors[i:i + batch_size]
+            batch_ids = [v["id"] for v in batch]
+
+            try:
+                # Upload batch to Pinecone
+                self.index.upsert(vectors=batch, namespace=self.namespace)
+                uploaded_count += len(batch)
+
+                # Mark batch as completed
+                checkpoint.completed_batches[batch_num] = batch_ids
+                checkpoint.verified_ids.update(batch_ids)
+
+                # Save checkpoint every 10 batches or on last batch
+                if batch_num % 10 == 0 or batch_num == total_batches:
+                    save_pinecone_checkpoint(checkpoint)
+
+                print(f"  Uploaded batch {batch_num}/{total_batches} ({len(batch)} vectors)")
+
+                # Report batch progress if callback provided
+                if progress_callback:
+                    progress_callback(batch_num, total_batches, f"Uploading batch {batch_num}/{total_batches}")
+
+            except Exception as e:
+                print(f"  ERROR uploading batch {batch_num}: {e}")
+                checkpoint.failed_batches.append(batch_num)
+                checkpoint.errors.append({"batch": batch_num, "error": str(e)})
+                save_pinecone_checkpoint(checkpoint)
+                raise  # Re-raise to signal failure
 
         # Update local metadata index
         self.metadata_index.add_documents(documents)
+
+        # Delete checkpoint on successful completion
+        if len(checkpoint.completed_batches) == total_batches:
+            delete_pinecone_checkpoint(source_id)
+            print(f"[pinecone] Sync complete: {uploaded_count} uploaded, {skipped_batches} skipped (from checkpoint)")
+        else:
+            # Save final state if not all batches completed
+            save_pinecone_checkpoint(checkpoint)
 
         return len(ids)
 

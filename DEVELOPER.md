@@ -1203,6 +1203,41 @@ Most legacy fallback code has been removed. The following locations still contai
 
 ---
 
+## Offline Architecture (Dual Embedding System)
+
+The system uses a dual embedding architecture to support both online and offline semantic search. See [docs/optimization-notes.md](docs/optimization-notes.md) for full details.
+
+### Quick Reference
+
+| Context | Dimension | Model | Purpose |
+|---------|-----------|-------|---------|
+| Online (Pinecone) | 1536 | OpenAI text-embedding-3-small | Cloud search |
+| Offline (ChromaDB) | 768 | all-mpnet-base-v2 | Local search |
+
+### User Tiers
+
+| Tier | Role | Capabilities |
+|------|------|--------------|
+| Consumer | End user (RPi5) | Download packs, search, browse |
+| Local Admin | Content creator | Create sources, submit to global |
+| Global Admin | Curator | Review, re-embed, publish |
+| Super Powered | Heavy processing | Parallel API, mass indexing |
+
+### File Structure (Dual Vectors)
+
+```
+{source_id}/
+    _manifest.json
+    _metadata.json
+    _index.json
+    _vectors_768.json    # Offline (downloaded by users)
+    _vectors_1536.json   # Online (Pinecone + backup)
+```
+
+Global Admin creates BOTH. Users download 768 only.
+
+---
+
 ## Other Documentation
 
 | Document | Purpose |
@@ -1211,6 +1246,7 @@ Most legacy fallback code has been removed. The following locations still contai
 | [CONTEXT.md](CONTEXT.md) | Architecture and design decisions (AI onboarding) |
 | [SUMMARY.md](SUMMARY.md) | Executive summary (non-technical) |
 | [ROADMAP.md](ROADMAP.md) | Future plans, testing, and feature development |
+| [docs/optimization-notes.md](docs/optimization-notes.md) | Dual embedding architecture, tier system, implementation plan |
 
 ---
 
@@ -1963,4 +1999,4 @@ Articles with less than 100 characters of extracted text are filtered out during
 
 ---
 
-*Last Updated: December 9, 2025*
+*Last Updated: December 11, 2025*

@@ -1014,6 +1014,10 @@ class ZIMIndexer:
                         # Use metadata for title/url, extract fresh content
                         title = doc_info.get("title", "")
 
+                        # Strip quotes from title and URL (defensive, in case metadata was generated before fix)
+                        title = title.strip('"')
+                        zim_url = zim_url.strip('"')
+
                         text = extract_text_from_html(content)
                         if len(text) < 50:
                             skipped += 1
@@ -1144,6 +1148,10 @@ class ZIMIndexer:
 
                         url = getattr(article, 'url', '') or f"article_{i}"
                         title = getattr(article, 'title', '') or get_title_from_html(content, url)
+
+                        # Strip quotes from title and URL (fixes articles like "Aquifex aeolicus")
+                        url = url.strip('"')
+                        title = title.strip('"')
 
                         # Build doc_id first to check if already indexed
                         doc_id = hashlib.md5(f"{self.source_id}:{url}".encode()).hexdigest()

@@ -3482,57 +3482,117 @@
             }
         }
 
-        // Get suggested tags by running validation + novel terms analysis
+        // Get suggested tags - runs as background job for large sources
         async function getSuggestedTags() {
             if (!currentSource) return;
 
             const btn = document.getElementById('btnGetSuggestions');
             if (btn) {
                 btn.disabled = true;
-                btn.textContent = 'Analyzing...';
+                btn.textContent = 'Starting analysis...';
             }
 
-            logOutput(`Analyzing content for tag suggestions...`);
+            logOutput(`Starting tag analysis for ${currentSource.source_id}...`);
 
             try {
-                // Fetch all suggestions (TOPIC_KEYWORDS + novel terms) combined and sorted
-                const response = await fetch(`/useradmin/api/all-suggested-tags/${currentSource.source_id}`);
+                // Start background job for tag analysis
+                const response = await fetch('/useradmin/api/suggest-tags-job', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ source_id: currentSource.source_id })
+                });
+
                 const data = await response.json();
 
-                if (!response.ok || data.status !== 'success') {
-                    logOutput(data.error || 'Failed to get suggestions', 'error');
+                if (response.status === 409) {
+                    // Job already running
+                    logOutput('A tag analysis job is already running for this source', 'warning');
+                    showToast('Analysis already in progress', true);
+                    btn.disabled = false;
+                    btn.textContent = 'Get Suggestions';
                     return;
                 }
 
-                // Add tags that aren't already chosen, maintaining sorted order
-                let totalAdded = 0;
-                const newTags = [];
-                for (const item of data.tags) {
-                    if (!chosenTags.has(item.tag) && !suggestedTags.includes(item.tag)) {
-                        newTags.push(item.tag);
-                        totalAdded++;
-                    }
+                if (!response.ok || data.status !== 'submitted') {
+                    logOutput(data.detail || data.error || 'Failed to start tag analysis', 'error');
+                    btn.disabled = false;
+                    btn.textContent = 'Get Suggestions';
+                    return;
                 }
-                suggestedTags = newTags;
 
-                logOutput(`Found ${data.topic_count} topic matches and ${data.novel_count} novel terms`, 'success');
-                renderSuggestedTags();
-
-                if (totalAdded > 0) {
-                    showToast(`Found ${totalAdded} suggestions sorted by frequency - click to add`);
-                } else {
-                    logOutput('No new suggestions found.', 'info');
-                }
+                logOutput(`Tag analysis job started (ID: ${data.job_id})`, 'info');
+                pollTagSuggestionJob(data.job_id);
 
             } catch (e) {
                 logOutput(`Error: ${e.message}`, 'error');
-            } finally {
-                const btn = document.getElementById('btnGetSuggestions');
-                if (btn) {
+                btn.disabled = false;
+                btn.textContent = 'Get Suggestions';
+            }
+        }
+
+        // Poll tag suggestion job for completion
+        async function pollTagSuggestionJob(jobId) {
+            const btn = document.getElementById('btnGetSuggestions');
+
+            const poll = async () => {
+                try {
+                    const response = await fetch(`/useradmin/api/jobs/${jobId}`);
+                    const job = await response.json();
+
+                    if (job.status === 'running' || job.status === 'pending') {
+                        const progress = job.progress || 0;
+                        btn.textContent = `Analyzing... ${progress}%`;
+                        if (job.message) {
+                            logOutput(job.message, 'info');
+                        }
+                        setTimeout(poll, 1000);
+                    } else if (job.status === 'completed') {
+                        // Extract tags from job result
+                        const result = job.result || {};
+                        const tags = result.tags || [];
+
+                        // Add tags that aren't already chosen, maintaining sorted order
+                        let totalAdded = 0;
+                        const newTags = [];
+                        for (const item of tags) {
+                            if (!chosenTags.has(item.tag) && !suggestedTags.includes(item.tag)) {
+                                newTags.push(item.tag);
+                                totalAdded++;
+                            }
+                        }
+                        suggestedTags = newTags;
+
+                        const topicCount = result.topic_count || 0;
+                        const novelCount = result.novel_count || 0;
+                        const docsScanned = result.documents_scanned || 0;
+
+                        logOutput(`Scanned ${docsScanned.toLocaleString()} documents`, 'info');
+                        logOutput(`Found ${topicCount} topic matches and ${novelCount} novel terms`, 'success');
+                        renderSuggestedTags();
+
+                        if (totalAdded > 0) {
+                            showToast(`Found ${totalAdded} suggestions sorted by frequency - click to add`);
+                        } else {
+                            logOutput('No new suggestions found.', 'info');
+                        }
+
+                        btn.disabled = false;
+                        btn.textContent = 'Get Suggestions';
+                    } else {
+                        // Failed or cancelled
+                        logOutput(`Tag analysis failed: ${job.error || 'Unknown error'}`, 'error');
+                        showToast('Tag analysis failed', true);
+                        btn.disabled = false;
+                        btn.textContent = 'Get Suggestions';
+                    }
+                } catch (e) {
+                    logOutput(`Error polling job status: ${e.message}`, 'error');
                     btn.disabled = false;
                     btn.textContent = 'Get Suggestions';
                 }
-            }
+            };
+
+            poll();
         }
 
         async function cleanupFiles() {

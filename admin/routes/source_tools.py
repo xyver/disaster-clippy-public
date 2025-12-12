@@ -84,6 +84,67 @@ def get_local_config():
     return _get_config()
 
 
+def read_json_count_only(file_path: Path) -> dict:
+    """
+    Read only the header fields from a JSON file without loading full documents/vectors.
+
+    This is a FAST operation that reads just the top-level counts, avoiding loading
+    potentially huge document dictionaries (100k+ entries) into memory.
+
+    Returns dict with: document_count, total_chars, schema_version, source_id
+    Returns empty dict if file doesn't exist or can't be read.
+    """
+    if not file_path or not file_path.exists():
+        return {}
+
+    try:
+        # Read file but use a streaming approach for large files
+        # For JSON files under 10KB, just load normally (small files)
+        file_size = file_path.stat().st_size
+
+        if file_size < 10000:  # Under 10KB - just load it
+            with open(file_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            return {
+                "document_count": data.get("document_count", len(data.get("documents", {}))),
+                "total_chars": data.get("total_chars", 0),
+                "schema_version": data.get("schema_version", 1),
+                "source_id": data.get("source_id", "")
+            }
+
+        # For large files, read just the beginning to extract header fields
+        # This avoids loading the entire documents dict into memory
+        with open(file_path, 'r', encoding='utf-8') as f:
+            # Read first 5KB which should contain all header fields
+            header_chunk = f.read(5000)
+
+        result = {}
+
+        # Extract document_count using regex (appears before "documents" dict)
+        import re
+        count_match = re.search(r'"document_count"\s*:\s*(\d+)', header_chunk)
+        if count_match:
+            result["document_count"] = int(count_match.group(1))
+
+        chars_match = re.search(r'"total_chars"\s*:\s*(\d+)', header_chunk)
+        if chars_match:
+            result["total_chars"] = int(chars_match.group(1))
+
+        version_match = re.search(r'"schema_version"\s*:\s*(\d+)', header_chunk)
+        if version_match:
+            result["schema_version"] = int(version_match.group(1))
+
+        source_match = re.search(r'"source_id"\s*:\s*"([^"]*)"', header_chunk)
+        if source_match:
+            result["source_id"] = source_match.group(1)
+
+        return result
+
+    except Exception as e:
+        print(f"[read_json_count_only] Error reading {file_path}: {e}")
+        return {}
+
+
 # =============================================================================
 # SOURCE LISTING & STATUS
 # =============================================================================
@@ -134,7 +195,7 @@ async def get_local_sources():
                 if source_folder.is_dir():
                     source_id = source_folder.name
 
-                    # Check for manifest file
+                    # Check for manifest file - read once and store all needed fields
                     manifest_file = source_folder / get_manifest_file()
                     if manifest_file.exists():
                         try:
@@ -147,6 +208,7 @@ async def get_local_sources():
                                 "base_url": source_data.get("base_url", ""),
                                 "license_verified": source_data.get("license_verified", False),
                                 "tags": source_data.get("tags", []),
+                                "backup_type": source_data.get("backup_type", ""),  # Store to avoid re-reading
                                 "from_master": False,
                             }
                         except Exception:
@@ -199,17 +261,14 @@ async def get_local_sources():
             local_sources.append(source_status)
             continue
 
-        # Check for metadata file
+        # Check for metadata file - use fast count reader (don't load full documents dict)
         metadata_path = Path(backup_folder) / source_id / get_metadata_file() if backup_folder else None
 
         if metadata_path and metadata_path.exists():
             source_status["has_metadata"] = True
-            try:
-                with open(metadata_path, 'r', encoding='utf-8') as f:
-                    meta = json.load(f)
-                source_status["document_count"] = meta.get("document_count", meta.get("total_documents", 0))
-            except Exception:
-                pass
+            # Fast read - only gets document_count from header, not full documents dict
+            meta_counts = read_json_count_only(metadata_path)
+            source_status["document_count"] = meta_counts.get("document_count", 0)
         else:
             source_status["missing"].append("metadata")
 
@@ -234,18 +293,11 @@ async def get_local_sources():
         source_status["backup_type"] = backup_status["backup_type"]
         source_status["backup_size_mb"] = backup_status["backup_size_mb"]
 
-        # If no backup detected, try to get backup_type from manifest (for fresh scrape sources)
-        if not source_status["backup_type"] and backup_folder:
-            source_folder = Path(backup_folder) / source_id
-            manifest_file = source_folder / get_manifest_file()
-            if manifest_file.exists():
-                try:
-                    with open(manifest_file, 'r', encoding='utf-8') as f:
-                        manifest = json.load(f)
-                    if manifest.get("backup_type"):
-                        source_status["backup_type"] = manifest["backup_type"]
-                except Exception:
-                    pass
+        # If no backup detected, use backup_type from manifest (already loaded in sources_config)
+        if not source_status["backup_type"]:
+            stored_backup_type = config_data.get("backup_type", "")
+            if stored_backup_type:
+                source_status["backup_type"] = stored_backup_type
 
         if not backup_status["has_backup"]:
             source_status["missing"].append("backup file")
@@ -288,22 +340,25 @@ async def get_local_sources():
             # Get backup page count from backup_manifest.json (HTML sources)
             backup_manifest_path = source_folder / get_backup_manifest_file()
             if backup_manifest_path.exists():
-                try:
-                    with open(backup_manifest_path, 'r', encoding='utf-8') as f:
-                        backup_manifest = json.load(f)
-                    backup_page_count = len(backup_manifest.get("pages", {}))
-                except Exception:
-                    pass
+                # Fast read - only get page count from header
+                backup_counts = read_json_count_only(backup_manifest_path)
+                backup_page_count = backup_counts.get("document_count", 0)
+                # Fallback: if no document_count in header, check file size
+                if backup_page_count == 0:
+                    try:
+                        # Small files - load to count pages dict
+                        if backup_manifest_path.stat().st_size < 50000:  # Under 50KB
+                            with open(backup_manifest_path, 'r', encoding='utf-8') as f:
+                                backup_manifest = json.load(f)
+                            backup_page_count = len(backup_manifest.get("pages", {}))
+                    except Exception:
+                        pass
 
-            # Get index document count from _index.json
+            # Get index document count from _index.json - use fast count reader
             index_path = source_folder / get_index_file()
             if index_path.exists():
-                try:
-                    with open(index_path, 'r', encoding='utf-8') as f:
-                        index_data = json.load(f)
-                    index_doc_count = len(index_data.get("documents", {}))
-                except Exception:
-                    pass
+                index_counts = read_json_count_only(index_path)
+                index_doc_count = index_counts.get("document_count", 0)
 
             # Store counts
             source_status["backup_page_count"] = backup_page_count
@@ -323,30 +378,23 @@ async def get_local_sources():
         if not source_status["has_embeddings"]:
             source_status["missing"].append("embeddings (for offline search)")
 
-        # Try to get base_url from manifest if not in config
+        # Fallback: try to get base_url from backup_manifest (legacy sources)
+        # Note: base_url from _manifest.json is already in config_data from initial scan
         if not source_status["base_url"] and backup_folder:
             source_folder = Path(backup_folder) / source_id
-            manifest_file = source_folder / get_manifest_file()
-            if manifest_file.exists():
+            backup_manifest_file = source_folder / get_backup_manifest_file()
+            if not backup_manifest_file.exists():
+                backup_manifest_file = source_folder / "manifest.json"
+            if backup_manifest_file.exists():
                 try:
-                    with open(manifest_file, 'r', encoding='utf-8') as f:
-                        manifest = json.load(f)
-                    if manifest.get("base_url"):
-                        source_status["base_url"] = manifest["base_url"]
+                    # Only load small backup manifests
+                    if backup_manifest_file.stat().st_size < 50000:
+                        with open(backup_manifest_file, 'r', encoding='utf-8') as f:
+                            backup_manifest_data = json.load(f)
+                        if backup_manifest_data.get("base_url"):
+                            source_status["base_url"] = backup_manifest_data["base_url"]
                 except Exception:
                     pass
-            if not source_status["base_url"]:
-                backup_manifest = source_folder / get_backup_manifest_file()
-                if not backup_manifest.exists():
-                    backup_manifest = source_folder / "manifest.json"
-                if backup_manifest.exists():
-                    try:
-                        with open(backup_manifest, 'r', encoding='utf-8') as f:
-                            manifest = json.load(f)
-                        if manifest.get("base_url"):
-                            source_status["base_url"] = manifest["base_url"]
-                    except Exception:
-                        pass
 
         # Check license
         license_val = source_status["license"]
@@ -1253,6 +1301,9 @@ async def get_all_suggested_tags(source_id: str):
     """
     Get all suggested tags (TOPIC_KEYWORDS + novel terms) combined and sorted by frequency.
 
+    Uses optimized single-pass scanning for better performance.
+    For very large sources (70k+ documents), consider using /suggest-tags-job instead.
+
     Combines:
     - TOPIC_KEYWORDS matches with their scores
     - Novel terms discovered from titles with their counts
@@ -1264,52 +1315,100 @@ async def get_all_suggested_tags(source_id: str):
 
         manager = SourceManager()
 
-        # Get TOPIC_KEYWORDS suggestions with scores
-        topic_scores = manager.suggest_tags(source_id, return_scores=True)
-        if not isinstance(topic_scores, dict):
-            topic_scores = {}
+        # Use optimized combined function (single pass through documents)
+        result = manager.suggest_all_tags_combined(source_id)
 
-        # Get novel terms with counts
-        novel_result = manager.analyze_metadata_for_tags(source_id, update_metadata=False)
-        novel_terms = novel_result.get("discovered_terms", {}) if novel_result.get("success") else {}
-
-        # Combine all tags with their scores
-        # Novel terms are word frequencies, TOPIC_KEYWORDS are keyword match counts
-        # They're on similar scales so we can combine them directly
-        combined = {}
-
-        # Add TOPIC_KEYWORDS (these tend to have higher scores)
-        for tag, score in topic_scores.items():
-            combined[tag] = {"score": score, "type": "topic"}
-
-        # Add novel terms (skip any that are already in TOPIC_KEYWORDS)
-        for term, count in novel_terms.items():
-            if term not in combined:
-                combined[term] = {"score": count, "type": "novel"}
-
-        # Sort by score descending
-        sorted_tags = sorted(combined.items(), key=lambda x: x[1]["score"], reverse=True)
-
-        # Return as ordered list with scores
-        result_tags = []
-        for tag, info in sorted_tags[:200]:  # Cap at 200 total
-            result_tags.append({
-                "tag": tag,
-                "score": info["score"],
-                "type": info["type"]
-            })
+        if not result.get("success"):
+            raise HTTPException(500, result.get("error", "Tag suggestion failed"))
 
         return {
             "status": "success",
             "source_id": source_id,
-            "tags": result_tags,
-            "total_count": len(result_tags),
-            "topic_count": len(topic_scores),
-            "novel_count": len([t for t in result_tags if t["type"] == "novel"])
+            "tags": result.get("tags", []),
+            "total_count": len(result.get("tags", [])),
+            "topic_count": result.get("topic_count", 0),
+            "novel_count": result.get("novel_count", 0),
+            "documents_scanned": result.get("documents_scanned", 0)
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(500, f"Failed to get suggested tags: {e}")
+
+
+@router.post("/suggest-tags-job")
+async def suggest_tags_job(request: dict):
+    """
+    Start a background job to suggest tags for a source.
+
+    Use this for large sources (70k+ documents) where synchronous scanning
+    would cause UI freezes. The job runs in the background with progress tracking.
+
+    Request body:
+        source_id: str - The source to analyze
+
+    Returns:
+        job_id: str - Poll /useradmin/jobs/{job_id} for status
+    """
+    from admin.job_manager import get_job_manager
+
+    source_id = request.get("source_id")
+    if not source_id:
+        raise HTTPException(400, "source_id is required")
+
+    def _run_suggest_tags(source_id: str, progress_callback=None, cancel_checker=None):
+        from offline_tools.source_manager import SourceManager
+
+        manager = SourceManager()
+
+        # Update progress at start
+        if progress_callback:
+            progress_callback(0, 100, "Loading metadata...")
+
+        # Check for cancellation
+        if cancel_checker and cancel_checker():
+            return {"status": "cancelled", "error": "Job cancelled by user"}
+
+        # Run the combined tag suggestion with progress tracking
+        result = manager.suggest_all_tags_combined(source_id, progress_callback=progress_callback)
+
+        if progress_callback:
+            progress_callback(100, 100, "Tag analysis complete")
+
+        if not result.get("success"):
+            return {"success": False, "error": result.get("error", "Tag suggestion failed")}
+
+        return {
+            "success": True,
+            "status": "success",
+            "source_id": source_id,
+            "tags": result.get("tags", []),
+            "total_count": len(result.get("tags", [])),
+            "topic_count": result.get("topic_count", 0),
+            "novel_count": result.get("novel_count", 0),
+            "documents_scanned": result.get("documents_scanned", 0),
+            "message": f"Found {result.get('topic_count', 0)} topic matches and {result.get('novel_count', 0)} novel terms"
+        }
+
+    job_manager = get_job_manager()
+
+    try:
+        job_id = job_manager.submit(
+            "suggest_tags",
+            source_id,
+            _run_suggest_tags,
+            source_id
+        )
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+
+    return {
+        "status": "submitted",
+        "job_id": job_id,
+        "source_id": source_id,
+        "message": "Tag suggestion job started"
+    }
 
 
 # =============================================================================

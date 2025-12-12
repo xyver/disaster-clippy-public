@@ -395,6 +395,7 @@ def _run_download_pack(source_id: str, progress_callback=None, cancel_checker=No
             raise Exception(f"No files found for source: {source_id}")
 
         downloaded_files = []
+        skipped_files = []
         total_size = 0
         total_files = len(files)
 
@@ -405,6 +406,17 @@ def _run_download_pack(source_id: str, progress_callback=None, cancel_checker=No
 
             local_path = source_folder / filename
             local_path.parent.mkdir(parents=True, exist_ok=True)
+
+            # Check if file already exists with correct size (resume support)
+            expected_size = f.get("size_bytes", 0) or int(f.get("size_mb", 0) * 1024 * 1024)
+            if local_path.exists() and expected_size > 0:
+                actual_size = local_path.stat().st_size
+                if actual_size == expected_size:
+                    skipped_files.append(filename)
+                    total_size += f.get("size_mb", 0)
+                    pct = 10 + int((idx / total_files) * 60)
+                    update_progress(pct, f"Skipping {filename} (already downloaded)")
+                    continue
 
             pct = 10 + int((idx / total_files) * 60)
             update_progress(pct, f"Downloading {filename}...")
@@ -431,6 +443,7 @@ def _run_download_pack(source_id: str, progress_callback=None, cancel_checker=No
             raise Exception(f"No files found for source: {source_id}")
 
         downloaded_files = []
+        skipped_files = []
         total_size = 0
         total_files = len(files)
 
@@ -442,6 +455,17 @@ def _run_download_pack(source_id: str, progress_callback=None, cancel_checker=No
 
             local_path = source_folder / relative_path
             local_path.parent.mkdir(parents=True, exist_ok=True)
+
+            # Check if file already exists with correct size (resume support)
+            expected_size = f.get("size_bytes", 0) or int(f.get("size_mb", 0) * 1024 * 1024)
+            if local_path.exists() and expected_size > 0:
+                actual_size = local_path.stat().st_size
+                if actual_size == expected_size:
+                    skipped_files.append(relative_path)
+                    total_size += f.get("size_mb", 0)
+                    pct = 10 + int((idx / total_files) * 60)
+                    update_progress(pct, f"Skipping {relative_path} (already downloaded)")
+                    continue
 
             pct = 10 + int((idx / total_files) * 60)
             update_progress(pct, f"Downloading {relative_path}...")
@@ -548,13 +572,26 @@ def _run_download_pack(source_id: str, progress_callback=None, cancel_checker=No
 
     update_progress(100, "Download complete")
 
+    # Build message based on whether this was a fresh download or resume
+    if skipped_files and downloaded_files:
+        msg = f"Resumed: downloaded {len(downloaded_files)} new files, skipped {len(skipped_files)} existing"
+    elif skipped_files and not downloaded_files:
+        msg = f"All {len(skipped_files)} files already downloaded (nothing new to fetch)"
+    else:
+        msg = f"Downloaded {len(downloaded_files)} files"
+
+    if indexed_count > 0:
+        msg += f", indexed {indexed_count} documents"
+
     return {
         "status": "success",
         "source_id": source_id,
         "files_downloaded": len(downloaded_files),
+        "files_skipped": len(skipped_files),
         "total_size_mb": round(total_size, 2),
         "indexed_documents": indexed_count,
-        "message": f"Downloaded {len(downloaded_files)} files and indexed {indexed_count} documents"
+        "resumed": len(skipped_files) > 0,
+        "message": msg
     }
 
 

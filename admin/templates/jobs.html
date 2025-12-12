@@ -289,7 +289,11 @@
                 }
 
                 section.style.display = 'block';
-                container.innerHTML = trulyInterrupted.map(job => `
+                container.innerHTML = trulyInterrupted.map(job => {
+                    // Escape source_id and job_type for safe use in onclick handlers
+                    const safeSourceId = job.source_id.replace(/'/g, "\\'").replace(/"/g, '&quot;');
+                    const safeJobType = job.job_type.replace(/'/g, "\\'").replace(/"/g, '&quot;');
+                    return `
                     <div class="job-item" style="border-color: #f9a825;">
                         <div class="job-info">
                             <div class="job-name">
@@ -305,11 +309,11 @@
                         </div>
                         <div class="job-actions">
                             <span class="job-status status-pending">${job.progress}%</span>
-                            <button class="btn btn-primary" onclick="resumeInterruptedJob('${job.source_id}', '${job.job_type}')" style="font-size: 0.8rem;">Resume</button>
-                            <button class="btn-cancel" onclick="discardInterruptedJob('${job.source_id}', '${job.job_type}', this)">Discard</button>
+                            <button class="btn btn-primary" onclick="resumeInterruptedJob('${safeSourceId}', '${safeJobType}')" style="font-size: 0.8rem;">Resume</button>
+                            <button class="btn-cancel" onclick="discardInterruptedJob('${safeSourceId}', '${safeJobType}', this)">Discard</button>
                         </div>
                     </div>
-                `).join('');
+                `}).join('');
             } catch (e) {
                 console.error('Error loading interrupted jobs:', e);
             }
@@ -317,6 +321,7 @@
 
         async function resumeInterruptedJob(sourceId, jobType) {
             // Resume job directly via API - no page redirect needed
+            // Note: source_id is passed in JSON body, so no URL encoding needed there
             if (jobType === 'metadata') {
                 try {
                     const response = await fetch('/useradmin/api/generate-metadata', {
@@ -335,7 +340,7 @@
                         loadInterruptedJobs();
                     } else {
                         const err = await response.json();
-                        alert('Failed to resume: ' + (err.detail || 'Unknown error'));
+                        alert('Failed to resume: ' + (err.detail || err.error || 'Unknown error'));
                     }
                 } catch (e) {
                     alert('Error resuming job: ' + e.message);
@@ -359,7 +364,7 @@
                         loadInterruptedJobs();
                     } else {
                         const err = await response.json();
-                        alert('Failed to resume: ' + (err.detail || 'Unknown error'));
+                        alert('Failed to resume: ' + (err.detail || err.error || 'Unknown error'));
                     }
                 } catch (e) {
                     alert('Error resuming job: ' + e.message);
@@ -376,7 +381,8 @@
             btn.textContent = 'Deleting...';
 
             try {
-                const response = await fetch(`/useradmin/api/discard-checkpoint/${sourceId}/${jobType}`, {
+                // URL-encode source_id and job_type in case they have spaces or special chars
+                const response = await fetch(`/useradmin/api/discard-checkpoint/${encodeURIComponent(sourceId)}/${encodeURIComponent(jobType)}`, {
                     method: 'POST'
                 });
 

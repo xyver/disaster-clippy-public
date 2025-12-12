@@ -150,6 +150,8 @@ async def get_sources_for_upload():
                 try:
                     with open(manifest_file, 'r', encoding='utf-8') as f:
                         source_data = json.load(f)
+                    # Get modification time for sorting (most recent first)
+                    mtime = manifest_file.stat().st_mtime
                     sources_config[source_id] = {
                         "name": source_data.get("name", source_id),
                         "description": source_data.get("description", ""),
@@ -157,12 +159,15 @@ async def get_sources_for_upload():
                         "base_url": source_data.get("base_url", ""),
                         "license_verified": source_data.get("license_verified", False),
                         "last_published": source_data.get("last_published"),
+                        "last_modified": mtime,
                     }
                 except Exception:
-                    sources_config[source_id] = {"name": source_id}
+                    sources_config[source_id] = {"name": source_id, "last_modified": 0}
             # Also include folders with backup content
             elif (source_folder / "pages").exists() or list(source_folder.glob("*.html")):
-                sources_config[source_id] = {"name": source_id}
+                # Use folder mtime as fallback
+                mtime = source_folder.stat().st_mtime
+                sources_config[source_id] = {"name": source_id, "last_modified": mtime}
 
     # Check each source for completeness
     uploadable_sources = []
@@ -174,6 +179,7 @@ async def get_sources_for_upload():
             "license": config_data.get("license", "Unknown"),
             "license_verified": config_data.get("license_verified", False),
             "last_published": config_data.get("last_published"),
+            "last_modified": config_data.get("last_modified", 0),
             "has_config": True,
             "has_metadata": False,
             "has_backup": False,
@@ -184,17 +190,15 @@ async def get_sources_for_upload():
             "missing": []
         }
 
-        # Check for metadata file
+        # Check for metadata file - use fast header reading
         if backup_folder:
             metadata_path = Path(backup_folder) / source_id / get_metadata_file()
             if metadata_path.exists():
                 source_status["has_metadata"] = True
-                try:
-                    with open(metadata_path, 'r', encoding='utf-8') as f:
-                        meta = json.load(f)
-                        source_status["document_count"] = meta.get("document_count", 0)
-                except:
-                    pass
+                # Fast read - only get document_count from header
+                from offline_tools.packager import read_json_header_only
+                meta_header = read_json_header_only(metadata_path)
+                source_status["document_count"] = meta_header.get("document_count", 0)
             else:
                 source_status["missing"].append("metadata")
 
@@ -228,8 +232,8 @@ async def get_sources_for_upload():
 
         uploadable_sources.append(source_status)
 
-    # Sort: complete first, then by name
-    uploadable_sources.sort(key=lambda x: (not x["is_complete"], x["name"]))
+    # Sort: complete sources first, then by most recently modified within each group
+    uploadable_sources.sort(key=lambda x: (not x["is_complete"], -x.get("last_modified", 0)))
 
     return {
         "sources": uploadable_sources,
@@ -321,21 +325,48 @@ def _run_upload_backup(source_id: str, source_info: dict, progress_callback=None
 
     elif backup_type == "html":
         # For HTML folders, create a zip and upload
-        import tempfile
+        # Uses cached zip if available (for resume after failed upload)
         import zipfile
+        from admin.job_manager import get_jobs_folder
 
         html_path = Path(backup_path)
 
-        if progress_callback:
-            progress_callback(15, "Creating zip archive...")
+        # Use cached zip location in _jobs folder (survives failed uploads)
+        jobs_folder = get_jobs_folder()
+        if jobs_folder:
+            cached_zip_path = jobs_folder / f"{source_id}_upload.zip"
+        else:
+            # Fallback to source folder if no jobs folder
+            cached_zip_path = html_path.parent / f"{source_id}_upload.zip"
 
-        # Create temporary zip file
-        with tempfile.NamedTemporaryFile(suffix='.zip', delete=False) as tmp:
-            tmp_path = tmp.name
+        zip_path = str(cached_zip_path)
+        used_cache = False
 
-        try:
+        # Check if we have a valid cached zip
+        if cached_zip_path.exists():
+            # Get newest file modification time in source folder
+            source_files = list(html_path.rglob('*'))
+            newest_source_mtime = max((f.stat().st_mtime for f in source_files if f.is_file()), default=0)
+            cache_mtime = cached_zip_path.stat().st_mtime
+
+            if cache_mtime > newest_source_mtime:
+                # Cache is newer than all source files - reuse it
+                if progress_callback:
+                    cache_size_mb = cached_zip_path.stat().st_size / (1024*1024)
+                    progress_callback(15, f"Using cached zip ({cache_size_mb:.1f} MB)...")
+                used_cache = True
+            else:
+                # Source files changed since cache was created - delete old cache
+                if progress_callback:
+                    progress_callback(15, "Source changed, recreating zip...")
+                cached_zip_path.unlink()
+
+        if not used_cache:
+            if progress_callback:
+                progress_callback(15, "Creating zip archive...")
+
             # Create zip of HTML folder
-            with zipfile.ZipFile(tmp_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+            with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
                 all_files = list(html_path.rglob('*'))
                 file_count = len([f for f in all_files if f.is_file()])
                 for i, file_path in enumerate(all_files):
@@ -348,17 +379,22 @@ def _run_upload_backup(source_id: str, source_info: dict, progress_callback=None
                             progress_callback(percent, f"Zipping files... ({i+1}/{file_count})")
 
             if progress_callback:
+                zip_size_mb = os.path.getsize(zip_path) / (1024*1024)
+                progress_callback(70, f"Zip created ({zip_size_mb:.1f} MB), uploading...")
+
+        try:
+            if progress_callback:
                 progress_callback(70, "Uploading zip file...")
 
             # Upload zip
             remote_key = f"{submission_folder}/{source_id}-html.zip"
-            success = storage.upload_file(tmp_path, remote_key)
+            success = storage.upload_file(zip_path, remote_key)
 
             if not success:
                 raise Exception(f"Upload failed: {storage.get_last_error()}")
 
             # Get actual upload size
-            zip_size = os.path.getsize(tmp_path) / (1024*1024)
+            zip_size = os.path.getsize(zip_path) / (1024*1024)
 
             if progress_callback:
                 progress_callback(85, "Uploading metadata files...")
@@ -379,8 +415,16 @@ def _run_upload_backup(source_id: str, source_info: dict, progress_callback=None
                     if fpath.exists():
                         total_size += fpath.stat().st_size / (1024*1024)
 
+            # Upload succeeded - delete cached zip
+            if cached_zip_path.exists():
+                cached_zip_path.unlink()
+
             if progress_callback:
                 progress_callback(100, "Upload complete")
+
+            msg = f"Submitted {len(uploaded_files)} files for review"
+            if used_cache:
+                msg += " (used cached zip)"
 
             return {
                 "status": "success",
@@ -389,31 +433,55 @@ def _run_upload_backup(source_id: str, source_info: dict, progress_callback=None
                 "size_mb": round(total_size, 2),
                 "file_count": len(uploaded_files),
                 "files": uploaded_files,
-                "message": f"Submitted {len(uploaded_files)} files for review"
+                "used_cached_zip": used_cache,
+                "message": msg
             }
 
-        finally:
-            # Clean up temp file
-            if os.path.exists(tmp_path):
-                os.unlink(tmp_path)
+        except Exception as e:
+            # Upload failed - keep the cached zip for retry
+            if progress_callback:
+                progress_callback(0, f"Upload failed (zip cached for retry): {e}")
+            raise
 
     elif backup_type == "pdf":
-        # For PDF collections, create a zip and upload (similar to HTML)
-        import tempfile
+        # For PDF collections, create a zip and upload
+        # Uses cached zip if available (for resume after failed upload)
         import zipfile
+        from admin.job_manager import get_jobs_folder
 
         pdf_path = Path(backup_path)
 
-        if progress_callback:
-            progress_callback(15, "Creating zip archive...")
+        # Use cached zip location in _jobs folder (survives failed uploads)
+        jobs_folder = get_jobs_folder()
+        if jobs_folder:
+            cached_zip_path = jobs_folder / f"{source_id}_upload.zip"
+        else:
+            cached_zip_path = pdf_path.parent / f"{source_id}_upload.zip"
 
-        # Create temporary zip file
-        with tempfile.NamedTemporaryFile(suffix='.zip', delete=False) as tmp:
-            tmp_path = tmp.name
+        zip_path = str(cached_zip_path)
+        used_cache = False
 
-        try:
-            # Create zip of PDF folder
-            with zipfile.ZipFile(tmp_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+        # Check if we have a valid cached zip
+        if cached_zip_path.exists():
+            source_files = list(pdf_path.rglob('*'))
+            newest_source_mtime = max((f.stat().st_mtime for f in source_files if f.is_file()), default=0)
+            cache_mtime = cached_zip_path.stat().st_mtime
+
+            if cache_mtime > newest_source_mtime:
+                if progress_callback:
+                    cache_size_mb = cached_zip_path.stat().st_size / (1024*1024)
+                    progress_callback(15, f"Using cached zip ({cache_size_mb:.1f} MB)...")
+                used_cache = True
+            else:
+                if progress_callback:
+                    progress_callback(15, "Source changed, recreating zip...")
+                cached_zip_path.unlink()
+
+        if not used_cache:
+            if progress_callback:
+                progress_callback(15, "Creating zip archive...")
+
+            with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
                 all_files = list(pdf_path.rglob('*'))
                 file_count = len([f for f in all_files if f.is_file()])
                 for i, file_path in enumerate(all_files):
@@ -421,44 +489,52 @@ def _run_upload_backup(source_id: str, source_info: dict, progress_callback=None
                         arcname = file_path.relative_to(pdf_path)
                         zf.write(file_path, arcname)
                         if progress_callback and file_count > 0:
-                            # Scale from 20-70%
                             percent = 20 + int((i / file_count) * 50)
                             progress_callback(percent, f"Zipping files... ({i+1}/{file_count})")
 
             if progress_callback:
+                zip_size_mb = os.path.getsize(zip_path) / (1024*1024)
+                progress_callback(70, f"Zip created ({zip_size_mb:.1f} MB), uploading...")
+
+        try:
+            if progress_callback:
                 progress_callback(70, "Uploading zip file...")
 
-            # Upload zip
             remote_key = f"{submission_folder}/{source_id}-pdf.zip"
-            success = storage.upload_file(tmp_path, remote_key)
+            success = storage.upload_file(zip_path, remote_key)
 
             if not success:
                 raise Exception(f"Upload failed: {storage.get_last_error()}")
 
-            # Get actual upload size
-            zip_size = os.path.getsize(tmp_path) / (1024*1024)
+            zip_size = os.path.getsize(zip_path) / (1024*1024)
 
             if progress_callback:
                 progress_callback(85, "Uploading metadata files...")
 
-            # Also upload all metadata and v2 schema files
             uploaded_files = _upload_submission_metadata_sync(storage, submission_folder, source_id, source_info)
             uploaded_files.insert(0, f"{source_id}-pdf.zip")
 
-            # Calculate total size including metadata files
             total_size = zip_size
             from .local_config import get_local_config
             config = get_local_config()
             backup_folder = config.get_backup_folder()
             if backup_folder:
                 source_folder = Path(backup_folder) / source_id
-                for f in uploaded_files[1:]:  # Skip zip already counted
+                for f in uploaded_files[1:]:
                     fpath = source_folder / f
                     if fpath.exists():
                         total_size += fpath.stat().st_size / (1024*1024)
 
+            # Upload succeeded - delete cached zip
+            if cached_zip_path.exists():
+                cached_zip_path.unlink()
+
             if progress_callback:
                 progress_callback(100, "Upload complete")
+
+            msg = f"Submitted {len(uploaded_files)} files for review"
+            if used_cache:
+                msg += " (used cached zip)"
 
             return {
                 "status": "success",
@@ -467,13 +543,15 @@ def _run_upload_backup(source_id: str, source_info: dict, progress_callback=None
                 "size_mb": round(total_size, 2),
                 "file_count": len(uploaded_files),
                 "files": uploaded_files,
-                "message": f"Submitted {len(uploaded_files)} files for review"
+                "used_cached_zip": used_cache,
+                "message": msg
             }
 
-        finally:
-            # Clean up temp file
-            if os.path.exists(tmp_path):
-                os.unlink(tmp_path)
+        except Exception as e:
+            # Upload failed - keep the cached zip for retry
+            if progress_callback:
+                progress_callback(0, f"Upload failed (zip cached for retry): {e}")
+            raise
 
     else:
         raise Exception(f"Unknown backup type: {backup_type}")
@@ -1235,6 +1313,159 @@ class PineconeSyncRequest(BaseModel):
     sync_mode: str = "update"  # "update" (add/update only) or "replace" (delete old first)
 
 
+def pinecone_sync_job(dry_run: bool = True, source_filter: str = None,
+                      progress_callback=None, cancel_checker=None):
+    """
+    Background job function for Pinecone sync operations.
+
+    Args:
+        dry_run: If True, only report what would be done without making changes
+        source_filter: Optional source ID to filter sync to
+        progress_callback: Function to report progress (current, total, message)
+        cancel_checker: Function to check if job was cancelled
+
+    Returns:
+        Dict with sync results
+    """
+    import os
+    from dotenv import load_dotenv
+    load_dotenv()
+
+    def update(current, total, msg):
+        if progress_callback:
+            progress_callback(current, total, msg)
+
+    def is_cancelled():
+        return cancel_checker() if cancel_checker else False
+
+    update(0, 100, "Initializing...")
+
+    api_key = os.getenv("PINECONE_API_KEY")
+    if not api_key:
+        return {"success": False, "error": "PINECONE_API_KEY not configured"}
+
+    if is_cancelled():
+        return {"status": "cancelled"}
+
+    try:
+        from offline_tools.vectordb import VectorStore, PineconeStore
+        from offline_tools.vectordb.sync import SyncManager
+
+        update(5, 100, "Loading local vector store...")
+        local = VectorStore()
+
+        if is_cancelled():
+            return {"status": "cancelled"}
+
+        update(10, 100, "Connecting to Pinecone...")
+        remote = PineconeStore()
+
+        if is_cancelled():
+            return {"status": "cancelled"}
+
+        update(15, 100, "Comparing local and remote...")
+        sync = SyncManager(local, remote)
+        diff = sync.compare(source=source_filter)
+
+        if is_cancelled():
+            return {"status": "cancelled"}
+
+        update(40, 100, "Analyzing differences...")
+
+        # Check for conflicts
+        if diff.conflicts:
+            return {
+                "success": False,
+                "error": f"{len(diff.conflicts)} conflicts detected. Remote has newer versions.",
+                "conflicts": diff.conflicts[:5]
+            }
+
+        # Nothing to push?
+        if not diff.to_push and not diff.to_update:
+            update(100, 100, "Already in sync")
+            return {
+                "success": True,
+                "status": "success",
+                "message": "Already in sync - nothing to push",
+                "dry_run": dry_run,
+                "pushed": 0,
+                "updated": 0,
+                "to_push": 0,
+                "to_update": 0
+            }
+
+        # For dry run, we're done after comparison
+        if dry_run:
+            update(100, 100, "Dry run complete")
+            return {
+                "success": True,
+                "status": "success",
+                "dry_run": True,
+                "pushed": 0,
+                "updated": 0,
+                "to_push": len(diff.to_push) if hasattr(diff, 'to_push') else 0,
+                "to_update": len(diff.to_update) if hasattr(diff, 'to_update') else 0,
+                "message": f"Dry run: {len(diff.to_push)} to push, {len(diff.to_update)} to update"
+            }
+
+        if is_cancelled():
+            return {"status": "cancelled"}
+
+        # Do the actual push
+        update(50, 100, "Pushing to Pinecone...")
+        stats = sync.push(diff, dry_run=False, update=True, force=False)
+
+        update(90, 100, "Finalizing...")
+
+        # Auto-trigger visualization regeneration after successful push
+        vis_job_id = None
+        vis_already_running = False
+        if stats.get("pushed", 0) > 0 or stats.get("updated", 0) > 0:
+            try:
+                from .job_manager import get_job_manager
+                from .routes.visualise import generate_and_publish_visualisation_job
+
+                manager = get_job_manager()
+                active_jobs = manager.get_active_jobs()
+                running_vis_job = next((job for job in active_jobs if job.get("job_type") == "visualisation"), None)
+
+                if running_vis_job:
+                    vis_job_id = running_vis_job.get("id")
+                    vis_already_running = True
+                    print(f"[PineconeSync] Visualization job already running: {vis_job_id}")
+                else:
+                    vis_job_id = manager.submit(
+                        job_type="visualisation",
+                        source_id="_system",
+                        func=generate_and_publish_visualisation_job
+                    )
+                    print(f"[PineconeSync] Auto-started visualization job: {vis_job_id}")
+            except Exception as vis_err:
+                print(f"[PineconeSync] Error starting visualization: {vis_err}")
+
+        update(100, 100, "Push complete")
+
+        return {
+            "success": True,
+            "status": "success",
+            "dry_run": False,
+            "pushed": stats.get("pushed", 0),
+            "updated": stats.get("updated", 0),
+            "skipped": stats.get("skipped", 0),
+            "errors": stats.get("errors", 0),
+            "message": "Push complete",
+            "visualization_job_id": vis_job_id,
+            "visualization_already_running": vis_already_running
+        }
+
+    except ImportError as e:
+        return {"success": False, "error": f"Missing dependency: {str(e)}"}
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return {"success": False, "error": str(e)}
+
+
 @router.get("/api/pinecone-check-source/{source_id}")
 async def pinecone_check_source(source_id: str):
     """
@@ -1379,8 +1610,10 @@ async def pinecone_push(
     _: bool = Depends(_require_global_admin)
 ):
     """
-    Push local ChromaDB changes to Pinecone.
+    Push local ChromaDB changes to Pinecone (runs as background job).
     Uploads new and updated documents from local to remote.
+
+    Returns a job_id to poll for progress.
 
     REQUIRES: VECTOR_DB_MODE=global
     """
@@ -1398,82 +1631,44 @@ async def pinecone_push(
         dry_run = request.dry_run if request else True
         source_filter = request.source_id if request else None
 
-        from offline_tools.vectordb import VectorStore, PineconeStore
-        from offline_tools.vectordb.sync import SyncManager
+        from .job_manager import get_job_manager
 
-        local = VectorStore()
-        remote = PineconeStore()
+        manager = get_job_manager()
 
-        sync = SyncManager(local, remote)
-        diff = sync.compare(source=source_filter)
-
-        # Check for conflicts
-        if diff.conflicts:
+        # Check if a pinecone sync job is already running
+        active_jobs = manager.get_active_jobs()
+        existing_job = next((job for job in active_jobs if job.get("job_type") == "pinecone_sync"), None)
+        if existing_job:
             return JSONResponse(
                 status_code=409,
                 content={
-                    "error": f"{len(diff.conflicts)} conflicts detected. Remote has newer versions.",
-                    "conflicts": diff.conflicts[:5]
+                    "error": "A Pinecone sync job is already running",
+                    "job_id": existing_job.get("id")
                 }
             )
 
-        # Nothing to push?
-        if not diff.to_push and not diff.to_update:
-            return {
-                "status": "success",
-                "message": "Already in sync - nothing to push",
-                "dry_run": dry_run,
-                "pushed": 0,
-                "updated": 0
-            }
-
-        # Do the push
-        stats = sync.push(diff, dry_run=dry_run, update=True, force=False)
-
-        # Auto-trigger visualization regeneration after successful push (non-dry-run only)
-        vis_job_id = None
-        running_vis_job = None
-        if not dry_run and (stats.get("pushed", 0) > 0 or stats.get("updated", 0) > 0):
-            try:
-                from .job_manager import get_job_manager
-                from .routes.visualise import generate_and_publish_visualisation_job
-                
-                manager = get_job_manager()
-                
-                # Check if visualization job is already running
-                active_jobs = manager.get_active_jobs()
-                running_vis_job = next((job for job in active_jobs if job.get("job_type") == "visualisation"), None)
-                
-                if running_vis_job:
-                    # Return info about running job so frontend can ask user about publishing
-                    vis_job_id = running_vis_job.get("id")
-                    print(f"[PineconePush] Visualization job already running: {vis_job_id}")
-                else:
-                    vis_job_id = manager.submit(
-                        job_type="visualisation",
-                        source_id="_system",
-                        func=generate_and_publish_visualisation_job
-                    )
-                    print(f"[PineconePush] Auto-started visualization job: {vis_job_id}")
-            except Exception as vis_err:
-                print(f"[PineconePush] Error starting visualization: {vis_err}")
+        # Submit the background job
+        job_type = "pinecone_sync_dry" if dry_run else "pinecone_sync"
+        job_id = manager.submit(
+            job_type=job_type,
+            source_id="_pinecone",
+            func=pinecone_sync_job,
+            dry_run=dry_run,
+            source_filter=source_filter
+        )
 
         return {
-            "status": "success",
+            "status": "started",
+            "job_id": job_id,
             "dry_run": dry_run,
-            "pushed": stats.get("pushed", 0),
-            "updated": stats.get("updated", 0),
-            "skipped": stats.get("skipped", 0),
-            "errors": stats.get("errors", 0),
-            "message": "Dry run complete - no changes made" if dry_run else "Push complete",
-            "visualization_job_id": vis_job_id,
-            "visualization_already_running": bool(running_vis_job)
+            "message": f"{'Dry run' if dry_run else 'Sync'} job started"
         }
 
-    except ImportError as e:
+    except ValueError as e:
+        # Job conflict
         return JSONResponse(
-            status_code=500,
-            content={"error": f"Missing dependency: {str(e)}"}
+            status_code=409,
+            content={"error": str(e)}
         )
     except Exception as e:
         import traceback

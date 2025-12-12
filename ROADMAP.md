@@ -436,73 +436,60 @@ Integrate the existing HTML scraper into the admin dashboard for creating custom
 
 ---
 
-### Multi-Dimension Local Search
+### Dual Embedding Architecture
 
-Support mixed embedding dimensions in local ChromaDB for flexibility between downloaded packs and user-created sources.
+Standardized dual-dimension system for online/offline semantic search.
 
-**Status:** Planning
+**Status:** DECIDED - Implementation planned
 
-**Problem:**
-- Downloaded source packs use OpenAI 1536-dim embeddings (high quality)
-- Local indexing on low-power devices (RPi 5) needs smaller 384-dim models
-- ChromaDB collections are fixed-dimension - can't mix in same collection
-- Users want both: downloaded packs AND their own local sources
+**See [docs/optimization-notes.md](docs/optimization-notes.md) for full details.**
 
-**Solution: Per-Source Collections**
+**The Decision:**
+
+| Context | Dimension | Model | Owner |
+|---------|-----------|-------|-------|
+| Online (Pinecone) | 1536 | OpenAI text-embedding-3-small | Global Admin |
+| Offline (ChromaDB) | 768 | all-mpnet-base-v2 | Global Admin |
+
+**Key Points:**
+- Global Admin creates BOTH 768 and 1536 embeddings
+- Users download 768-dim only (smaller, works offline)
+- Local admins can use any dimension locally, re-embedded on submission
+- True offline semantic search (not keyword fallback)
+
+**File Structure:**
 ```
-ChromaDB
-  +-- collection: "ready_gov_site" (1536-dim, downloaded)
-  +-- collection: "wikipedia_climate" (1536-dim, downloaded)
-  +-- collection: "my_local_pdfs" (384-dim, user-created)
-  +-- collection: "neighborhood_guide" (384-dim, user-created)
-```
-
-**Search Flow:**
-```
-User query: "how to filter water"
-    |
-    v
-Group sources by dimension:
-  - 1536-dim: ready_gov, wikipedia (need OpenAI or skip if offline)
-  - 384-dim: my_local_pdfs, neighborhood_guide (local model)
-    |
-    v
-Embed query once per unique dimension
-    |
-    v
-Search all collections in parallel
-    |
-    v
-Merge results by score, return top N
+{source_id}/
+    _vectors_768.json    # Offline (downloaded by users)
+    _vectors_1536.json   # Online (Pinecone + backup)
 ```
 
-**Manifest Tracking:**
-```json
-{
-  "embedding_model": "all-MiniLM-L6-v2",
-  "embedding_dimensions": 384,
-  "embedding_mode": "local"
-}
-```
+### User Tier System
 
-**Implementation:**
-1. ChromaDB store: Create collection per source_id (not one global)
-2. EmbeddingService: Cache models, support multiple dimensions
-3. Search: Detect dimensions, embed query appropriately, merge results
-4. Downloaded packs: Load `_vectors.json` into source-specific collection
+Four-tier system supporting different hardware and use cases.
 
-**Hardware Considerations (RPi 5):**
+**Status:** DECIDED - See [docs/optimization-notes.md](docs/optimization-notes.md)
 
-| Model | Dimensions | Size | Speed |
-|-------|------------|------|-------|
-| all-MiniLM-L6-v2 | 384 | 22MB | ~50-100 docs/sec |
-| all-mpnet-base-v2 | 768 | 420MB | ~10-20 docs/sec |
-| OpenAI API | 1536 | N/A | Network-bound |
+| Tier | Hardware | Role | Primary Actions |
+|------|----------|------|-----------------|
+| Consumer | RPi5 / Field | End user | Download, search, browse |
+| Local Admin | Laptop 8-16GB | Creator | Create sources, submit |
+| Global Admin | Desktop + API | Curator | Review, standardize, publish |
+| Super Powered | Cloud/GPU | Processing | Mass indexing, parallel API |
 
-**Offline Mode:**
-- If 1536-dim sources exist but no API key: skip those collections
-- Show warning: "3 sources unavailable (requires internet)"
-- Or: re-embed locally on first offline use (one-time cost)
+**Consumer Tier (RPi5):**
+- Downloads pre-embedded 768-dim packs
+- Query embedding: ~200-500ms (feasible on RPi5)
+- Optional LLM: Llama 3.2 3B Q4 (~15-20 sec responses)
+- Search Mode vs Conversation Mode toggle
+
+**Processing Time Reality:**
+
+| Source Size | Local Admin (768) | Global Admin (API) | Super Powered |
+|-------------|-------------------|-------------------|---------------|
+| 10,000 docs | ~2 hours | ~15 min | ~3 min |
+| 100,000 docs | ~20 hours | ~2 hours | ~20 min |
+| 450,000 docs | 4+ days | ~10 hours | ~2 hours |
 
 ---
 
@@ -786,38 +773,38 @@ disaster-clippy-solar.zim    # 150MB - Solar/energy
 
 Provide AI capabilities without internet.
 
-**Option A: Pre-trained Small Model (2-4 GB)**
-- Phi-3, Llama-3.2, or Mistral 7B quantized
-- Runs on CPU (8GB RAM minimum)
-- Fine-tuned system prompt for disaster prep domain
-- Via Ollama or llama.cpp
+**Status:** DECIDED - See [docs/optimization-notes.md](docs/optimization-notes.md) for RPi5 analysis
 
-**Option B: Cached Response Database (50-200 MB)**
-- Pre-computed answers to 10,000+ common questions
-- Fuzzy matching to find similar questions
-- No inference needed, instant responses
-- Works on any device including phones
+**Recommended for RPi5 (Consumer Tier):**
+- Embedding: all-mpnet-base-v2 (768-dim, ~500MB RAM)
+- LLM: Llama 3.2 3B Q4 (~2GB RAM, 8-15 tokens/sec)
+- Total RAM needed: ~5GB of 8GB available
 
-**Option C: Hybrid (Recommended)**
-- Check cached answers first (instant)
-- If no match + local model: run inference
-- If no match + no model: show relevant ZIM pages
-- Always offer "browse in Kiwix" fallback
+**Search Mode vs Conversation Mode:**
 
-**Hardware Tiers:**
+| Mode | Response Time | Use Case |
+|------|---------------|----------|
+| Search Mode | 1-2 sec | Quick lookup, just show docs |
+| Conversation Mode | 15-20 sec | LLM synthesizes answer |
+
+**User Experience:**
+- First query: +15-30 sec for model loading
+- Subsequent queries: ~15-20 seconds
+- Streaming responses to feel faster
+
+**Hardware Tiers (Updated):**
 
 | Tier | RAM | Capability |
 |------|-----|------------|
-| Phone/RPi | 512MB-2GB | Cached answers + ZIM browse |
-| Old Laptop | 4-8GB | + Phi-3 Mini (slow) |
-| Modern Laptop | 8-16GB | + Llama-3.2/Mistral-7B |
-| Desktop GPU | 16GB+ | + Larger models, fast |
+| RPi5 Consumer | 4-8GB | 768-dim search + optional 3B LLM |
+| Local Admin | 8-16GB | Full source tools + 7B LLM |
+| Global Admin | 16GB+ | Dual embedding + larger models |
 
-**Offline Download Packages:**
-- Minimal (500 MB): ZIM only, browse and search
-- Standard (700 MB): + cached AI answers
-- Full (3 GB): + local LLM model
-- Power User (5 GB): + larger model, dev tools
+**Consumer Optimizations:**
+- Pre-load models on startup
+- Cache recent query embeddings
+- Memory-mapped ChromaDB
+- Pre-bundled models (no download wait)
 
 ---
 
@@ -1238,7 +1225,8 @@ The chat maintains conversation history and article references for follow-up que
 | [DEVELOPER.md](DEVELOPER.md) | Technical details, CLI tools, security |
 | [SUMMARY.md](SUMMARY.md) | Executive summary (non-technical) |
 | [CONTEXT.md](CONTEXT.md) | Architecture and design decisions |
+| [docs/optimization-notes.md](docs/optimization-notes.md) | **Dual embedding architecture, tier system, implementation plan** |
 
 ---
 
-*Last Updated: December 2025*
+*Last Updated: December 11, 2025*

@@ -268,10 +268,11 @@
             btnCommit.disabled = true;
 
             statusDiv.innerHTML = commit
-                ? '<span style="color: #f9a825;">Pushing to Pinecone... This may take a while.</span>'
-                : '<span style="color: #888;">Running dry run...</span>';
+                ? '<span style="color: #f9a825;">Starting sync job...</span>'
+                : '<span style="color: #888;">Starting dry run job...</span>';
 
             try {
+                // Submit the job
                 const response = await fetch('/useradmin/api/pinecone-push', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -281,60 +282,122 @@
                 const data = await response.json();
 
                 if (!response.ok) {
-                    if (response.status === 409) {
-                        // Conflicts
-                        statusDiv.innerHTML = `<span style="color: #e94560;">
-                            Conflicts detected! Remote has newer versions of some documents.<br>
-                            Resolve conflicts before pushing.
-                        </span>`;
+                    if (response.status === 409 && data.job_id) {
+                        // Job already running
+                        statusDiv.innerHTML = `<span style="color: #f9a825;">A sync job is already running. Monitoring...</span>`;
+                        pollSyncJob(data.job_id, commit, statusDiv, btnSync, btnCommit);
+                        return;
+                    } else if (response.status === 409) {
+                        statusDiv.innerHTML = `<span style="color: #e94560;">${data.error || 'Conflict detected'}</span>`;
                     } else {
-                        statusDiv.innerHTML = `<span style="color: #e94560;">Error: ${data.error || 'Push failed'}</span>`;
+                        statusDiv.innerHTML = `<span style="color: #e94560;">Error: ${data.error || 'Failed to start job'}</span>`;
                     }
+                    btnSync.disabled = false;
+                    btnCommit.disabled = false;
                     return;
                 }
 
-                // Success
-                let msg = commit ? 'Push complete!' : 'Dry run complete (no changes made)';
-                let color = commit ? '#4ecca3' : '#888';
-
-                let visMsg = '';
-                if (commit && data.visualization_job_id) {
-                    if (data.visualization_already_running) {
-                        visMsg = '<br><span style="color: #f9a825; font-size: 0.85rem;">Visualization regeneration already in progress...</span>';
-                        // Ask user if they want to publish when it finishes
-                        const shouldPublish = confirm('A visualization regeneration is already running.
-
-Would you like to automatically publish it to R2 when it finishes?');
-                        if (shouldPublish) {
-                            visMsg = '<br><span style="color: #4ecca3; font-size: 0.85rem;">Waiting for visualization to complete, then publishing...</span>';
-                            waitForVisualizationAndPublish(data.visualization_job_id, statusDiv);
-                        }
-                    } else {
-                        visMsg = '<br><span style="color: #4ecca3; font-size: 0.85rem;">Visualization regenerating and publishing to R2...</span>';
-                    }
-                }
-
-                statusDiv.innerHTML = `
-                    <span style="color: ${color};">${msg}</span><br>
-                    <span style="color: #888; font-size: 0.85rem;">
-                        Pushed: ${data.pushed} | Updated: ${data.updated} | Errors: ${data.errors || 0}
-                    </span>${visMsg}
-                `;
-
-                if (commit && (data.pushed > 0 || data.updated > 0)) {
-                    // Refresh status after successful push
-                    setTimeout(() => {
-                        checkStatus();
-                        compareWithPinecone();
-                    }, 1000);
+                // Job started - poll for status
+                if (data.job_id) {
+                    pollSyncJob(data.job_id, commit, statusDiv, btnSync, btnCommit);
+                } else {
+                    // Shouldn't happen but handle it
+                    statusDiv.innerHTML = `<span style="color: #e94560;">Error: No job ID returned</span>`;
+                    btnSync.disabled = false;
+                    btnCommit.disabled = false;
                 }
 
             } catch (e) {
                 statusDiv.innerHTML = `<span style="color: #e94560;">Error: ${e.message}</span>`;
-            } finally {
                 btnSync.disabled = false;
                 btnCommit.disabled = false;
             }
+        }
+
+        function pollSyncJob(jobId, commit, statusDiv, btnSync, btnCommit) {
+            const pollInterval = setInterval(async () => {
+                try {
+                    const resp = await fetch('/useradmin/api/jobs/' + jobId);
+                    const job = await resp.json();
+
+                    // Update progress display
+                    const progressPct = job.progress || 0;
+                    const message = job.message || 'Processing...';
+                    const progressBar = `<div style="background: #0f3460; border-radius: 4px; height: 8px; margin: 0.5rem 0; overflow: hidden;">
+                        <div style="background: #4ecca3; height: 100%; width: ${progressPct}%; transition: width 0.3s;"></div>
+                    </div>`;
+
+                    if (job.status === 'running' || job.status === 'pending') {
+                        statusDiv.innerHTML = `
+                            <span style="color: #f9a825;">${commit ? 'Syncing' : 'Dry run'}: ${message}</span>
+                            ${progressBar}
+                            <span style="color: #888; font-size: 0.8rem;">${progressPct}% complete</span>
+                        `;
+                    } else if (job.status === 'completed') {
+                        clearInterval(pollInterval);
+                        btnSync.disabled = false;
+                        btnCommit.disabled = false;
+
+                        const result = job.result || {};
+                        const msg = commit ? 'Push complete!' : 'Dry run complete';
+                        const color = commit ? '#4ecca3' : '#888';
+
+                        // For dry run, show what would happen
+                        let statsMsg = '';
+                        if (result.dry_run) {
+                            statsMsg = `To Push: ${result.to_push || 0} | To Update: ${result.to_update || 0}`;
+                        } else {
+                            statsMsg = `Pushed: ${result.pushed || 0} | Updated: ${result.updated || 0} | Errors: ${result.errors || 0}`;
+                        }
+
+                        let visMsg = '';
+                        if (result.visualization_job_id) {
+                            if (result.visualization_already_running) {
+                                visMsg = '<br><span style="color: #f9a825; font-size: 0.85rem;">Visualization regeneration already in progress...</span>';
+                            } else {
+                                visMsg = '<br><span style="color: #4ecca3; font-size: 0.85rem;">Visualization regenerating and publishing to R2...</span>';
+                            }
+                        }
+
+                        statusDiv.innerHTML = `
+                            <span style="color: ${color};">${msg}</span><br>
+                            <span style="color: #888; font-size: 0.85rem;">${statsMsg}</span>
+                            ${result.message ? '<br><span style="color: #888; font-size: 0.8rem;">' + result.message + '</span>' : ''}
+                            ${visMsg}
+                        `;
+
+                        if (commit && (result.pushed > 0 || result.updated > 0)) {
+                            setTimeout(() => {
+                                checkStatus();
+                                compareWithPinecone();
+                            }, 1000);
+                        }
+                    } else if (job.status === 'failed') {
+                        clearInterval(pollInterval);
+                        btnSync.disabled = false;
+                        btnCommit.disabled = false;
+
+                        const result = job.result || {};
+                        const errorMsg = result.error || job.error || 'Unknown error';
+
+                        if (result.conflicts) {
+                            statusDiv.innerHTML = `<span style="color: #e94560;">
+                                Conflicts detected! Remote has newer versions of some documents.<br>
+                                Resolve conflicts before pushing.
+                            </span>`;
+                        } else {
+                            statusDiv.innerHTML = `<span style="color: #e94560;">Error: ${errorMsg}</span>`;
+                        }
+                    } else if (job.status === 'cancelled') {
+                        clearInterval(pollInterval);
+                        btnSync.disabled = false;
+                        btnCommit.disabled = false;
+                        statusDiv.innerHTML = `<span style="color: #888;">Job cancelled</span>`;
+                    }
+                } catch (e) {
+                    console.error('Error polling job:', e);
+                }
+            }, 1000);  // Poll every second
         }
 
         async function waitForVisualizationAndPublish(jobId, statusDiv) {

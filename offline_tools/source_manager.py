@@ -1424,6 +1424,10 @@ class SourceManager:
                 title = getattr(article, 'title', '') or ''
                 mimetype = str(getattr(article, 'mimetype', ''))
 
+                # Strip quotes from title and URL (fixes articles like "Aquifex aeolicus")
+                url = url.strip('"')
+                title = title.strip('"')
+
                 # Only process HTML articles
                 if 'text/html' not in mimetype:
                     continue
@@ -2565,6 +2569,187 @@ class SourceManager:
                 "discovered_terms": {},
                 "total_terms": 0
             }
+
+    def suggest_all_tags_combined(self, source_id: str, progress_callback=None) -> Dict[str, Any]:
+        """
+        Optimized combined tag suggestion - scans documents only ONCE.
+
+        Combines the functionality of suggest_tags() and analyze_metadata_for_tags()
+        into a single pass through the documents, reducing processing time by ~50%.
+
+        Args:
+            source_id: Source identifier
+            progress_callback: Optional callback(current, total, message) for progress updates
+
+        Returns:
+            Dict with:
+                - tags: list of {tag, score, type} sorted by score
+                - topic_count: number of TOPIC_KEYWORDS matches
+                - novel_count: number of novel terms discovered
+                - documents_scanned: number of documents processed
+        """
+        import re
+        from collections import Counter
+        from .schemas import get_metadata_file, normalize_tag
+
+        source_path = self.get_source_path(source_id)
+        print(f"[suggest_all_tags_combined] Called for source: {source_id}")
+
+        tag_scores = {}  # TOPIC_KEYWORDS scores
+        word_freq = Counter()  # Novel term frequencies
+        priority_tags = set()
+
+        # Build existing keywords set for novel term filtering
+        existing_keywords = set()
+        for keywords in self.TOPIC_KEYWORDS.values():
+            for kw in keywords:
+                existing_keywords.update(kw.lower().split())
+
+        # Check source_id for priority tags (word boundary matches)
+        source_words = set(re.split(r'[-_\s]+', source_id.lower()))
+        priority_matches = {}
+        for tag, keywords in self.TOPIC_KEYWORDS.items():
+            for keyword in keywords:
+                if keyword.lower() in source_words:
+                    priority_tags.add(tag)
+                    priority_matches[tag] = keyword
+                    break
+
+        if priority_matches:
+            print(f"[suggest_all_tags_combined] Priority matches from source_id: {priority_matches}")
+
+        # For PDF sources, check _collection.json topics first
+        collection_file = source_path / "_collection.json"
+        if collection_file.exists():
+            try:
+                with open(collection_file, 'r', encoding='utf-8') as f:
+                    collection_data = json.load(f)
+                topics = collection_data.get("collection", {}).get("topics", [])
+                for topic in topics:
+                    if topic not in tag_scores:
+                        tag_scores[topic] = 1  # Base score for collection topics
+                print(f"[suggest_all_tags_combined] Got {len(topics)} topics from collection")
+            except Exception as e:
+                print(f"[suggest_all_tags_combined] Error reading collection: {e}")
+
+        # Load metadata and scan documents - SINGLE PASS
+        metadata_file = source_path / get_metadata_file()
+        documents_scanned = 0
+
+        if metadata_file.exists():
+            try:
+                with open(metadata_file, 'r', encoding='utf-8') as f:
+                    metadata = json.load(f)
+
+                documents = metadata.get("documents", {})
+                documents_scanned = len(documents) if isinstance(documents, dict) else 0
+                print(f"[suggest_all_tags_combined] Scanning {documents_scanned} documents...")
+
+                if documents:
+                    # SINGLE PASS through all documents
+                    all_text_parts = []  # Use list for efficient concatenation
+                    total_docs = len(documents)
+                    processed = 0
+                    last_progress_report = 0
+
+                    for doc_id, doc_info in documents.items():
+                        title = doc_info.get("title", "")
+                        snippet = doc_info.get("snippet", "")
+
+                        # For TOPIC_KEYWORDS matching (title + snippet)
+                        title_lower = title.lower()
+                        snippet_lower = snippet.lower()
+                        all_text_parts.append(title_lower)
+                        all_text_parts.append(snippet_lower)
+
+                        # For novel term discovery (title only, normalized)
+                        title_words = re.findall(r'\b[a-zA-Z]{3,}\b', title_lower)
+                        for word in title_words:
+                            normalized = normalize_tag(word)
+                            if normalized not in self.STOPWORDS and normalized not in existing_keywords:
+                                word_freq[normalized] += 1
+
+                        # Report progress every 5000 documents or every 5%
+                        processed += 1
+                        if progress_callback and (processed - last_progress_report >= 5000 or processed == total_docs):
+                            progress_pct = int((processed / total_docs) * 80)  # 0-80% for scanning
+                            progress_callback(progress_pct, 100, f"Scanning documents... {processed:,}/{total_docs:,}")
+                            last_progress_report = processed
+
+                    # Join all text once for keyword searching
+                    all_text = " ".join(all_text_parts)
+                    if progress_callback:
+                        progress_callback(85, 100, "Analyzing keyword matches...")
+
+                    # Count TOPIC_KEYWORDS matches
+                    for tag, keywords in self.TOPIC_KEYWORDS.items():
+                        score = 0
+                        for keyword in keywords:
+                            count = all_text.count(keyword)
+                            if count > 0:
+                                score += count
+                        if score > 0:
+                            tag_scores[tag] = score
+
+                    print(f"[suggest_all_tags_combined] Found {len(tag_scores)} topic tags, {len(word_freq)} raw novel terms")
+
+            except Exception as e:
+                print(f"[suggest_all_tags_combined] Error reading metadata: {e}")
+                import traceback
+                traceback.print_exc()
+        else:
+            print(f"[suggest_all_tags_combined] Metadata file not found: {metadata_file}")
+
+        # Filter novel terms to those appearing 2+ times
+        novel_terms = {word: count for word, count in word_freq.most_common() if count >= 2}
+
+        # Combine results
+        combined = {}
+
+        # Priority boost for source_id matches
+        priority_boost = max(tag_scores.values()) + 1 if tag_scores else 10000
+
+        # Add TOPIC_KEYWORDS with priority boost where applicable
+        for tag, score in tag_scores.items():
+            if tag in priority_tags:
+                combined[tag] = {"score": score + priority_boost, "type": "topic"}
+            else:
+                combined[tag] = {"score": score, "type": "topic"}
+
+        # Add priority tags that weren't found in content
+        for tag in priority_tags:
+            if tag not in combined:
+                combined[tag] = {"score": priority_boost, "type": "topic"}
+
+        # Add novel terms (skip duplicates)
+        for term, count in novel_terms.items():
+            if term not in combined:
+                combined[term] = {"score": count, "type": "novel"}
+
+        # Sort by score descending
+        sorted_tags = sorted(combined.items(), key=lambda x: x[1]["score"], reverse=True)
+
+        # Build result list
+        result_tags = []
+        for tag, info in sorted_tags[:200]:
+            result_tags.append({
+                "tag": tag,
+                "score": info["score"],
+                "type": info["type"]
+            })
+
+        topic_count = len([t for t in result_tags if t["type"] == "topic"])
+        novel_count = len([t for t in result_tags if t["type"] == "novel"])
+
+        print(f"[suggest_all_tags_combined] Returning {len(result_tags)} tags ({topic_count} topic, {novel_count} novel)")
+
+        return {
+            "success": True,
+            "tags": result_tags,
+            "topic_count": topic_count,
+            "novel_count": novel_count,
+            "documents_scanned": documents_scanned
+        }
 
     def discover_novel_used_tags(self, source_ids: List[str] = None) -> Dict[str, Any]:
         """

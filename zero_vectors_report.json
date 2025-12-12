@@ -1,0 +1,52 @@
+{
+  "total_null": 0,
+  "total_zero": 7,
+  "by_source": {
+    "appropedia": 5,
+    "wikipedia_climate_change": 2
+  },
+  "documents": [
+    {
+      "id": "88958d3beaf44199c9da565b030987fc",
+      "title": "Blogs relevant to Appropedia",
+      "source": "appropedia",
+      "reason": "all zeros"
+    },
+    {
+      "id": "197a643117e81ebb60843cee3b186ce4",
+      "title": "Earthing (electrical)",
+      "source": "appropedia",
+      "reason": "all zeros"
+    },
+    {
+      "id": "127ab47557f89e08414ddc46301db003",
+      "title": "Energy and Environmental Security Initiative",
+      "source": "wikipedia_climate_change",
+      "reason": "all zeros"
+    },
+    {
+      "id": "6b03783a68ec5613e302ada993748070",
+      "title": "Humboldt SoE mechanical arm demo",
+      "source": "appropedia",
+      "reason": "all zeros"
+    },
+    {
+      "id": "ef82428ea93c25dae8a2a6f14785f19c",
+      "title": "Lisa Blair",
+      "source": "wikipedia_climate_change",
+      "reason": "all zeros"
+    },
+    {
+      "id": "1da33099a100f3367337287149264f72",
+      "title": "Low bandwidth browsing",
+      "source": "appropedia",
+      "reason": "all zeros"
+    },
+    {
+      "id": "7988c211949418960edd4fca59f4141f",
+      "title": "News by UK location 2021",
+      "source": "appropedia",
+      "reason": "all zeros"
+    }
+  ]
+}

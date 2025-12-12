@@ -34,11 +34,12 @@ def get_default_chroma_path() -> str:
 class VectorStore:
     """ChromaDB-based vector store for article embeddings"""
 
-    def __init__(self, persist_dir: str = None, collection_name: str = "articles"):
+    def __init__(self, persist_dir: str = None, collection_name: str = "articles", read_only: bool = False):
         """
         Args:
             persist_dir: Directory to persist ChromaDB data (defaults to BACKUP_PATH/chroma)
             collection_name: Name of the collection
+            read_only: If True, skip embedding model initialization (faster for read-only ops)
         """
         if persist_dir is None:
             persist_dir = get_default_chroma_path()
@@ -54,12 +55,20 @@ class VectorStore:
             metadata={"description": "DIY/humanitarian article embeddings"}
         )
 
-        # Embedding service for queries
-        self.embedding_service = EmbeddingService()
+        # Embedding service for queries - skip in read_only mode for faster init
+        self._read_only = read_only
+        self._embedding_service = None if read_only else EmbeddingService()
 
         # Metadata index for sync operations - reads from backup folder JSON files
         from .metadata import MetadataIndex
         self.metadata_index = MetadataIndex()
+
+    @property
+    def embedding_service(self):
+        """Lazy-load embedding service on first access if in read_only mode"""
+        if self._embedding_service is None:
+            self._embedding_service = EmbeddingService()
+        return self._embedding_service
 
     def add_documents(self, documents: List[Dict[str, Any]],
                       embeddings: Optional[List[List[float]]] = None,
@@ -293,6 +302,40 @@ class VectorStore:
             print(f"[VectorStore] Error getting source IDs for {source_id}: {e}")
             return set()
 
+    def has_valid_embedding(self, doc_id: str) -> bool:
+        """
+        Check if a document has a valid (non-zero) embedding.
+
+        Used to detect documents that were indexed but have bad embeddings
+        (e.g., due to API errors). These should be re-indexed.
+
+        Args:
+            doc_id: The document ID to check
+
+        Returns:
+            True if embedding exists and is non-zero, False otherwise
+        """
+        try:
+            result = self.collection.get(
+                ids=[doc_id],
+                include=["embeddings"]
+            )
+            if not result["ids"]:
+                return False
+
+            embedding = result["embeddings"][0] if result["embeddings"] else None
+            if embedding is None:
+                return False
+
+            # Check if all values are zero (invalid embedding)
+            if all(v == 0 for v in embedding):
+                return False
+
+            return True
+        except Exception as e:
+            print(f"[VectorStore] Error checking embedding for {doc_id}: {e}")
+            return False
+
     def add_documents_incremental(self, documents: List[Dict[str, Any]],
                                   source_id: str,
                                   batch_size: int = 100,
@@ -323,16 +366,43 @@ class VectorStore:
         existing_ids = self.get_source_document_ids(source_id)
         print(f"[VectorStore] Found {len(existing_ids)} existing documents for {source_id}")
 
-        # Filter out already-indexed documents
-        new_documents = [doc for doc in documents if doc.get("id") not in existing_ids]
-        skipped_count = len(documents) - len(new_documents)
+        # Filter documents: keep new ones AND ones with invalid embeddings
+        new_documents = []
+        skipped_count = 0
+        reindex_count = 0
+        reindex_ids = []  # Track IDs that need re-indexing (have bad embeddings)
+
+        for doc in documents:
+            doc_id = doc.get("id")
+            if doc_id not in existing_ids:
+                # New document - add it
+                new_documents.append(doc)
+            else:
+                # Existing document - check if it has a valid embedding
+                if not self.has_valid_embedding(doc_id):
+                    # Bad embedding - needs re-indexing
+                    new_documents.append(doc)
+                    reindex_ids.append(doc_id)
+                    reindex_count += 1
+                else:
+                    # Valid embedding - skip
+                    skipped_count += 1
 
         if skipped_count > 0:
             print(f"[VectorStore] Skipping {skipped_count} already-indexed documents")
 
+        if reindex_count > 0:
+            print(f"[VectorStore] Re-indexing {reindex_count} documents with invalid embeddings")
+            # Delete the old entries so we can re-add them with fresh embeddings
+            for doc_id in reindex_ids:
+                try:
+                    self.collection.delete(ids=[doc_id])
+                except Exception as e:
+                    print(f"[VectorStore] Warning: could not delete {doc_id}: {e}")
+
         if not new_documents:
             print(f"[VectorStore] All documents already indexed")
-            return {"count": 0, "skipped": skipped_count, "index_data": None, "resumed": True}
+            return {"count": 0, "skipped": skipped_count, "reindexed": 0, "index_data": None, "resumed": True}
 
         print(f"[VectorStore] Processing {len(new_documents)} new documents in batches of {batch_size}")
 
@@ -392,7 +462,8 @@ class VectorStore:
         result = {
             "count": total_added,
             "skipped": skipped_count,
-            "resumed": skipped_count > 0
+            "reindexed": reindex_count,
+            "resumed": skipped_count > 0 or reindex_count > 0
         }
 
         if return_index_data:
