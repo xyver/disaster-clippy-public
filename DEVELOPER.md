@@ -1205,7 +1205,9 @@ Most legacy fallback code has been removed. The following locations still contai
 
 ## Offline Architecture (Dual Embedding System)
 
-The system uses a dual embedding architecture to support both online and offline semantic search. See [docs/optimization-notes.md](docs/optimization-notes.md) for full details.
+The system uses a dual embedding architecture to support both online and offline semantic search. See:
+- [docs/offline-upgrade.md](docs/offline-upgrade.md) - Portable model packs, embedding architecture, user tiers
+- [docs/language-packs.md](docs/language-packs.md) - Offline translation for non-English users
 
 ### Quick Reference
 
@@ -1246,7 +1248,8 @@ Global Admin creates BOTH. Users download 768 only.
 | [CONTEXT.md](CONTEXT.md) | Architecture and design decisions (AI onboarding) |
 | [SUMMARY.md](SUMMARY.md) | Executive summary (non-technical) |
 | [ROADMAP.md](ROADMAP.md) | Future plans, testing, and feature development |
-| [docs/optimization-notes.md](docs/optimization-notes.md) | Dual embedding architecture, tier system, implementation plan |
+| [docs/offline-upgrade.md](docs/offline-upgrade.md) | Portable model packs, embedding architecture, user tiers |
+| [docs/language-packs.md](docs/language-packs.md) | Offline translation for non-English users |
 
 ---
 

@@ -223,7 +223,14 @@ Only recommend articles that are in the provided context - do not make up articl
 
 
 def get_system_prompt(mode: str = "online") -> str:
-    """Get system prompt from config or use default"""
+    """Get system prompt from env var, config, or default (in that order)"""
+    # 1. Check environment variables first (for Railway deployment)
+    env_var = f"SYSTEM_PROMPT_{mode.upper()}"
+    env_prompt = os.getenv(env_var)
+    if env_prompt:
+        return env_prompt
+
+    # 2. Try local config file
     try:
         from admin.local_config import get_local_config
         config = get_local_config()
@@ -233,7 +240,7 @@ def get_system_prompt(mode: str = "online") -> str:
     except Exception as e:
         print(f"Could not load prompt from config: {e}")
 
-    # Fallback to defaults
+    # 3. Fallback to defaults
     return DEFAULT_ONLINE_PROMPT if mode == "online" else DEFAULT_OFFLINE_PROMPT
 
 
@@ -590,6 +597,7 @@ async def get_welcome():
     """
     Get a dynamic welcome message based on indexed content.
     Uses _master.json for fast cached stats instead of querying ChromaDB.
+    Falls back to R2 cloud storage if local _master.json not available.
     """
     from admin.local_config import get_local_config
 
@@ -601,25 +609,43 @@ async def get_welcome():
     sources = {}
     topics_counter = Counter()  # Track tag frequency for better display order
     last_updated = None
+    master = None
 
+    # 1. Try local _master.json
     if backup_folder:
         master_file = Path(backup_folder) / "_master.json"
         if master_file.exists():
             try:
                 with open(master_file, 'r', encoding='utf-8') as f:
                     master = json.load(f)
-                total_docs = master.get("total_documents", 0)
-                sources = master.get("sources", {})
-                last_updated = master.get("last_updated")
-
-                # Collect topics from all sources (check both "tags" and "topics" for compatibility)
-                for source_id, source_info in sources.items():
-                    if isinstance(source_info, dict):
-                        source_tags = source_info.get("tags", []) or source_info.get("topics", [])
-                        if source_tags:
-                            topics_counter.update(source_tags)
             except Exception as e:
-                print(f"Warning: Could not load _master.json: {e}")
+                print(f"Warning: Could not load local _master.json: {e}")
+
+    # 2. Fall back to R2 cloud storage (for Railway deployment)
+    if not master:
+        try:
+            from offline_tools.cloud.r2 import get_backups_storage
+            storage = get_backups_storage()
+            if storage.is_configured():
+                master_content = storage.download_file_content("_master.json")
+                if master_content:
+                    master = json.loads(master_content)
+                    print("Loaded _master.json from R2")
+        except Exception as e:
+            print(f"Warning: Could not load _master.json from R2: {e}")
+
+    # 3. Extract data from master if found
+    if master:
+        total_docs = master.get("total_documents", 0)
+        sources = master.get("sources", {})
+        last_updated = master.get("last_updated")
+
+        # Collect topics from all sources (check both "tags" and "topics" for compatibility)
+        for source_id, source_info in sources.items():
+            if isinstance(source_info, dict):
+                source_tags = source_info.get("tags", []) or source_info.get("topics", [])
+                if source_tags:
+                    topics_counter.update(source_tags)
 
     # Fall back to ChromaDB if _master.json empty or missing
     if total_docs == 0:

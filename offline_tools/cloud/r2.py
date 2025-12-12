@@ -333,6 +333,27 @@ class R2Storage:
             self._last_error = str(e)
             return False
 
+    def download_file_content(self, remote_key: str) -> Optional[str]:
+        """
+        Download a file's content directly as a string (for small files like JSON).
+
+        Args:
+            remote_key: Key (path) in R2 bucket
+
+        Returns:
+            File content as string, or None if failed
+        """
+        try:
+            client = self._get_client()
+            response = client.get_object(Bucket=self.config.bucket_name, Key=remote_key)
+            content = response['Body'].read().decode('utf-8')
+            logger.info(f"Downloaded content from r2://{self.config.bucket_name}/{remote_key}")
+            return content
+        except ClientError as e:
+            logger.error(f"Download content failed: {e}")
+            self._last_error = str(e)
+            return None
+
     def list_files(self, prefix: str = "") -> List[Dict[str, Any]]:
         """
         List files in R2 bucket.
