@@ -419,7 +419,14 @@ Based on these search results, help the user find what they need."""
         )
 
     def _get_system_prompt(self, mode: str = "online") -> str:
-        """Get system prompt from config"""
+        """Get system prompt from env var, config, or default (in that order)"""
+        # 1. Check environment variables first (for Railway deployment)
+        env_var = f"SYSTEM_PROMPT_{mode.upper()}"
+        env_prompt = os.getenv(env_var)
+        if env_prompt:
+            return env_prompt
+
+        # 2. Try local config file
         try:
             from admin.local_config import get_local_config
             config = get_local_config()
