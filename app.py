@@ -612,12 +612,12 @@ async def get_welcome():
                 sources = master.get("sources", {})
                 last_updated = master.get("last_updated")
 
-                # Collect topics from all sources
+                # Collect topics from all sources (check both "tags" and "topics" for compatibility)
                 for source_id, source_info in sources.items():
                     if isinstance(source_info, dict):
-                        source_topics = source_info.get("topics", [])
-                        if source_topics:
-                            topics_counter.update(source_topics)
+                        source_tags = source_info.get("tags", []) or source_info.get("topics", [])
+                        if source_tags:
+                            topics_counter.update(source_tags)
             except Exception as e:
                 print(f"Warning: Could not load _master.json: {e}")
 
