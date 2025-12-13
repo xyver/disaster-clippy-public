@@ -3,76 +3,48 @@
  */
 
 // ============================================================================
-// Mode Toggle - Local/Global test mode switching
+// Admin Mode - Based on VECTOR_DB_MODE env var (no toggle override)
 // ============================================================================
 
-// Server's default mode from VECTOR_DB_MODE env var (fetched on init)
-let serverDefaultMode = 'local';
+// Server mode from VECTOR_DB_MODE env var (fetched on init)
+let serverMode = 'local';
 
-// Get current effective mode (toggle override or server default)
-function getTestMode() {
-    const toggleOverride = localStorage.getItem('adminModeOverride');
-    // If toggle has been used, return that; otherwise return server default
-    if (toggleOverride !== null) {
-        return toggleOverride;
-    }
-    return serverDefaultMode;
+// Check if in global admin mode (based on VECTOR_DB_MODE env)
+function isGlobalTestMode() {
+    return serverMode === 'global';
 }
 
-// Check if in global test mode
-function isGlobalTestMode() {
-    return getTestMode() === 'global';
+// Alias for clarity
+function isGlobalAdmin() {
+    return serverMode === 'global';
+}
+
+// Get current mode
+function getAdminMode() {
+    return serverMode;
 }
 
 // Update UI based on current mode
 function updateModeUI() {
-    const isGlobal = isGlobalTestMode();
-    const toggle = document.getElementById('modeToggle');
-    const label = document.getElementById('modeLabel');
-    const checkbox = document.getElementById('modeCheckbox');
-    const badge = document.getElementById('modeBadge');
+    const isGlobal = isGlobalAdmin();
 
-    if (!toggle || !label || !checkbox) return;
-
-    checkbox.checked = isGlobal;
-    toggle.classList.toggle('global', isGlobal);
-    label.textContent = isGlobal ? 'Global' : 'Local';
-
-    // Show TEST badge only when toggle is overriding the server default
-    const toggleOverride = localStorage.getItem('adminModeOverride');
-    if (badge) {
-        const isOverriding = toggleOverride !== null && toggleOverride !== serverDefaultMode;
-        badge.style.display = isOverriding ? 'inline' : 'none';
+    // Update mode indicator in nav
+    const indicator = document.getElementById('adminModeIndicator');
+    if (indicator) {
+        indicator.textContent = isGlobal ? 'Global' : 'Local';
+        indicator.classList.toggle('global', isGlobal);
     }
-
-    // Update CSS to match current mode
-    updateAdminCSS(isGlobal);
 
     // Update global-only features visibility
     updateGlobalFeatures();
-}
 
-// Dynamically switch between local-admin.css and global-admin.css
-function updateAdminCSS(isGlobal) {
-    // Find the admin CSS link element
-    const cssLinks = document.querySelectorAll('link[rel="stylesheet"]');
-    for (const link of cssLinks) {
-        const href = link.getAttribute('href');
-        if (href && href.includes('-admin.css')) {
-            const newCss = isGlobal ? 'global-admin.css' : 'local-admin.css';
-            const newHref = href.replace(/(?:local|global)-admin\.css/, newCss);
-            if (link.getAttribute('href') !== newHref) {
-                link.setAttribute('href', newHref);
-                console.log('Switched admin CSS to:', newCss);
-            }
-            break;
-        }
-    }
+    // Dispatch event for page-specific handlers
+    window.dispatchEvent(new CustomEvent('adminModeLoaded', { detail: { mode: serverMode, isGlobal } }));
 }
 
 // Show/hide global-only features based on mode
 function updateGlobalFeatures() {
-    const isGlobal = isGlobalTestMode();
+    const isGlobal = isGlobalAdmin();
 
     // Pinecone page is global-only for write operations
     const pineconeLink = document.querySelector('a[href="/useradmin/pinecone"]');
@@ -80,42 +52,20 @@ function updateGlobalFeatures() {
         pineconeLink.style.opacity = isGlobal ? '1' : '0.5';
         pineconeLink.title = isGlobal ? 'Pinecone (full access)' : 'Pinecone (read-only in local mode)';
     }
-
-    // Dispatch event for page-specific handlers
-    window.dispatchEvent(new CustomEvent('modeUIUpdated', { detail: { isGlobal } }));
 }
 
-// Toggle between local and global mode (temporary override for testing)
-function toggleMode() {
-    const checkbox = document.getElementById('modeCheckbox');
-    const newMode = checkbox.checked ? 'global' : 'local';
-
-    // Store as override
-    localStorage.setItem('adminModeOverride', newMode);
-    updateModeUI();
-
-    // Dispatch event for other components to react
-    window.dispatchEvent(new CustomEvent('testModeChanged', { detail: { mode: newMode, isGlobal: checkbox.checked } }));
-    console.log('Test mode override set to:', newMode, '(server default:', serverDefaultMode, ')');
-}
-
-// Clear the toggle override and use server default
-function resetToServerDefault() {
-    localStorage.removeItem('adminModeOverride');
-    updateModeUI();
-    console.log('Reset to server default mode:', serverDefaultMode);
-}
-
-// Fetch and apply server's default mode from VECTOR_DB_MODE
+// Fetch server mode from VECTOR_DB_MODE
 async function initServerMode() {
     try {
         const resp = await fetch('/useradmin/api/admin-mode');
         const data = await resp.json();
-        serverDefaultMode = data.mode || 'local';
-        console.log('Server VECTOR_DB_MODE:', serverDefaultMode);
+        serverMode = data.mode || 'local';
+        console.log('Admin mode (VECTOR_DB_MODE):', serverMode);
         updateModeUI();
     } catch (e) {
         console.error('Could not fetch admin mode, defaulting to local:', e);
+        serverMode = 'local';
+        updateModeUI();
     }
 }
 

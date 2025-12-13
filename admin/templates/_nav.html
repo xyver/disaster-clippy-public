@@ -9,10 +9,5 @@
     <a href="/useradmin/pinecone"{% if active_page == 'pinecone' %} class="active"{% endif %}>Pinecone</a>
     <a href="/">Chat</a>
     <span class="nav-divider"></span>
-    <label class="mode-toggle" id="modeToggle" title="Switch between Local and Global mode for testing">
-        <input type="checkbox" id="modeCheckbox" onchange="toggleMode()">
-        <span class="mode-label" id="modeLabel">Local</span>
-        <span class="toggle-slider"></span>
-        <span class="mode-badge" id="modeBadge">TEST</span>
-    </label>
+    <span id="adminModeIndicator" class="mode-indicator" title="Mode from VECTOR_DB_MODE">Local</span>
 </nav>
