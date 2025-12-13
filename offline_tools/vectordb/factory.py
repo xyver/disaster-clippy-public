@@ -22,8 +22,14 @@ Usage:
 import os
 from typing import Optional
 
-from .store import VectorStore
 from .metadata import MetadataIndex
+
+# VectorStore is optional (requires chromadb)
+try:
+    from .store import VectorStore, CHROMADB_AVAILABLE
+except ImportError:
+    VectorStore = None
+    CHROMADB_AVAILABLE = False
 
 
 def get_offline_mode() -> str:
@@ -121,24 +127,23 @@ def get_vector_store(mode: Optional[str] = None, dimension: Optional[int] = None
         dimension = get_default_dimension()
 
     if mode == "local":
+        # Check if ChromaDB is available
+        if VectorStore is None or not CHROMADB_AVAILABLE:
+            raise ImportError(
+                "ChromaDB is not installed. For cloud deployments, set VECTOR_DB_MODE=pinecone. "
+                "For local development, install with: pip install chromadb"
+            )
         # Get dimension-specific path
         persist_dir = kwargs.pop("persist_dir", None)
         if persist_dir is None:
             persist_dir = get_chroma_path_for_dimension(dimension or 1536)
         return VectorStore(persist_dir=persist_dir, **kwargs)
 
-    elif mode in ("pinecone", "global"):
-        # Import here to avoid requiring pinecone when not used
-        # "global" is an alias for pinecone mode
-        # Pinecone always uses 1536-dim
+    elif mode in ("pinecone", "global", "railway"):
+        # Cloud modes: pinecone, global, railway
+        # All use Pinecone for vector storage with OpenAI embeddings (1536-dim)
         from .pinecone_store import PineconeStore
         return PineconeStore(**kwargs)
-
-    elif mode == "railway":
-        # Railway uses persistent volume at /data
-        # Railway serves online users, so uses 1536-dim
-        persist_dir = os.getenv("RAILWAY_VOLUME_PATH", "/data/chroma_db_1536")
-        return VectorStore(persist_dir=persist_dir, **kwargs)
 
     elif mode == "qdrant":
         raise NotImplementedError("Qdrant support coming soon")

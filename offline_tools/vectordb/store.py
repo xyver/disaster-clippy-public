@@ -1,16 +1,30 @@
 """
 Vector store using ChromaDB for semantic search.
+ChromaDB is optional - for cloud deployments, use PineconeStore instead.
 """
 
-import chromadb
-from chromadb.config import Settings
 from typing import List, Dict, Optional, Any
 from pathlib import Path
 import json
 import os
-import numpy as np
 
-from offline_tools.embeddings import EmbeddingService
+# ChromaDB is optional (not available in cloud deployments)
+try:
+    import chromadb
+    from chromadb.config import Settings
+    import numpy as np
+    CHROMADB_AVAILABLE = True
+except ImportError:
+    CHROMADB_AVAILABLE = False
+    chromadb = None
+    Settings = None
+    np = None
+
+# EmbeddingService import is also conditional (uses sentence-transformers)
+try:
+    from offline_tools.embeddings import EmbeddingService
+except ImportError:
+    EmbeddingService = None
 
 
 def get_default_chroma_path(dimension: int = None) -> str:
@@ -70,6 +84,12 @@ class VectorStore:
             read_only: If True, skip embedding model initialization (faster for read-only ops)
             dimension: Embedding dimension (768 for local, 1536 for OpenAI). If None, auto-detects.
         """
+        if not CHROMADB_AVAILABLE:
+            raise ImportError(
+                "ChromaDB is not installed. For cloud deployments, use PineconeStore instead. "
+                "For local development, install with: pip install chromadb"
+            )
+
         self.dimension = dimension
         if persist_dir is None:
             persist_dir = get_default_chroma_path(dimension)
