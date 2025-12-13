@@ -34,3 +34,17 @@ slowapi>=0.1.9
 
 # Cloud storage (R2/S3)
 boto3>=1.34.0
+
+# Local embeddings (offline mode)
+sentence-transformers>=2.2.0
+
+# Translation (language packs)
+transformers>=4.30.0
+sentencepiece>=0.1.99
+sacremoses>=0.0.53
+
+# ZIM file reading (offline articles)
+zimply-core>=1.0.0
+
+# Local LLM (llama.cpp runtime)
+llama-cpp-python>=0.2.0

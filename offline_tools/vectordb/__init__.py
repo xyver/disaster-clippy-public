@@ -6,7 +6,7 @@ Handles vector storage for semantic search using ChromaDB or Pinecone.
 
 from .store import VectorStore
 from .pinecone_store import PineconeStore
-from .factory import get_vector_store, get_metadata_store
+from .factory import get_vector_store, get_metadata_store, get_vector_store_for_search
 from .metadata import (
     MetadataIndex,
     classify_doc_type,
@@ -20,6 +20,7 @@ __all__ = [
     'VectorStore',
     'PineconeStore',
     'get_vector_store',
+    'get_vector_store_for_search',
     'get_metadata_store',
     'MetadataIndex',
     'classify_doc_type',

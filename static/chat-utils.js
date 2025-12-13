@@ -25,12 +25,17 @@ function parseMarkdown(text) {
 
     // Convert markdown links [text](url) to clickable links
     // Allow http, https URLs (external - opens in new tab)
-    html = html.replace(/\[([^\]]+)\]\((https?:\/\/[^\)]+)\)/g,
+    // Regex handles URLs with parentheses like Wikipedia: Residency_(medicine)
+    html = html.replace(/\[([^\]]+)\]\((https?:\/\/[^()\s]*(?:\([^()]*\)[^()\s]*)*)\)/g,
         '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
 
     // Also allow local /zim/ URLs (opens in new tab to preserve chat history)
-    html = html.replace(/\[([^\]]+)\]\((\/zim\/[^\)]+)\)/g,
+    html = html.replace(/\[([^\]]+)\]\((\/zim\/[^()\s]*(?:\([^()]*\)[^()\s]*)*)\)/g,
         '<a href="$2" target="_blank" class="zim-link">$1</a>');
+
+    // Also allow local /backup/ URLs (HTML backup server)
+    html = html.replace(/\[([^\]]+)\]\((\/backup\/[^()\s]*(?:\([^()]*\)[^()\s]*)*)\)/g,
+        '<a href="$2" target="_blank" class="backup-link">$1</a>');
 
     // Convert bold **text** to <strong>
     html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');

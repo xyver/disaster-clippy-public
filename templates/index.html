@@ -389,6 +389,31 @@
             font-size: 0.75rem;
         }
 
+        .source-item .source-badge {
+            font-size: 0.65rem;
+            padding: 0.1rem 0.3rem;
+            border-radius: 3px;
+            margin-left: 0.25rem;
+            text-transform: uppercase;
+            font-weight: 500;
+        }
+
+        .source-badge.offline {
+            background: #4ecca3;
+            color: #1a1a2e;
+        }
+
+        .source-badge.online {
+            background: #0f3460;
+            color: #888;
+            border: 1px solid #333;
+        }
+
+        .source-badge.both {
+            background: #4ecca3;
+            color: #1a1a2e;
+        }
+
         .sources-actions {
             margin-top: 0.75rem;
             display: flex;
@@ -446,7 +471,15 @@
 
     <div class="stats-bar">
         <span id="indexStats">Loading...</span>
-        <button id="toggleSources">Select Sources</button>
+        <div style="display: flex; align-items: center; gap: 1rem;">
+            <div id="languageSelector" style="display: none;">
+                <label for="articleLanguage" style="color: #4ecca3; font-size: 0.85rem; margin-right: 0.5rem; font-weight: 500;">Translate:</label>
+                <select id="articleLanguage" style="background: #16213e; border: 2px solid #4ecca3; color: #e0e0e0; padding: 0.3rem 0.6rem; border-radius: 6px; font-size: 0.85rem; cursor: pointer; font-weight: 500;">
+                    <option value="en">English (Original)</option>
+                </select>
+            </div>
+            <button id="toggleSources">Select Sources</button>
+        </div>
     </div>
 
     <div class="sources-panel" id="sourcesPanel">
@@ -501,9 +534,99 @@ What situation do you need help with?</div>
             .then(data => {
                 if (data.available) {
                     document.getElementById('adminLink').style.display = 'inline';
+                    // Load language selector for admin users
+                    loadLanguageSelector();
                 }
             })
             .catch(() => {}); // Silently fail if endpoint unavailable
+
+        // Language selector for article translation
+        async function loadLanguageSelector() {
+            try {
+                console.log('[Language] Loading language selector...');
+                const response = await fetch('/useradmin/api/available-languages');
+                const data = await response.json();
+                console.log('[Language] Available languages:', data);
+
+                const installed = (data.languages || []).filter(l => l.installed);
+                console.log('[Language] Installed packs:', installed.map(l => l.code));
+
+                if (installed.length === 0) {
+                    console.log('[Language] No language packs installed - hiding selector');
+                    return;
+                }
+
+                // Show the selector
+                const selectorDiv = document.getElementById('languageSelector');
+                const select = document.getElementById('articleLanguage');
+
+                // Add installed languages to dropdown
+                installed.forEach(lang => {
+                    const option = document.createElement('option');
+                    option.value = lang.code;
+                    option.textContent = lang.native_name ?
+                        `${lang.display_name} (${lang.native_name})` : lang.display_name;
+                    select.appendChild(option);
+                });
+
+                // Set current active language from response
+                const activeLanguage = data.active_language || 'en';
+                console.log('[Language] Active language:', activeLanguage);
+                select.value = activeLanguage;
+
+                // Update border color to indicate active translation
+                if (activeLanguage !== 'en') {
+                    select.style.borderColor = '#4ecca3';
+                    select.style.boxShadow = '0 0 8px rgba(78, 204, 163, 0.3)';
+                }
+
+                // Show selector
+                selectorDiv.style.display = 'flex';
+                selectorDiv.style.alignItems = 'center';
+                console.log('[Language] Selector now visible');
+
+                // Handle language change
+                select.addEventListener('change', async function() {
+                    const langCode = this.value;
+                    console.log('[Language] Setting language to:', langCode);
+
+                    // Show loading state
+                    this.disabled = true;
+                    const originalBg = this.style.background;
+                    this.style.background = '#0f3460';
+
+                    try {
+                        const setResponse = await fetch('/useradmin/api/set-language', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ language_code: langCode })
+                        });
+                        const result = await setResponse.json();
+                        console.log('[Language] Set language result:', result);
+
+                        // Visual feedback - success
+                        this.style.background = originalBg;
+                        this.disabled = false;
+
+                        if (langCode !== 'en') {
+                            this.style.borderColor = '#4ecca3';
+                            this.style.boxShadow = '0 0 8px rgba(78, 204, 163, 0.3)';
+                        } else {
+                            this.style.borderColor = '#4ecca3';
+                            this.style.boxShadow = 'none';
+                        }
+                    } catch (e) {
+                        console.error('[Language] Failed to set language:', e);
+                        this.style.background = originalBg;
+                        this.style.borderColor = '#e94560';
+                        this.disabled = false;
+                    }
+                });
+
+            } catch (e) {
+                console.error('[Language] Language selector error:', e);
+            }
+        }
     </script>
 </body>
 </html>

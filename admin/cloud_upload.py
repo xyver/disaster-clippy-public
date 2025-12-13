@@ -17,7 +17,7 @@ import json
 
 from offline_tools.schemas import (
     get_manifest_file, get_metadata_file, get_index_file,
-    get_vectors_file, get_backup_manifest_file
+    get_vectors_file, get_vectors_768_file, get_backup_manifest_file
 )
 
 router = APIRouter()
@@ -583,12 +583,13 @@ def _upload_submission_metadata_sync(storage, submission_folder: str, source_id:
     if backup_folder:
         source_folder = Path(backup_folder) / source_id
 
-        # Upload schema files
+        # Upload schema files (including 768-dim vectors for offline use)
         schema_files = [
             get_manifest_file(),
             get_metadata_file(),
             get_index_file(),
-            get_vectors_file(),
+            get_vectors_file(),       # 1536-dim (for global/online use)
+            get_vectors_768_file(),   # 768-dim (for offline/local use)
             get_backup_manifest_file(),
         ]
 
@@ -782,7 +783,7 @@ def _run_publish_to_production(source_id: str, source_info: dict, sync_mode: str
     else:
         raise Exception(f"Unknown backup type: {backup_type}")
 
-    # Upload schema files (manifest, metadata, index, vectors)
+    # Upload schema files (manifest, metadata, index, vectors for both dimensions)
     if progress_callback:
         progress_callback(25, "Uploading metadata files...")
 
@@ -793,11 +794,13 @@ def _run_publish_to_production(source_id: str, source_info: dict, sync_mode: str
     if backup_folder:
         source_folder = Path(backup_folder) / source_id
 
+        # Include 768-dim vectors for offline pack downloads
         schema_files = [
             get_manifest_file(),
             get_metadata_file(),
             get_index_file(),
-            get_vectors_file(),
+            get_vectors_file(),       # 1536-dim (for global/online use)
+            get_vectors_768_file(),   # 768-dim (for offline/local use)
             get_backup_manifest_file(),
         ]
 
@@ -933,6 +936,15 @@ def _update_r2_master_json(storage, source_id: str, source_info: dict, backup_fo
 
         if not storage.upload_file(tmp_path, "backups/_master.json"):
             raise Exception(f"Failed to upload _master.json: {storage.get_last_error()}")
+
+        # Invalidate PineconeStore cache so new data is picked up
+        try:
+            from offline_tools.vectordb import get_vector_store
+            store = get_vector_store()
+            if hasattr(store, 'invalidate_sources_cache'):
+                store.invalidate_sources_cache()
+        except Exception:
+            pass  # Cache will expire naturally
 
     finally:
         if os.path.exists(tmp_path):
@@ -1128,12 +1140,13 @@ async def _upload_submission_metadata(storage, submission_folder: str, source_id
     if backup_folder:
         source_folder = Path(backup_folder) / source_id
 
-        # Upload schema files
+        # Upload schema files (including 768-dim vectors for offline use)
         schema_files = [
             get_manifest_file(),
             get_metadata_file(),
             get_index_file(),
-            get_vectors_file(),
+            get_vectors_file(),       # 1536-dim (for global/online use)
+            get_vectors_768_file(),   # 768-dim (for offline/local use)
             get_backup_manifest_file(),
         ]
 

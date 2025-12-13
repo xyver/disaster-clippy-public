@@ -1000,28 +1000,73 @@
                     </div>
 
                     <div class="tool-section" id="sectionCreateIndex">
-                        <h3>3. Create Index</h3>
-                        <p>Generate vector embeddings for semantic search. Uses the filtered document list from metadata (no re-scanning ZIM).</p>
+                        <h3>3. Create Embeddings</h3>
+                        <p>Generate vector embeddings for semantic search. Uses the filtered document list from metadata.</p>
 
                         <!-- Document count display (shown after metadata generation) -->
                         <div id="documentCountDisplay" style="display: none; background: #0f3460; border: 1px solid #4ecca3; border-radius: 6px; padding: 0.75rem 1rem; margin-bottom: 1rem; color: #4ecca3; font-weight: 500;">
                             Source contains 0 documents
                         </div>
 
-                        <div style="display: flex; gap: 1rem; align-items: flex-end; margin-bottom: 1rem; flex-wrap: wrap;">
-                            <div class="form-group" style="margin-bottom: 0; flex: 0 0 150px;">
-                                <label>Document Limit</label>
-                                <input type="number" id="indexLimit" value="1000" min="1" max="50000" placeholder="1000">
+                        <!-- 1536-dim Section (OpenAI - Online Search) -->
+                        <div id="section1536" style="background: #1a1a2e; border: 1px solid #0f3460; border-radius: 6px; padding: 1rem; margin-bottom: 1rem;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
+                                <h4 id="title1536" style="margin: 0; color: #888;">1536-dim Embeddings (Online Search)</h4>
+                                <span id="status1536" style="font-size: 0.8rem; color: #888;">Not created</span>
                             </div>
-                            <p style="font-size: 0.8rem; color: #888; margin: 0; flex: 1 1 200px;">
-                                Maximum documents to embed. Language filtering already applied in Step 2.
+                            <p style="font-size: 0.8rem; color: #888; margin-bottom: 0.75rem;">
+                                OpenAI text-embedding-3-small for Pinecone cloud search. Requires API key.
                             </p>
+                            <div style="display: flex; gap: 1rem; align-items: flex-end; margin-bottom: 0.75rem; flex-wrap: wrap;">
+                                <div class="form-group" style="margin-bottom: 0; flex: 0 0 120px;">
+                                    <label style="font-size: 0.8rem;">Document Limit</label>
+                                    <input type="number" id="indexLimit1536" value="1000" min="1" max="50000" placeholder="1000">
+                                </div>
+                            </div>
+                            <div class="tool-actions" style="gap: 0.5rem;">
+                                <button class="btn btn-primary" id="btnCreate1536" onclick="createIndex1536()">Create Embeddings</button>
+                                <button class="btn btn-secondary" id="btnIndexAll1536" onclick="indexAll1536()">Index All</button>
+                                <button class="btn btn-secondary" onclick="createIndex1536(true)">Force Re-index</button>
+                            </div>
                         </div>
-                        <div class="tool-actions">
-                            <button class="btn btn-primary" id="btnCreateIndex" onclick="createIndex()">Create Index</button>
-                            <button class="btn btn-secondary" id="btnIndexAll" style="display: none;" onclick="indexAll()">Index All</button>
-                            <button class="btn btn-secondary" onclick="createIndex(true)">Force Re-index</button>
+
+                        <!-- Local Embeddings Section (Offline Search) - Dynamic based on configured model -->
+                        <div id="sectionLocal" style="background: #1a1a2e; border: 1px solid #0f3460; border-radius: 6px; padding: 1rem;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
+                                <h4 id="titleLocal" style="margin: 0; color: #888;">Local Embeddings (Offline Search)</h4>
+                                <span id="statusLocal" style="font-size: 0.8rem; color: #888;">Not created</span>
+                            </div>
+                            <p id="descLocal" style="font-size: 0.8rem; color: #888; margin-bottom: 0.75rem;">
+                                Local embedding model for ChromaDB offline search. No API required.
+                            </p>
+                            <!-- Warning shown when model not installed -->
+                            <div id="modelWarning" style="display: none; background: #5c1a1a; border: 1px solid #e94560; border-radius: 4px; padding: 0.75rem; margin-bottom: 0.75rem;">
+                                <span style="color: #e94560; font-weight: 500;">Model Not Installed:</span>
+                                <span id="modelWarningText" style="color: #ccc;"> Please download the embedding model from the <a href="/useradmin/sources#models" style="color: #4ecca3;">Models</a> page before creating embeddings.</span>
+                            </div>
+                            <div style="display: flex; gap: 1rem; align-items: flex-end; margin-bottom: 0.75rem; flex-wrap: wrap;">
+                                <div class="form-group" style="margin-bottom: 0; flex: 0 0 120px;">
+                                    <label style="font-size: 0.8rem;">Document Limit</label>
+                                    <input type="number" id="indexLimitLocal" value="1000" min="1" max="50000" placeholder="1000">
+                                </div>
+                            </div>
+                            <div class="tool-actions" style="gap: 0.5rem;">
+                                <button class="btn btn-primary" id="btnCreateLocal" onclick="createLocalIndex()">Create Embeddings</button>
+                                <button class="btn btn-secondary" id="btnIndexAllLocal" onclick="indexAllLocal()">Index All</button>
+                                <button class="btn btn-secondary" onclick="createLocalIndex(true)">Force Re-index</button>
+                            </div>
                         </div>
+                        <!-- Legacy 768-dim section ID for backwards compatibility -->
+                        <div id="section768" style="display: none;"></div>
+
+                        <!-- Hidden elements for backwards compatibility -->
+                        <div id="adminModeInfo" style="display: none;"></div>
+                        <div id="dimensionSelector" style="display: none;"></div>
+                        <div id="localAdminInfo" style="display: none;"></div>
+                        <div id="vectorStatusDisplay" style="display: none;"></div>
+                        <div id="generate768Section" style="display: none;"></div>
+                        <input type="hidden" id="indexLimit" value="1000">
+                        <input type="hidden" id="embeddingDimension" value="1536">
                     </div>
                 </div>
             </div>
@@ -1351,10 +1396,16 @@
             }
 
             // Step 3: Index/vectors exist (but show warning if metadata has more docs)
+            // Check if at least one dimension is present
+            const hasAnyVectors = source.has_vectors_768 || source.has_vectors_1536 || source.has_embeddings || source.has_vectors_file;
+            const hasBothVectors = source.has_vectors_768 && source.has_vectors_1536;
             if (source.needs_index_refresh) {
                 markSectionWarning('sectionCreateIndex');
-            } else if (source.has_embeddings || source.has_vectors_file) {
+            } else if (hasBothVectors) {
                 markSectionComplete('sectionCreateIndex');
+            } else if (hasAnyVectors) {
+                // Has some vectors but not both - show warning for global admin
+                markSectionWarning('sectionCreateIndex');
             }
 
             // Step 4: Tags exist
@@ -1364,9 +1415,14 @@
 
             // Step 5: We don't persist validation state, so leave pending
             // unless we want to check if all status boxes are green
+            // For production: need both 768 and 1536 vectors
             if (source.has_config && source.has_backup && source.has_metadata &&
-                source.has_embeddings && source.license_verified) {
+                hasBothVectors && source.license_verified) {
                 markSectionComplete('sectionValidate');
+            } else if (source.has_config && source.has_backup && source.has_metadata &&
+                hasAnyVectors && source.license_verified) {
+                // Has some vectors but missing one dimension
+                markSectionWarning('sectionValidate');
             }
         }
 
@@ -1770,6 +1826,7 @@
                 updateSourceBanners();
                 updateScrapeSection();
                 updateWizardUI();
+                updateVectorStatus(currentSource.source_id);  // Check 768/1536 vector status
 
                 // Show document count if source has documents
                 const docCount = currentSource.document_count || 0;
@@ -1824,7 +1881,8 @@
                     <span class="checklist-item ${s.has_config ? 'ok' : 'missing'}">${s.has_config ? '[OK]' : '[X]'} Config</span>
                     <span class="checklist-item ${s.has_backup ? 'ok' : 'missing'}">${s.has_backup ? '[OK]' : '[X]'} Backup ${s.backup_page_count ? `(${s.backup_page_count})` : ''}</span>
                     <span class="checklist-item ${s.needs_metadata_refresh ? 'warning' : (s.has_metadata ? 'ok' : 'missing')}">${s.needs_metadata_refresh ? '[!]' : (s.has_metadata ? '[OK]' : '[X]')} Metadata ${s.metadata_doc_count ? `(${s.metadata_doc_count})` : ''}</span>
-                    <span class="checklist-item ${s.needs_index_refresh ? 'warning' : (s.has_embeddings ? 'ok' : 'warning')}">${s.needs_index_refresh ? '[!]' : (s.has_embeddings ? '[OK]' : '[!]')} Embeddings ${s.index_doc_count ? `(${s.index_doc_count})` : ''}</span>
+                    <span class="checklist-item ${s.has_vectors_1536 ? 'ok' : 'warning'}">${s.has_vectors_1536 ? '[OK]' : '[!]'} 1536-dim ${s.has_vectors_1536 ? '' : '(online)'}</span>
+                    <span class="checklist-item ${s.has_vectors_768 ? 'ok' : 'warning'}">${s.has_vectors_768 ? '[OK]' : '[!]'} 768-dim ${s.has_vectors_768 ? '' : '(offline)'}</span>
                     <span class="checklist-item ${s.license && s.license !== 'Unknown' ? 'ok' : 'warning'}">${s.license && s.license !== 'Unknown' ? '[OK]' : '[!]'} License</span>
                     <span class="checklist-item ${s.license_verified ? 'ok' : 'warning'}">${s.license_verified ? '[OK]' : '[!]'} Verified</span>
                 </div>
@@ -3040,6 +3098,571 @@
             }
         }
 
+        // Admin mode state
+        let adminMode = {
+            is_global_admin: false,
+            can_create_1536: false,
+            can_create_local: false,
+            can_create_768: false,  // Backwards compatibility
+            configured_model: { id: 'all-mpnet-base-v2', display_name: 'MPNet Base v2 (768-dim)', dimension: 768 },
+            model_installed: false,
+            recommended_workflow: ''
+        };
+
+        // Update UI based on mode toggle (Global vs Local)
+        function updateEmbeddingSectionsVisibility() {
+            const isGlobal = typeof isGlobalTestMode === 'function' ? isGlobalTestMode() : adminMode.is_global_admin;
+            const section1536 = document.getElementById('section1536');
+            const sectionLocal = document.getElementById('sectionLocal');
+
+            if (isGlobal) {
+                // Global mode: Show both 1536 and local sections
+                if (section1536) section1536.style.display = 'block';
+                if (sectionLocal) sectionLocal.style.display = 'block';
+            } else {
+                // Local mode: Hide 1536, show only local section
+                if (section1536) section1536.style.display = 'none';
+                if (sectionLocal) sectionLocal.style.display = 'block';
+            }
+        }
+
+        // Update local section with configured model info
+        function updateLocalSectionUI() {
+            const titleLocal = document.getElementById('titleLocal');
+            const descLocal = document.getElementById('descLocal');
+            const modelWarning = document.getElementById('modelWarning');
+            const modelWarningText = document.getElementById('modelWarningText');
+            const btnCreateLocal = document.getElementById('btnCreateLocal');
+
+            const model = adminMode.configured_model || { display_name: 'Local Model', dimension: 768 };
+
+            // Update title with configured model info
+            if (titleLocal) {
+                titleLocal.textContent = `${model.dimension}-dim Embeddings (${model.display_name})`;
+            }
+
+            // Update description
+            if (descLocal) {
+                descLocal.textContent = `Local ${model.display_name} for ChromaDB offline search. No API required.`;
+            }
+
+            // Show/hide model warning
+            if (modelWarning && modelWarningText) {
+                if (!adminMode.model_installed && !adminMode.can_create_local) {
+                    modelWarning.style.display = 'block';
+                    modelWarningText.innerHTML = ` Please download <strong>${model.display_name}</strong> from the <a href="/useradmin/sources#models" style="color: #4ecca3;">Models</a> page before creating embeddings.`;
+                    if (btnCreateLocal) btnCreateLocal.disabled = true;
+                } else if (!adminMode.model_installed) {
+                    modelWarning.style.display = 'block';
+                    modelWarningText.innerHTML = ` Configured model <strong>${model.display_name}</strong> is not installed. Using fallback model. <a href="/useradmin/sources#models" style="color: #4ecca3;">Download it</a> for best results.`;
+                    if (btnCreateLocal) btnCreateLocal.disabled = false;
+                } else {
+                    modelWarning.style.display = 'none';
+                    if (btnCreateLocal) btnCreateLocal.disabled = false;
+                }
+            }
+        }
+
+        async function loadAdminMode() {
+            try {
+                const response = await fetch('/useradmin/api/admin-mode');
+                adminMode = await response.json();
+
+                // These elements may not exist in all views - check before using
+                const infoText = document.getElementById('adminModeText') || document.getElementById('adminModeInfo');
+                const dimSelector = document.getElementById('dimensionSelector');
+                const localInfo = document.getElementById('localAdminInfo');
+
+                // Determine effective mode (toggle override or API result)
+                const isGlobal = typeof isGlobalTestMode === 'function' ? isGlobalTestMode() : adminMode.is_global_admin;
+
+                if (isGlobal) {
+                    // Global admin - show both sections
+                    if (infoText) infoText.innerHTML = '<span style="color: #e94560;">Global Admin Mode</span> - ' + adminMode.recommended_workflow;
+                    if (dimSelector) dimSelector.style.display = 'block';
+                    if (localInfo) localInfo.style.display = 'none';
+                } else {
+                    // Local admin - show local section only
+                    if (infoText) infoText.innerHTML = '<span style="color: #4ecca3;">Local Admin Mode</span> - ' + adminMode.recommended_workflow;
+                    if (dimSelector) dimSelector.style.display = 'none';
+                    if (localInfo) {
+                        if (adminMode.can_create_local || adminMode.can_create_768) {
+                            localInfo.style.display = 'block';
+                        } else {
+                            localInfo.innerHTML = '<span style="color: #e94560;">No embedding model installed.</span> Go to Models tab to download the embedding model.';
+                            localInfo.style.display = 'block';
+                        }
+                    }
+                }
+
+                // Update the new UI sections
+                updateLocalSectionUI();
+                updateEmbeddingSectionsVisibility();
+
+            } catch (e) {
+                console.error('Failed to load admin mode:', e);
+                const infoText = document.getElementById('adminModeText') || document.getElementById('adminModeInfo');
+                if (infoText) infoText.textContent = 'Could not detect admin mode';
+            }
+        }
+
+        // Listen for mode toggle changes from admin-common.js
+        window.addEventListener('testModeChanged', function(e) {
+            console.log('Mode changed to:', e.detail.mode);
+            updateEmbeddingSectionsVisibility();
+        });
+
+        window.addEventListener('modeUIUpdated', function(e) {
+            updateEmbeddingSectionsVisibility();
+        });
+
+        async function updateVectorStatus(sourceId) {
+            if (!sourceId) return;
+
+            try {
+                const response = await fetch(`/useradmin/api/vector-status/${sourceId}`);
+                const status = await response.json();
+
+                // These elements may not exist in all views - check before using
+                const statusDiv = document.getElementById('vectorStatusDisplay');
+                const contentDiv = document.getElementById('vectorStatusContent');
+                const gen768Section = document.getElementById('generate768Section');
+
+                let html = '';
+
+                // 1536-dim status
+                if (status.has_1536 && status.vectors_1536) {
+                    html += `<div style="color: #4ecca3; margin-bottom: 0.25rem;">
+                        [OK] 1536-dim: ${status.vectors_1536.document_count} docs (${status.vectors_1536.size_mb.toFixed(1)} MB)
+                    </div>`;
+                } else {
+                    html += `<div style="color: #888; margin-bottom: 0.25rem;">
+                        [ ] 1536-dim: Not created
+                    </div>`;
+                }
+
+                // 768-dim status
+                if (status.has_768 && status.vectors_768) {
+                    html += `<div style="color: #4ecca3;">
+                        [OK] 768-dim: ${status.vectors_768.document_count} docs (${status.vectors_768.size_mb.toFixed(1)} MB) - Ready for pack distribution
+                    </div>`;
+                } else {
+                    html += `<div style="color: #888;">
+                        [ ] 768-dim: Not created
+                    </div>`;
+                }
+
+                if (contentDiv) contentDiv.innerHTML = html;
+                if (statusDiv) statusDiv.style.display = 'block';
+
+                // Show "Generate 768" section if global admin, has 1536, but no 768
+                if (gen768Section) {
+                    if (adminMode.is_global_admin && status.has_1536 && !status.has_768 && adminMode.can_create_768) {
+                        gen768Section.style.display = 'block';
+                    } else {
+                        gen768Section.style.display = 'none';
+                    }
+                }
+
+                // Update the NEW clean UI status elements
+                const status1536El = document.getElementById('status1536');
+                const title1536El = document.getElementById('title1536');
+                if (status1536El) {
+                    if (status.has_1536 && status.vectors_1536 && status.vectors_1536.document_count !== undefined) {
+                        status1536El.textContent = `${status.vectors_1536.document_count} docs (${(status.vectors_1536.size_mb || 0).toFixed(1)} MB)`;
+                        status1536El.style.color = '#4ecca3';
+                        if (title1536El) title1536El.style.color = '#4ecca3';
+                    } else if (status.has_1536) {
+                        status1536El.textContent = 'Created (reading...)';
+                        status1536El.style.color = '#4ecca3';
+                        if (title1536El) title1536El.style.color = '#4ecca3';
+                    } else {
+                        status1536El.textContent = 'Not created';
+                        status1536El.style.color = '#888';
+                        if (title1536El) title1536El.style.color = '#888';
+                    }
+                }
+
+                const status768El = document.getElementById('status768');
+                const title768El = document.getElementById('title768');
+                if (status768El) {
+                    if (status.has_768 && status.vectors_768 && status.vectors_768.document_count !== undefined) {
+                        status768El.textContent = `${status.vectors_768.document_count} docs (${(status.vectors_768.size_mb || 0).toFixed(1)} MB)`;
+                        status768El.style.color = '#4ecca3';
+                        if (title768El) title768El.style.color = '#4ecca3';
+                    } else if (status.has_768) {
+                        status768El.textContent = 'Created (reading...)';
+                        status768El.style.color = '#4ecca3';
+                        if (title768El) title768El.style.color = '#4ecca3';
+                    } else {
+                        status768El.textContent = 'Not created';
+                        status768El.style.color = '#888';
+                        if (title768El) title768El.style.color = '#888';
+                    }
+                }
+
+                // Update Local section status (uses configured dimension)
+                const statusLocalEl = document.getElementById('statusLocal');
+                const titleLocalEl = document.getElementById('titleLocal');
+                const configuredDim = adminMode.configured_model?.dimension || 768;
+                // Check status based on configured dimension
+                const localDimKey = `vectors_${configuredDim}`;
+                const hasLocalKey = `has_${configuredDim}`;
+                // For 768, use existing fields; for others, check if status has the dimension-specific fields
+                let hasLocal = false;
+                let vectorsLocal = null;
+                if (configuredDim === 768) {
+                    hasLocal = status.has_768;
+                    vectorsLocal = status.vectors_768;
+                } else if (status[hasLocalKey]) {
+                    hasLocal = status[hasLocalKey];
+                    vectorsLocal = status[localDimKey];
+                }
+
+                if (statusLocalEl) {
+                    if (hasLocal && vectorsLocal && vectorsLocal.document_count !== undefined) {
+                        statusLocalEl.textContent = `${vectorsLocal.document_count} docs (${(vectorsLocal.size_mb || 0).toFixed(1)} MB)`;
+                        statusLocalEl.style.color = '#4ecca3';
+                        if (titleLocalEl) titleLocalEl.style.color = '#4ecca3';
+                    } else if (hasLocal) {
+                        statusLocalEl.textContent = 'Created (reading...)';
+                        statusLocalEl.style.color = '#4ecca3';
+                        if (titleLocalEl) titleLocalEl.style.color = '#4ecca3';
+                    } else {
+                        statusLocalEl.textContent = 'Not created';
+                        statusLocalEl.style.color = '#888';
+                        if (titleLocalEl) titleLocalEl.style.color = '#888';
+                    }
+                }
+
+                // Also update currentSource if we have it, so the checklist updates correctly
+                if (currentSource) {
+                    currentSource.has_vectors_1536 = status.has_1536;
+                    currentSource.has_vectors_768 = status.has_768;
+                    // Update the checklist display
+                    updateSourceInfo();
+                }
+
+            } catch (e) {
+                console.error('Failed to load vector status:', e);
+            }
+        }
+
+        async function generate768Vectors() {
+            if (!currentSource) return;
+
+            const btn = document.getElementById('btnGenerate768');
+            btn.disabled = true;
+            btn.textContent = 'Starting...';
+
+            try {
+                const response = await fetch('/useradmin/api/generate-768-vectors', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ source_id: currentSource.source_id })
+                });
+
+                const data = await response.json();
+
+                if (response.ok && data.status === 'submitted') {
+                    logOutput(`768-dim vector generation started. Job ID: ${data.job_id}`, 'info');
+                    showToast('768-dim generation started - check job monitor');
+                    btn.textContent = 'Running...';
+
+                    // Poll for completion
+                    poll768Generation(data.job_id, btn);
+                } else if (response.status === 409) {
+                    showToast('Generation already in progress', true);
+                    btn.disabled = false;
+                    btn.textContent = 'Generate 768-dim Vectors';
+                } else {
+                    logOutput(`Error: ${data.detail || 'Failed to start'}`, 'error');
+                    showToast(data.detail || 'Failed to start', true);
+                    btn.disabled = false;
+                    btn.textContent = 'Generate 768-dim Vectors';
+                }
+            } catch (e) {
+                logOutput(`Error: ${e.message}`, 'error');
+                showToast(e.message, true);
+                btn.disabled = false;
+                btn.textContent = 'Generate 768-dim Vectors';
+            }
+        }
+
+        async function poll768Generation(jobId, btn) {
+            try {
+                const response = await fetch(`/useradmin/api/jobs/${jobId}`);
+                const job = await response.json();
+
+                if (job.status === 'running' || job.status === 'pending') {
+                    btn.textContent = `Generating... ${job.progress || 0}%`;
+                    setTimeout(() => poll768Generation(jobId, btn), 2000);
+                } else if (job.status === 'completed') {
+                    logOutput('768-dim vectors generated successfully!', 'success');
+                    showToast('768-dim vectors ready for pack distribution');
+                    btn.textContent = 'Complete!';
+                    btn.style.background = '#0f3460';
+                    btn.style.color = '#4ecca3';
+
+                    // Refresh vector status
+                    setTimeout(() => {
+                        updateVectorStatus(currentSource.source_id);
+                        document.getElementById('generate768Section').style.display = 'none';
+                    }, 1000);
+                } else {
+                    logOutput(`Generation failed: ${job.error || 'Unknown error'}`, 'error');
+                    showToast('Generation failed', true);
+                    btn.disabled = false;
+                    btn.textContent = 'Generate 768-dim Vectors';
+                }
+            } catch (e) {
+                setTimeout(() => poll768Generation(jobId, btn), 3000);
+            }
+        }
+
+        // =============================================================================
+        // DIMENSION-SPECIFIC INDEX FUNCTIONS
+        // =============================================================================
+
+        async function createIndex1536(forceReindex = false) {
+            await createIndexWithDimension(1536, forceReindex);
+        }
+
+        async function createIndex768(forceReindex = false) {
+            await createIndexWithDimension(768, forceReindex);
+        }
+
+        async function indexAll1536() {
+            // Set limit to a very high number and create
+            document.getElementById('indexLimit1536').value = 50000;
+            await createIndex1536();
+        }
+
+        async function indexAll768() {
+            // Set limit to a very high number and create
+            document.getElementById('indexLimit768').value = 50000;
+            await createIndex768();
+        }
+
+        // Local index functions - use configured embedding model dimension
+        async function createLocalIndex(forceReindex = false) {
+            const dimension = adminMode.configured_model?.dimension || 768;
+            await createIndexWithDimensionLocal(dimension, forceReindex);
+        }
+
+        async function indexAllLocal() {
+            // Set limit to a very high number and create
+            document.getElementById('indexLimitLocal').value = 50000;
+            await createLocalIndex();
+        }
+
+        async function createIndexWithDimensionLocal(dimension, forceReindex = false) {
+            if (!currentSource) {
+                showToast('No source selected', true);
+                return;
+            }
+
+            // Check if model is installed
+            if (!adminMode.model_installed && !adminMode.can_create_local) {
+                showToast('Please download the embedding model first', true);
+                return;
+            }
+
+            const limitInput = document.getElementById('indexLimitLocal');
+            const limit = parseInt(limitInput?.value) || 1000;
+            const languageFilter = document.getElementById('metadataLanguageFilter')?.value || null;
+
+            const btn = document.getElementById('btnCreateLocal');
+            if (!btn) return;
+
+            btn.disabled = true;
+            btn.textContent = 'Starting...';
+
+            const modelName = adminMode.configured_model?.display_name || 'Local Model';
+            const langInfo = languageFilter ? ` (language: ${languageFilter})` : '';
+            const modeInfo = forceReindex ? ' [REPLACE]' : '';
+            logOutput(`Creating ${dimension}-dim embeddings (${modelName}) for ${currentSource.source_id} (limit: ${limit})${langInfo}${modeInfo}...`);
+
+            try {
+                const requestBody = {
+                    source_id: currentSource.source_id,
+                    limit: limit,
+                    dimension: dimension,
+                    force_reindex: forceReindex
+                };
+                if (languageFilter) {
+                    requestBody.language_filter = languageFilter;
+                }
+
+                const response = await fetch('/useradmin/api/create-index', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(requestBody)
+                });
+
+                const data = await response.json();
+
+                if (data.job_id) {
+                    showToast('Indexing job started');
+                    logOutput(`Job started: ${data.job_id}`);
+                    pollIndexJob(data.job_id, btn, dimension);
+                } else if (data.documents_indexed !== undefined) {
+                    showToast(`Indexed ${data.documents_indexed} documents`);
+                    logOutput(`Done: ${data.documents_indexed} docs indexed`);
+                    btn.disabled = false;
+                    btn.textContent = 'Create Embeddings';
+                    updateVectorStatus(currentSource.source_id);
+                } else {
+                    throw new Error(data.error || 'Unknown error');
+                }
+            } catch (e) {
+                logOutput(`Error: ${e.message}`, 'error');
+                showToast(e.message, true);
+                btn.disabled = false;
+                btn.textContent = 'Create Embeddings';
+            }
+        }
+
+        async function createIndexWithDimension(dimension, forceReindex = false) {
+            if (!currentSource) {
+                showToast('No source selected', true);
+                return;
+            }
+
+            const limitInput = document.getElementById(`indexLimit${dimension}`);
+            const limit = parseInt(limitInput?.value) || 1000;
+            const languageFilter = document.getElementById('metadataLanguageFilter')?.value || null;
+
+            const btn = document.getElementById(`btnCreate${dimension}`);
+            if (!btn) return;
+
+            btn.disabled = true;
+            btn.textContent = 'Starting...';
+
+            const langInfo = languageFilter ? ` (language: ${languageFilter})` : '';
+            const modeInfo = forceReindex ? ' [REPLACE]' : '';
+            logOutput(`Creating ${dimension}-dim embeddings for ${currentSource.source_id} (limit: ${limit})${langInfo}${modeInfo}...`);
+
+            try {
+                const requestBody = {
+                    source_id: currentSource.source_id,
+                    limit: limit,
+                    dimension: dimension,
+                    force_reindex: forceReindex
+                };
+                if (languageFilter) {
+                    requestBody.language_filter = languageFilter;
+                }
+
+                const response = await fetch('/useradmin/api/create-index', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(requestBody)
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    if (data.status === 'submitted' || data.job_id) {
+                        logOutput(`Job submitted: ${data.job_id}`, 'success');
+                        logOutput(`${dimension}-dim index creation running in background. Check job monitor.`, 'info');
+                        showToast(`${dimension}-dim index job started`);
+                        btn.textContent = 'Running...';
+                        // Poll for completion
+                        pollIndexJob(data.job_id, btn, dimension);
+                    } else {
+                        logOutput(`Index complete: ${data.indexed_count || 0} documents indexed`, 'success');
+                        showToast(`${dimension}-dim index created`);
+                        btn.disabled = false;
+                        btn.textContent = 'Create Embeddings';
+                        updateEmbeddingStatus();
+                    }
+                } else if (response.status === 409) {
+                    logOutput('A job is already running for this source', 'warning');
+                    showToast('Job already running', true);
+                    btn.disabled = false;
+                    btn.textContent = 'Create Embeddings';
+                } else {
+                    logOutput(`Error: ${data.detail || 'Index creation failed'}`, 'error');
+                    showToast(data.detail || 'Index creation failed', true);
+                    btn.disabled = false;
+                    btn.textContent = 'Create Embeddings';
+                }
+            } catch (e) {
+                logOutput(`Error: ${e.message}`, 'error');
+                showToast('Error: ' + e.message, true);
+                btn.disabled = false;
+                btn.textContent = 'Create Embeddings';
+            }
+        }
+
+        async function pollIndexJob(jobId, btn, dimension) {
+            try {
+                const response = await fetch(`/useradmin/api/jobs/${jobId}`);
+                const job = await response.json();
+
+                if (job.status === 'running' || job.status === 'pending') {
+                    btn.textContent = `${job.progress || 0}%`;
+                    setTimeout(() => pollIndexJob(jobId, btn, dimension), 2000);
+                } else if (job.status === 'completed') {
+                    logOutput(`${dimension}-dim embeddings created successfully!`, 'success');
+                    showToast(`${dimension}-dim embeddings ready`);
+                    btn.textContent = 'Complete!';
+                    btn.style.background = '#0f3460';
+                    btn.style.color = '#4ecca3';
+                    setTimeout(() => {
+                        btn.disabled = false;
+                        btn.textContent = 'Create Embeddings';
+                        btn.style.background = '';
+                        btn.style.color = '';
+                        updateEmbeddingStatus();
+                    }, 2000);
+                } else {
+                    logOutput(`${dimension}-dim index failed: ${job.error || 'Unknown error'}`, 'error');
+                    showToast('Index creation failed', true);
+                    btn.disabled = false;
+                    btn.textContent = 'Create Embeddings';
+                }
+            } catch (e) {
+                setTimeout(() => pollIndexJob(jobId, btn, dimension), 3000);
+            }
+        }
+
+        async function updateEmbeddingStatus() {
+            if (!currentSource) return;
+
+            try {
+                const response = await fetch(`/useradmin/api/vector-status/${currentSource.source_id}`);
+                const status = await response.json();
+
+                // Update 1536 status
+                const status1536El = document.getElementById('status1536');
+                if (status1536El) {
+                    if (status.has_1536 && status.vectors_1536) {
+                        status1536El.textContent = `${status.vectors_1536.document_count} docs (${status.vectors_1536.size_mb.toFixed(1)} MB)`;
+                        status1536El.style.color = '#4ecca3';
+                    } else {
+                        status1536El.textContent = 'Not created';
+                        status1536El.style.color = '#888';
+                    }
+                }
+
+                // Update 768 status
+                const status768El = document.getElementById('status768');
+                if (status768El) {
+                    if (status.has_768 && status.vectors_768) {
+                        status768El.textContent = `${status.vectors_768.document_count} docs (${status.vectors_768.size_mb.toFixed(1)} MB)`;
+                        status768El.style.color = '#4ecca3';
+                    } else {
+                        status768El.textContent = 'Not created';
+                        status768El.style.color = '#888';
+                    }
+                }
+            } catch (e) {
+                console.error('Failed to update embedding status:', e);
+            }
+        }
+
         async function createIndex(forceReindex = false) {
             if (!currentSource) return;
 
@@ -3800,13 +4423,19 @@
         // Initialize
         async function init() {
             await loadSources();
+            await loadAdminMode();  // Load admin mode to show correct embedding options
 
             // Check for ?source= parameter
             const urlParams = new URLSearchParams(window.location.search);
             const sourceParam = urlParams.get('source');
 
             if (sourceParam) {
-                if (sources.find(s => s.source_id === sourceParam)) {
+                console.log('[init] Looking for source:', sourceParam);
+                console.log('[init] Available sources:', sources.map(s => s.source_id));
+
+                const foundSource = sources.find(s => s.source_id === sourceParam);
+                if (foundSource) {
+                    console.log('[init] Found source, setting select value');
                     document.getElementById('sourceSelect').value = sourceParam;
                     await loadSourceDetails();
 
@@ -3814,10 +4443,14 @@
                     const stepParam = urlParams.get('step');
                     if (stepParam) {
                         const stepNum = parseInt(stepParam);
+                        console.log('[init] Jumping to step:', stepNum);
                         if (stepNum >= 1 && stepNum <= 5) {
                             goToStep(stepNum);
                         }
                     }
+                } else {
+                    console.warn('[init] Source not found in loaded sources:', sourceParam);
+                    console.warn('[init] This could mean the source was deleted or the ID changed');
                 }
             }
 

@@ -264,43 +264,138 @@ def save_index(output_folder: Path, source_id: str,
 
 
 def save_vectors(output_folder: Path, source_id: str,
-                 index_data: Dict, embedding_model: str = "text-embedding-3-small") -> Optional[Path]:
+                 index_data: Dict, embedding_model: str = "text-embedding-3-small",
+                 dimension: int = None) -> Optional[Path]:
     """
-    Save vectors file (_vectors.json).
+    Save vectors file (_vectors.json or _vectors_768.json).
 
     Contains only embedding vectors, no content duplication.
+
+    Args:
+        output_folder: Where to save the file
+        source_id: Source identifier
+        index_data: Dict with 'ids' and 'embeddings' lists
+        embedding_model: Name of the embedding model used
+        dimension: If specified, uses dimension-specific filename (768 or 1536)
+
+    Returns:
+        Path to saved file, or None on error
     """
     try:
         ids = index_data.get("ids", [])
         embeddings = index_data.get("embeddings", [])
 
         vectors = {}
-        dimensions = 0
+        detected_dim = 0
         for i in range(len(ids)):
             if i < len(embeddings) and embeddings[i]:
                 vectors[ids[i]] = embeddings[i]
-                if dimensions == 0:
-                    dimensions = len(embeddings[i])
+                if detected_dim == 0:
+                    detected_dim = len(embeddings[i])
+
+        # Use detected dimension if not specified
+        if dimension is None:
+            dimension = detected_dim or 1536
 
         vectors_data = {
             "schema_version": CURRENT_SCHEMA_VERSION,
             "source_id": source_id,
             "embedding_model": embedding_model,
-            "dimensions": dimensions or 1536,
+            "dimensions": dimension,
             "document_count": len(vectors),
             "created_at": datetime.now().isoformat(),
             "vectors": vectors
         }
 
-        vectors_file = output_folder / get_vectors_file()
+        # Use dimension-specific filename
+        vectors_file = output_folder / get_vectors_file(dimension)
         with open(vectors_file, 'w', encoding='utf-8') as f:
             json.dump(vectors_data, f)  # No indent - keep compact
 
-        print(f"Saved vectors: {vectors_file} ({len(vectors)} vectors)")
+        print(f"Saved vectors: {vectors_file} ({len(vectors)} vectors, {dimension}-dim)")
         return vectors_file
 
     except Exception as e:
         print(f"Warning: Failed to save vectors: {e}")
+        return None
+
+
+def generate_768_vectors(output_folder: Path, source_id: str,
+                         documents: List[Dict],
+                         progress_callback: Callable = None) -> Optional[Path]:
+    """
+    Generate 768-dim embeddings for offline use and save to _vectors_768.json.
+
+    This creates the offline-compatible vectors using the local embedding model
+    (all-mpnet-base-v2). Use this after initial indexing with 1536-dim to create
+    the pack-downloadable version.
+
+    Args:
+        output_folder: Source folder to save to
+        source_id: Source identifier
+        documents: List of document dicts with 'id' and 'content' keys
+        progress_callback: Optional function(current, total, message)
+
+    Returns:
+        Path to saved _vectors_768.json, or None on error
+    """
+    from offline_tools.embeddings import EmbeddingService
+
+    try:
+        # Force local model for 768-dim embeddings
+        embedding_service = EmbeddingService(model="all-mpnet-base-v2")
+
+        if not embedding_service.is_available():
+            print(f"Error: Local embedding model not available")
+            return None
+
+        # Check dimension
+        dim = embedding_service.get_dimension()
+        if dim != 768:
+            print(f"Warning: Expected 768-dim, got {dim}-dim")
+
+        print(f"Generating 768-dim embeddings for {len(documents)} documents...")
+
+        # Extract content
+        ids = []
+        contents = []
+        for doc in documents:
+            doc_id = doc.get("id", doc.get("content_hash", ""))
+            content = doc.get("content", "")
+            if doc_id and content:
+                ids.append(doc_id)
+                contents.append(content)
+
+        if not contents:
+            print("No content to embed")
+            return None
+
+        # Generate embeddings
+        embeddings = embedding_service.embed_batch(
+            contents,
+            progress_callback=progress_callback
+        )
+
+        if not embeddings:
+            print("Failed to generate embeddings")
+            return None
+
+        # Save as 768-dim vectors file
+        index_data = {
+            "ids": ids,
+            "embeddings": embeddings
+        }
+
+        return save_vectors(
+            output_folder, source_id, index_data,
+            embedding_model="all-mpnet-base-v2",
+            dimension=768
+        )
+
+    except Exception as e:
+        print(f"Error generating 768-dim vectors: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 
@@ -695,11 +790,12 @@ def extract_internal_links_from_html(html_content: str, base_path: str = "") -> 
 class ZIMIndexer:
     """Indexes content from ZIM files into the vector database."""
 
-    def __init__(self, zim_path: str, source_id: str, backup_folder: str = None):
+    def __init__(self, zim_path: str, source_id: str, backup_folder: str = None, dimension: int = 1536):
         self.zim_path = Path(zim_path)
         self.source_id = source_id
         self.output_folder = Path(backup_folder) if backup_folder else self.zim_path.parent
         self.output_folder.mkdir(parents=True, exist_ok=True)
+        self.dimension = dimension
 
         if not self.zim_path.exists():
             raise FileNotFoundError(f"ZIM file not found: {zim_path}")
@@ -853,11 +949,11 @@ class ZIMIndexer:
 
         # Clear existing documents from ChromaDB if requested (force reindex)
         if clear_existing:
-            print(f"[ZIMIndexer] Force reindex requested - clearing existing documents for '{self.source_id}'")
+            print(f"[ZIMIndexer] Force reindex requested - clearing existing documents for '{self.source_id}' ({self.dimension}-dim)")
             if progress_callback:
                 progress_callback(0, 100, "Preparing to delete existing documents...")
             try:
-                store = VectorStore()
+                store = VectorStore(dimension=self.dimension)
                 # Pass progress callback for delete progress
                 result = store.delete_by_source(self.source_id, progress_callback=progress_callback)
                 deleted_count = result.get("deleted_count", 0)
@@ -1284,8 +1380,8 @@ class ZIMIndexer:
             # Uses incremental indexing: processes in batches, skips already-indexed docs
             report_embedding_progress(0, len(documents), f"Indexing {len(documents)} documents...")
 
-            print("Adding documents to vector store (incremental mode)...")
-            store = VectorStore()
+            print(f"Adding documents to vector store (incremental mode, {self.dimension}-dim)...")
+            store = VectorStore(dimension=self.dimension)
             result = store.add_documents_incremental(
                 documents,
                 source_id=self.source_id,
@@ -1369,12 +1465,13 @@ class ZIMIndexer:
 class HTMLBackupIndexer:
     """Indexes content from HTML backup folders into the vector database."""
 
-    def __init__(self, backup_path: str, source_id: str, backup_folder: str = None):
+    def __init__(self, backup_path: str, source_id: str, backup_folder: str = None, dimension: int = 1536):
         self.backup_path = Path(backup_path)
         self.source_id = source_id
         self.pages_dir = self.backup_path / "pages"
         self.output_folder = Path(backup_folder) if backup_folder else self.backup_path
         self.output_folder.mkdir(parents=True, exist_ok=True)
+        self.dimension = dimension
 
         # Find manifest file
         manifest_path = self.backup_path / get_backup_manifest_file()
@@ -1431,9 +1528,9 @@ class HTMLBackupIndexer:
         # Get existing IDs if skipping
         existing_ids = set()
         if skip_existing:
-            store = VectorStore()
+            store = VectorStore(dimension=self.dimension, read_only=True)
             existing_ids = store.get_existing_ids()
-            print(f"Found {len(existing_ids)} already indexed documents")
+            print(f"Found {len(existing_ids)} already indexed documents ({self.dimension}-dim)")
 
         if progress_callback:
             progress_callback(0, min(limit, len(pages)), "Loading pages...")
@@ -1525,8 +1622,8 @@ class HTMLBackupIndexer:
         if progress_callback:
             progress_callback(len(documents), len(documents), "Indexing documents...")
 
-        print("Adding documents to vector store (incremental mode)...")
-        store = VectorStore()
+        print(f"Adding documents to vector store (incremental mode, {self.dimension}-dim)...")
+        store = VectorStore(dimension=self.dimension)
         result = store.add_documents_incremental(
             documents,
             source_id=self.source_id,
@@ -1589,9 +1686,10 @@ class HTMLBackupIndexer:
 class PDFIndexer:
     """Indexes content from PDF files into the vector database."""
 
-    def __init__(self, source_path: str, source_id: str, backup_folder: str = None):
+    def __init__(self, source_path: str, source_id: str, backup_folder: str = None, dimension: int = 1536):
         self.source_path = Path(source_path)
         self.source_id = source_id
+        self.dimension = dimension
 
         if backup_folder:
             self.output_folder = Path(backup_folder)
@@ -1698,7 +1796,7 @@ class PDFIndexer:
         existing_ids = set()
         if skip_existing:
             try:
-                store = VectorStore()
+                store = VectorStore(dimension=self.dimension, read_only=True)
                 existing_ids = store.get_existing_ids()
             except:
                 pass
@@ -1770,7 +1868,8 @@ class PDFIndexer:
         index_data = None
         if documents:
             try:
-                store = VectorStore()
+                print(f"[PDFIndexer] Using {self.dimension}-dim embeddings")
+                store = VectorStore(dimension=self.dimension)
                 result = store.add_documents_incremental(
                     documents,
                     source_id=self.source_id,
@@ -1819,7 +1918,8 @@ def index_zim_file(zim_path: str, source_id: str, limit: int = 1000,
                    language_filter: Optional[str] = None,
                    clear_existing: bool = False,
                    resume: bool = False,
-                   cancel_checker: Optional[Callable] = None) -> Dict:
+                   cancel_checker: Optional[Callable] = None,
+                   dimension: int = 1536) -> Dict:
     """
     Index a ZIM file.
 
@@ -1835,8 +1935,9 @@ def index_zim_file(zim_path: str, source_id: str, limit: int = 1000,
                        from ChromaDB before indexing (for force reindex).
         resume: If True, attempt to resume from checkpoint if available.
         cancel_checker: Function that returns True if job was cancelled.
+        dimension: Embedding dimension (768 for local, 1536 for OpenAI)
     """
-    indexer = ZIMIndexer(zim_path, source_id, backup_folder=backup_folder)
+    indexer = ZIMIndexer(zim_path, source_id, backup_folder=backup_folder, dimension=dimension)
     return indexer.index(limit=limit, progress_callback=progress_callback,
                         language_filter=language_filter,
                         clear_existing=clear_existing,
@@ -1847,9 +1948,10 @@ def index_zim_file(zim_path: str, source_id: str, limit: int = 1000,
 def index_html_backup(backup_path: str, source_id: str, limit: int = 1000,
                       progress_callback: Optional[Callable] = None,
                       skip_existing: bool = True,
-                      backup_folder: str = None) -> Dict:
+                      backup_folder: str = None,
+                      dimension: int = 1536) -> Dict:
     """Index an HTML backup folder."""
-    indexer = HTMLBackupIndexer(backup_path, source_id, backup_folder=backup_folder)
+    indexer = HTMLBackupIndexer(backup_path, source_id, backup_folder=backup_folder, dimension=dimension)
     return indexer.index(limit=limit, progress_callback=progress_callback,
                         skip_existing=skip_existing)
 
@@ -1857,9 +1959,10 @@ def index_html_backup(backup_path: str, source_id: str, limit: int = 1000,
 def index_pdf_folder(pdf_path: str, source_id: str, limit: int = 1000,
                      progress_callback: Optional[Callable] = None,
                      skip_existing: bool = True,
-                     backup_folder: str = None) -> Dict:
+                     backup_folder: str = None,
+                     dimension: int = 1536) -> Dict:
     """Index PDF files."""
-    indexer = PDFIndexer(pdf_path, source_id, backup_folder=backup_folder)
+    indexer = PDFIndexer(pdf_path, source_id, backup_folder=backup_folder, dimension=dimension)
     return indexer.index(limit=limit, progress_callback=progress_callback,
                         skip_existing=skip_existing)
 

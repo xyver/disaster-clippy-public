@@ -446,46 +446,90 @@ class HTMLBackupScraper:
 
         return pages
 
-    def _download_asset(self, asset_url, include_assets=True):
-        """Download an asset (image, CSS, JS) if not already downloaded"""
+    def _download_asset(self, asset_url, include_assets=True, skip_existing=True, page_url=None):
+        """Download an asset (image, CSS, JS) if not already downloaded.
+
+        Preserves directory structure for proper HTML references.
+
+        Args:
+            asset_url: URL of asset to download (can be relative or absolute)
+            include_assets: If False, skip download entirely
+            skip_existing: If True, skip files that already exist on disk
+            page_url: The URL of the page containing this asset reference (for relative path resolution)
+        """
         if not include_assets:
             return None
 
         if asset_url in self.downloaded_assets:
-            return self.manifest["assets"].get(asset_url, {}).get("local_path")
+            return self.manifest.get("assets", {}).get(asset_url, {}).get("local_path")
 
         try:
             # Parse and normalize URL
+            original_url = asset_url
             if asset_url.startswith("//"):
                 asset_url = "https:" + asset_url
             elif asset_url.startswith("/"):
                 asset_url = urljoin(self.base_url, asset_url)
+            elif not asset_url.startswith("http"):
+                # Simple relative path like "image.jpg" or "../path/image.jpg"
+                # Resolve relative to the page URL if provided, otherwise base_url
+                resolve_base = page_url if page_url else self.base_url
+                asset_url = urljoin(resolve_base, asset_url)
 
             # Skip external assets
             if urlparse(asset_url).netloc not in urlparse(self.base_url).netloc:
                 return None
 
+            # Compute local path BEFORE downloading to check if exists
+            parsed = urlparse(asset_url)
+            url_path = parsed.path.lstrip("/")
+
+            # Sanitize path components
+            path_parts = url_path.split("/")
+            safe_parts = []
+            for part in path_parts:
+                # Make safe filename/dirname
+                safe_part = "".join(c for c in part if c.isalnum() or c in "._-")
+                if safe_part:
+                    safe_parts.append(safe_part)
+
+            if not safe_parts:
+                # Fallback to hash-based name
+                ext = os.path.splitext(parsed.path)[1] or ".bin"
+                safe_parts = [hashlib.md5(asset_url.encode()).hexdigest()[:16] + ext]
+
+            # Build relative path preserving structure
+            relative_path = "/".join(safe_parts)
+            local_path = self.assets_dir / relative_path
+
+            # Check if file already exists on disk (resume capability)
+            if skip_existing and local_path.exists() and local_path.stat().st_size > 0:
+                # File exists - update manifest and skip download
+                self.downloaded_assets.add(original_url)
+                self.manifest["assets"][original_url] = {
+                    "local_path": f"assets/{relative_path}",
+                    "size": local_path.stat().st_size,
+                    "skipped": True
+                }
+                return f"assets/{relative_path}"
+
+            # Download the file
             response = self.session.get(asset_url, timeout=30)
             response.raise_for_status()
 
-            # Determine filename
-            parsed = urlparse(asset_url)
-            filename = os.path.basename(parsed.path)
-            if not filename or len(filename) > 100:
-                ext = os.path.splitext(parsed.path)[1] or ".bin"
-                filename = hashlib.md5(asset_url.encode()).hexdigest()[:16] + ext
+            # Create subdirectories in assets folder
+            local_path.parent.mkdir(parents=True, exist_ok=True)
 
-            local_path = self.assets_dir / filename
             with open(local_path, 'wb') as f:
                 f.write(response.content)
 
-            self.downloaded_assets.add(asset_url)
-            self.manifest["assets"][asset_url] = {
-                "local_path": f"assets/{filename}",
+            self.downloaded_assets.add(original_url)
+            self.manifest["assets"][original_url] = {
+                "local_path": f"assets/{relative_path}",
                 "size": len(response.content)
             }
 
-            return f"assets/{filename}"
+            return f"assets/{relative_path}"
 
         except Exception as e:
             # Don't log every asset error, can be noisy
@@ -554,21 +598,21 @@ class HTMLBackupScraper:
             if any(x in src.lower() for x in ["doubleclick", "googlesyndication", "adservice", "tracking", "pixel", "beacon", "analytics"]):
                 img.decompose()
 
-        # Process images
+        # Process images - pass page_url for relative path resolution
         if include_assets:
             for img in soup.find_all("img"):
                 src = img.get("src") or img.get("data-src")
                 if src:
-                    local_path = self._download_asset(src)
+                    local_path = self._download_asset(src, page_url=page_url)
                     if local_path:
                         img["src"] = f"../{local_path}"
 
-        # Process CSS links
+        # Process CSS links - pass page_url for relative path resolution
         if include_assets:
             for link in soup.find_all("link", rel="stylesheet"):
                 href = link.get("href")
                 if href:
-                    local_path = self._download_asset(href)
+                    local_path = self._download_asset(href, page_url=page_url)
                     if local_path:
                         link["href"] = f"../{local_path}"
 
@@ -1096,6 +1140,149 @@ def run_backup(backup_path, source_id, base_url, scraper_type="mediawiki",
     return scraper.backup(page_limit, include_assets, progress_callback, priority_urls,
                          max_consecutive_failures, stop_callback, follow_links, max_depth,
                          request_delay)
+
+
+def download_assets(backup_path, source_id, base_url, scraper_type="static",
+                    progress_callback=None, request_delay=0.3):
+    """
+    Download assets (CSS, images, JS) for existing backed up pages.
+
+    Scans local HTML files for asset references and downloads missing assets
+    while preserving directory structure.
+
+    Args:
+        backup_path: Base path for backups
+        source_id: Unique identifier for this source
+        base_url: Website base URL
+        scraper_type: 'mediawiki' or 'static'
+        progress_callback: Progress update function
+        request_delay: Seconds between requests (default 0.3)
+
+    Returns dict with download results.
+    """
+    scraper = HTMLBackupScraper(backup_path, source_id, base_url, scraper_type)
+
+    # Ensure assets key exists in manifest
+    if "assets" not in scraper.manifest:
+        scraper.manifest["assets"] = {}
+
+    pages_dir = scraper.pages_dir
+    if not pages_dir.exists():
+        return {"success": False, "error": "No pages folder found"}
+
+    html_files = list(pages_dir.glob("*.html"))
+    print(f"Scanning {len(html_files)} HTML files for assets...")
+
+    # Track assets with their source page URL for proper relative path resolution
+    # Format: (asset_ref, page_url) tuples
+    assets_found = []
+    assets_seen = set()  # For deduplication of (asset_ref, page_url) pairs
+    asset_extensions = {'.css', '.js', '.jpg', '.jpeg', '.png', '.gif', '.ico', '.svg', '.woff', '.woff2', '.ttf'}
+
+    # Build map of filename -> original URL from manifest
+    filename_to_url = {}
+    for url, info in scraper.manifest.get("pages", {}).items():
+        if info.get("filename"):
+            filename_to_url[info["filename"]] = url
+
+    # Scan all HTML files for asset references
+    for html_file in html_files:
+        try:
+            with open(html_file, 'r', encoding='utf-8', errors='ignore') as f:
+                content = f.read()
+
+            soup = BeautifulSoup(content, "html.parser")
+
+            # Get the original page URL for this file (for relative path resolution)
+            page_url = filename_to_url.get(html_file.name, base_url)
+
+            # Find CSS links
+            for link in soup.find_all("link", rel="stylesheet"):
+                href = link.get("href")
+                if href and not href.startswith("http") and not href.startswith("../assets/"):
+                    key = (href, page_url)
+                    if key not in assets_seen:
+                        assets_seen.add(key)
+                        assets_found.append(key)
+
+            # Find images
+            for img in soup.find_all("img"):
+                src = img.get("src") or img.get("data-src")
+                if src and not src.startswith("http") and not src.startswith("../assets/") and not src.startswith("data:"):
+                    key = (src, page_url)
+                    if key not in assets_seen:
+                        assets_seen.add(key)
+                        assets_found.append(key)
+
+            # Find JS scripts
+            for script in soup.find_all("script", src=True):
+                src = script.get("src")
+                if src and not src.startswith("http") and not src.startswith("../assets/"):
+                    key = (src, page_url)
+                    if key not in assets_seen:
+                        assets_seen.add(key)
+                        assets_found.append(key)
+
+        except Exception as e:
+            continue
+
+    print(f"Found {len(assets_found)} unique asset references")
+
+    # Download assets (with resume - skips existing files on disk)
+    downloaded = 0
+    skipped = 0
+    errors = 0
+
+    for i, (asset_ref, page_url) in enumerate(assets_found):
+        if progress_callback:
+            progress_callback(i + 1, len(assets_found), f"Processing: {asset_ref}")
+
+        # Use _download_asset with page_url for proper relative path resolution
+        result = scraper._download_asset(asset_ref, include_assets=True, skip_existing=True, page_url=page_url)
+        if result:
+            # Check if it was skipped (already existed) or downloaded
+            # Build the full URL the same way _download_asset does
+            if asset_ref.startswith("/"):
+                full_asset_url = base_url + asset_ref
+            elif not asset_ref.startswith("http"):
+                full_asset_url = urljoin(page_url, asset_ref)
+            else:
+                full_asset_url = asset_ref
+            asset_info = scraper.manifest.get("assets", {}).get(full_asset_url, {})
+            if asset_info.get("skipped"):
+                skipped += 1
+            else:
+                downloaded += 1
+                # Only sleep when we actually made a request
+                time.sleep(request_delay)
+
+            if (i + 1) % 100 == 0:
+                print(f"  [{i+1}/{len(assets_found)}] Downloaded: {downloaded}, Skipped: {skipped}, Errors: {errors}")
+        else:
+            errors += 1
+
+    scraper._save_manifest()
+
+    # Calculate new assets folder size
+    assets_dir = scraper.assets_dir
+    assets_size = sum(f.stat().st_size for f in assets_dir.rglob('*') if f.is_file()) if assets_dir.exists() else 0
+    assets_count = len(list(assets_dir.rglob('*'))) if assets_dir.exists() else 0
+
+    print(f"\nAsset download complete!")
+    print(f"  Downloaded: {downloaded}")
+    print(f"  Skipped (already on disk): {skipped}")
+    print(f"  Failed/404: {errors}")
+    print(f"  Assets folder: {assets_size / 1024 / 1024:.2f} MB ({assets_count} files)")
+
+    return {
+        "success": True,
+        "assets_found": len(assets_found),
+        "downloaded": downloaded,
+        "skipped": skipped,
+        "errors": errors,
+        "assets_size_mb": round(assets_size / 1024 / 1024, 2),
+        "assets_count": assets_count
+    }
 
 
 def repair_backup(backup_path, source_id, base_url, scraper_type="mediawiki",

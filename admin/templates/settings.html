@@ -384,11 +384,47 @@
             </div>
         </div>
 
-        <!-- System Prompts (tied to connection mode) -->
+        <!-- Embedding Model Section -->
+        <div class="section">
+            <h2>Embedding Model</h2>
+            <p class="description">Choose the embedding model for offline semantic search. Different models require different hardware resources. 768 dimensions is the default for offline and is available for download, other dimensions will be custom and unique to your system.</p>
+
+            <div class="form-group">
+                <label>Active Embedding Model</label>
+                <select id="embeddingModel">
+                    <option value="all-MiniLM-L6-v2">MiniLM L6 (384-dim) - Fast, 80MB, 2GB RAM</option>
+                    <option value="all-mpnet-base-v2" selected>MPNet Base v2 (768-dim) - Recommended, 420MB, 4GB RAM</option>
+                    <option value="intfloat-e5-large-v2">E5 Large v2 (1024-dim) - High Quality, 1.3GB, 8GB RAM</option>
+                </select>
+            </div>
+
+            <div style="background: #1a1a2e; border-radius: 6px; padding: 1rem; margin-top: 1rem;">
+                <strong style="color: #4ecca3;">Hardware Guidelines:</strong>
+                <ul style="color: #888; font-size: 0.85rem; margin-top: 0.75rem; margin-left: 1.5rem; line-height: 1.8;">
+                    <li><strong style="color: #ccc;">MiniLM (384-dim)</strong> - Raspberry Pi 4, older laptops, phones. Fastest inference but lower accuracy.</li>
+                    <li><strong style="color: #ccc;">MPNet (768-dim)</strong> - Standard laptops/desktops with 4GB+ RAM. Best balance of speed and quality.</li>
+                    <li><strong style="color: #ccc;">E5 Large (1024-dim)</strong> - Desktops with 8GB+ RAM. Best semantic matching, slower inference.</li>
+                </ul>
+            </div>
+
+            <div style="background: #0f3460; border: 1px solid #f9a825; border-radius: 6px; padding: 1rem; margin-top: 1rem;">
+                <strong style="color: #f9a825;">Important:</strong>
+                <p style="color: #888; font-size: 0.85rem; margin-top: 0.5rem;">
+                    Changing the embedding model requires re-indexing your sources. Each dimension uses a separate ChromaDB database
+                    (e.g., <code>chroma_db_768</code>). Download the model from the <a href="/useradmin/models" style="color: #4ecca3;">Models</a> page before indexing.
+                </p>
+            </div>
+
+            <div class="prompt-actions">
+                <button class="btn btn-primary btn-small" onclick="saveEmbeddingModel()">Save Embedding Model</button>
+            </div>
+        </div>
+
+        <!-- System Prompt (unified for all LLMs) -->
         <div class="section">
             <h2>System Prompt</h2>
             <p class="description" id="promptDescription">
-                Customize the AI assistant's behavior. This prompt is used when connected to cloud AI (Claude/OpenAI).
+                Customize the AI assistant's behavior. This prompt is used for all LLMs (cloud and local). The prompt format is automatically adjusted based on the model being used.
             </p>
 
             <div class="form-group">
@@ -560,9 +596,8 @@
     <script src="/admin/static/admin-common.js"></script>
     <script>
         let currentSettings = {};
-        let currentPrompts = { online: '', offline: '' };
-        let defaultPrompts = { online: '', offline: '' };
-        let currentPromptMode = 'online';
+        let currentPrompt = '';
+        let defaultPrompt = '';
 
         // Load settings on page load
         async function loadSettings() {
@@ -595,9 +630,10 @@
                     scanAllBackups();
                 }
 
-                // Load prompts from settings
+                // Load unified prompt from settings
                 if (currentSettings.prompts) {
-                    currentPrompts = { ...currentSettings.prompts };
+                    // Support both new "system" key and legacy "online" key
+                    currentPrompt = currentSettings.prompts.system || currentSettings.prompts.online || '';
                 }
 
                 // Load cloud settings
@@ -605,21 +641,21 @@
                     loadCloudSettings(currentSettings.personal_cloud);
                 }
 
+                // Load embedding model
+                if (currentSettings.models && currentSettings.models.embedding_model) {
+                    document.getElementById('embeddingModel').value = currentSettings.models.embedding_model;
+                }
+
                 // Also fetch default prompts
                 await loadDefaultPrompts();
 
-                // If no prompts in settings, use defaults
-                if (!currentPrompts.online) {
-                    currentPrompts.online = defaultPrompts.online;
-                }
-                if (!currentPrompts.offline) {
-                    currentPrompts.offline = defaultPrompts.offline;
+                // If no prompt in settings, use default
+                if (!currentPrompt) {
+                    currentPrompt = defaultPrompt;
                 }
 
-                // Set prompt mode based on connection mode
-                const connectionMode = currentSettings.offline_mode || 'hybrid';
-                currentPromptMode = getPromptModeFromConnectionMode(connectionMode);
-                updatePromptEditor();
+                // Update the editor
+                document.getElementById('promptEditor').value = currentPrompt;
 
             } catch (e) {
                 console.error('Failed to load settings:', e);
@@ -632,51 +668,27 @@
                 const response = await fetch('/useradmin/api/prompts');
                 const data = await response.json();
                 if (data.defaults) {
-                    defaultPrompts = data.defaults;
+                    // Support both new "system" key and legacy "online" key
+                    defaultPrompt = data.defaults.system || data.defaults.online || '';
                 }
-                // Also update current prompts if we got them
+                // Also update current prompt if we got one
                 if (data.prompts) {
-                    currentPrompts = { ...data.prompts };
+                    currentPrompt = data.prompts.system || data.prompts.online || '';
                 }
             } catch (e) {
                 console.error('Failed to load default prompts:', e);
             }
         }
 
-        // Prompt editing functions - tied to connection mode
-        function getPromptModeFromConnectionMode(connectionMode) {
-            // offline_only uses offline prompt, everything else uses online prompt
-            return connectionMode === 'offline_only' ? 'offline' : 'online';
-        }
-
-        function updatePromptForConnectionMode(connectionMode) {
-            // Save current prompt before switching
-            currentPrompts[currentPromptMode] = document.getElementById('promptEditor').value;
-
-            // Switch to appropriate prompt mode
-            currentPromptMode = getPromptModeFromConnectionMode(connectionMode);
-            updatePromptEditor();
-        }
-
-        function updatePromptEditor() {
-            document.getElementById('promptEditor').value = currentPrompts[currentPromptMode] || '';
-
-            const descriptions = {
-                online: 'Customize the AI assistant behavior. This prompt is used with cloud AI (Claude/OpenAI) in Online and Hybrid modes.',
-                offline: 'Customize the AI assistant behavior. This prompt is used with local Ollama in Offline Only mode. Keep it concise for better performance.'
-            };
-            document.getElementById('promptDescription').textContent = descriptions[currentPromptMode];
-        }
-
         async function savePrompts() {
             // Update current prompt from editor
-            currentPrompts[currentPromptMode] = document.getElementById('promptEditor').value;
+            currentPrompt = document.getElementById('promptEditor').value;
 
             try {
                 const response = await fetch('/useradmin/api/settings', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ prompts: currentPrompts })
+                    body: JSON.stringify({ prompts: { system: currentPrompt } })
                 });
 
                 const data = await response.json();
@@ -690,15 +702,38 @@
             }
         }
 
+        async function saveEmbeddingModel() {
+            const embeddingModel = document.getElementById('embeddingModel').value;
+
+            try {
+                const response = await fetch('/useradmin/api/settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        models: {
+                            embedding_model: embeddingModel
+                        }
+                    })
+                });
+
+                const data = await response.json();
+                if (data.status === 'success') {
+                    showToast('Embedding model saved. Re-index your sources to use the new model.');
+                } else {
+                    showToast('Failed to save embedding model', true);
+                }
+            } catch (e) {
+                showToast('Error saving embedding model', true);
+            }
+        }
+
         async function resetCurrentPrompt() {
-            if (!confirm('Reset this prompt to the default? Your changes will be lost.')) {
+            if (!confirm('Reset the prompt to default? Your changes will be lost.')) {
                 return;
             }
 
-            // Use locally cached default prompt
-            const defaultPrompt = defaultPrompts[currentPromptMode];
             if (defaultPrompt) {
-                currentPrompts[currentPromptMode] = defaultPrompt;
+                currentPrompt = defaultPrompt;
                 document.getElementById('promptEditor').value = defaultPrompt;
 
                 // Save to backend
@@ -706,7 +741,7 @@
                     const response = await fetch('/useradmin/api/settings', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ prompts: currentPrompts })
+                        body: JSON.stringify({ prompts: { system: currentPrompt } })
                     });
 
                     const data = await response.json();
@@ -785,9 +820,6 @@
 
             modeDot.className = 'status-dot ' + mode.replace('_only', '');
             modeStatus.textContent = 'Mode: ' + modeLabels[mode];
-
-            // Update prompt editor to show the relevant prompt for this mode
-            updatePromptForConnectionMode(mode);
         }
 
         // Handle radio button changes - auto-save when mode changes

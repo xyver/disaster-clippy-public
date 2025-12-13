@@ -1,13 +1,33 @@
 """
 Embedding service for converting text to vectors.
 Supports both OpenAI API and local models (sentence-transformers).
+
+Fallback chain based on offline_mode setting:
+- online_only: Try OpenAI first, warn before falling back to local
+- hybrid: Try OpenAI, auto-fallback to local with notice
+- offline_only: Skip API entirely, use local chain
+
+Local fallback order:
+1. Portable model (BACKUP_PATH/models/embeddings/)
+2. HuggingFace cache (~/.cache/huggingface/)
+3. Auto-download from HuggingFace
 """
 
-from typing import List, Optional
+from typing import List, Optional, Callable
 import os
+from pathlib import Path
 from dotenv import load_dotenv
 
 load_dotenv()
+
+
+class EmbeddingFallbackNotice:
+    """Notices shown during embedding fallback"""
+    API_UNAVAILABLE = "Cloud embedding API unavailable. Using local model."
+    USING_PORTABLE = "Using portable embedding model from backup folder."
+    USING_CACHE = "Using cached embedding model from HuggingFace cache."
+    DOWNLOADING = "Downloading embedding model (this only happens once)..."
+    NO_MODEL = "No embedding model available. Semantic search disabled."
 
 
 class EmbeddingService:
@@ -19,29 +39,145 @@ class EmbeddingService:
     - Local models (free): all-MiniLM-L6-v2, all-mpnet-base-v2, etc.
 
     Set EMBEDDING_MODE=local in .env to use local models.
+
+    Fallback behavior depends on offline_mode setting in local_settings.json.
     """
 
-    def __init__(self, model: Optional[str] = None):
+    # Known local model names (sentence-transformers)
+    # These map to model IDs in the model_registry
+    LOCAL_MODEL_NAMES = [
+        "all-MiniLM-L6-v2",          # 384-dim, fast/lightweight
+        "all-mpnet-base-v2",          # 768-dim, recommended balance
+        "intfloat-e5-large-v2",       # 1024-dim, high quality
+        "intfloat/e5-large-v2",       # HuggingFace format
+        "multi-qa-mpnet-base-dot-v1",
+        "paraphrase-multilingual-MiniLM-L12-v2",
+    ]
+
+    def __init__(self, model: Optional[str] = None, fallback_callback: Optional[Callable[[str], None]] = None):
         """
         Args:
             model: Model to use. If None, auto-detects based on EMBEDDING_MODE env var.
                    OpenAI: "text-embedding-3-small", "text-embedding-3-large"
                    Local: "all-MiniLM-L6-v2", "all-mpnet-base-v2", etc.
+            fallback_callback: Optional callback to notify about fallback events
         """
-        self.mode = os.getenv("EMBEDDING_MODE", "openai").lower()
+        self.fallback_callback = fallback_callback
+        self._local_model = None
+        self.client = None
+        self.fallback_notices = []  # Track notices for the caller
+
+        # Get offline mode setting
+        self.offline_mode = self._get_offline_mode()
 
         # Check for model override from env
         env_model = os.getenv("EMBEDDING_MODEL", "")
+        self.mode = os.getenv("EMBEDDING_MODE", "openai").lower()
 
-        if self.mode == "local":
-            # Use sentence-transformers for local embeddings
-            # all-mpnet-base-v2 is recommended for best quality
-            # all-MiniLM-L6-v2 is faster but lower quality
+        # Check if explicitly requesting a local model
+        requested_model = model or env_model
+        is_local_model = requested_model and any(
+            requested_model.lower() == m.lower() for m in self.LOCAL_MODEL_NAMES
+        )
+
+        # Decide initialization based on offline_mode and model type
+        if is_local_model:
+            # Explicitly requested local model - use it regardless of offline_mode
+            print(f"[EmbeddingService] Using local model (explicitly requested): {requested_model}")
+            self._init_local_with_fallback(requested_model)
+        elif self.offline_mode == "offline_only":
+            # Skip API entirely, go straight to local
             default_local = "all-mpnet-base-v2"
-            self._init_local(model or env_model or default_local)
+            self._init_local_with_fallback(model or env_model or default_local)
+        elif self.mode == "local":
+            # User explicitly wants local mode
+            default_local = "all-mpnet-base-v2"
+            self._init_local_with_fallback(model or env_model or default_local)
         else:
-            # Use OpenAI API
-            self._init_openai(model or env_model or "text-embedding-3-small")
+            # Try OpenAI first (online_only or hybrid mode)
+            try:
+                self._init_openai(model or env_model or "text-embedding-3-small")
+            except ValueError as e:
+                # No API key - decide based on mode
+                if self.offline_mode == "online_only":
+                    # Warn but still try local
+                    self._notify(EmbeddingFallbackNotice.API_UNAVAILABLE)
+                    self._init_local_with_fallback("all-mpnet-base-v2")
+                else:
+                    # Hybrid mode - silently fall back to local
+                    self._init_local_with_fallback("all-mpnet-base-v2")
+
+    def _get_offline_mode(self) -> str:
+        """Get the offline_mode setting from local_config"""
+        try:
+            from admin.local_config import get_local_config
+            return get_local_config().get_offline_mode()
+        except Exception:
+            return "hybrid"  # Default to hybrid if config not available
+
+    def _get_portable_model_path(self, model_name: str) -> Optional[Path]:
+        """Get path to portable model in BACKUP_PATH/models/embeddings/"""
+        try:
+            from admin.local_config import get_local_config
+            backup_folder = get_local_config().get_backup_folder()
+            if backup_folder:
+                model_path = Path(backup_folder) / "models" / "embeddings" / model_name
+                if model_path.exists():
+                    # Check for required files
+                    if (model_path / "pytorch_model.bin").exists() or \
+                       (model_path / "model.safetensors").exists():
+                        return model_path
+        except Exception:
+            pass
+        return None
+
+    def _notify(self, message: str):
+        """Send a fallback notification"""
+        self.fallback_notices.append(message)
+        print(f"[Embedding] {message}")
+        if self.fallback_callback:
+            self.fallback_callback(message)
+
+    def _init_local_with_fallback(self, model: str):
+        """
+        Initialize local model with fallback chain:
+        1. Portable model (BACKUP_PATH/models/embeddings/)
+        2. HuggingFace cache
+        3. Auto-download from HuggingFace
+        """
+        # Try portable model first
+        portable_path = self._get_portable_model_path(model)
+        if portable_path:
+            try:
+                self._init_local(str(portable_path))
+                self._notify(EmbeddingFallbackNotice.USING_PORTABLE)
+                return
+            except Exception as e:
+                print(f"Failed to load portable model: {e}")
+
+        # Try loading from default location (HuggingFace cache or download)
+        try:
+            self._init_local(model)
+            # Check if it was cached or downloaded
+            cache_path = Path.home() / ".cache" / "huggingface"
+            if cache_path.exists():
+                self._notify(EmbeddingFallbackNotice.USING_CACHE)
+        except ImportError:
+            # sentence-transformers not installed
+            # Try OpenAI as final fallback if available
+            if os.getenv("OPENAI_API_KEY"):
+                print("sentence-transformers not installed, falling back to OpenAI")
+                self._init_openai("text-embedding-3-small")
+                self.mode = "openai"
+            else:
+                self._notify(EmbeddingFallbackNotice.NO_MODEL)
+                self.mode = "disabled"
+                self.model = None
+        except Exception as e:
+            print(f"Failed to load local model: {e}")
+            self._notify(EmbeddingFallbackNotice.NO_MODEL)
+            self.mode = "disabled"
+            self.model = None
 
     def _init_openai(self, model: str):
         """Initialize OpenAI embedding client"""
@@ -66,6 +202,7 @@ class EmbeddingService:
             print(f"Loading local embedding model: {model}...")
             self._local_model = SentenceTransformer(model)
             self.model = model
+            self.mode = "local"  # Important: set mode to local so embed_text uses local model
             self.client = None
             print(f"Local model loaded: {model} (dimension: {self._local_model.get_sentence_embedding_dimension()})")
         except ImportError:
@@ -82,7 +219,7 @@ class EmbeddingService:
                     "Or set OPENAI_API_KEY to use OpenAI embeddings instead."
                 )
 
-    def embed_text(self, text: str) -> List[float]:
+    def embed_text(self, text: str) -> Optional[List[float]]:
         """
         Generate embedding for a single text.
 
@@ -90,8 +227,11 @@ class EmbeddingService:
             text: Text to embed
 
         Returns:
-            List of floats (embedding vector)
+            List of floats (embedding vector), or None if embeddings disabled
         """
+        if self.mode == "disabled":
+            return None
+
         if self.mode == "local" and self._local_model:
             # Local model - no token limit issues, but truncate for memory
             text = text[:50000]
@@ -172,8 +312,23 @@ class EmbeddingService:
                 # Not a token limit error, re-raise
                 raise
 
+    def is_available(self) -> bool:
+        """Check if embedding service is available"""
+        return self.mode != "disabled" and (self._local_model is not None or self.client is not None)
+
+    def get_status(self) -> dict:
+        """Get current embedding service status"""
+        return {
+            "available": self.is_available(),
+            "mode": self.mode,
+            "model": self.model if hasattr(self, 'model') and self.model else None,
+            "dimension": self.get_dimension() if self.is_available() else None,
+            "offline_mode": self.offline_mode,
+            "notices": self.fallback_notices
+        }
+
     def embed_batch(self, texts: List[str], batch_size: int = 50,
-                    progress_callback=None) -> List[List[float]]:
+                    progress_callback=None) -> Optional[List[List[float]]]:
         """
         Generate embeddings for multiple texts efficiently.
 
@@ -183,8 +338,11 @@ class EmbeddingService:
             progress_callback: Optional function(current, total, message) for progress
 
         Returns:
-            List of embedding vectors
+            List of embedding vectors, or None if embeddings disabled
         """
+        if self.mode == "disabled":
+            return None
+
         total = len(texts)
 
         if self.mode == "local" and self._local_model:
@@ -236,9 +394,11 @@ class EmbeddingService:
 
     def get_dimension(self) -> int:
         """Get the embedding dimension for the current model"""
+        if self.mode == "disabled":
+            return 0
         if self.mode == "local" and self._local_model:
             return self._local_model.get_sentence_embedding_dimension()
-        elif "large" in self.model:
+        elif hasattr(self, 'model') and self.model and "large" in self.model:
             return 3072
         else:
             return 1536

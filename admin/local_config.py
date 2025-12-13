@@ -48,30 +48,28 @@ class LocalConfig:
             "auto_start": True,        # Auto-start portable Ollama when in offline mode
             "portable_path": ""        # Path to portable Ollama (empty = use BACKUP_PATH/ollama)
         },
+        "gpu": {
+            "enabled": False,          # Enable GPU acceleration (requires CUDA)
+            "llm_layers": -1,          # GPU layers for LLM (-1 = all, 0 = none, N = specific count)
+            "auto_detect": True        # Auto-detect GPU and enable if available
+        },
         "prompts": {
-            # Online mode prompt (used with cloud LLM like Claude/OpenAI)
-            "online": """You are Disaster Clippy, a helpful assistant that helps people find DIY guides and humanitarian resources.
+            # Unified prompt (used for all LLMs - format is auto-detected by llama_runtime)
+            "system": """You are Disaster Clippy, a helpful assistant for DIY guides and humanitarian resources.
 
-Your role is to:
-1. Understand what the user needs help with
-2. Suggest relevant articles from the knowledge base
-3. Help them refine their search through conversation
-4. Answer follow-up questions about the articles
+Help users find what they need through natural conversation. Recommend 3-5 relevant articles with brief descriptions.
 
-When presenting search results:
-- Summarize what each article is about in 1-2 sentences
-- Explain why it might be relevant to their situation
-- Offer to find more similar articles or narrow down the search
+Guidelines:
+- Answer questions directly based on the article content provided
+- ALWAYS format article titles as clickable markdown links: [Article Title](URL)
+- Include 3-5 article recommendations in each response
+- Keep responses concise but informative
+- ONLY recommend articles from the provided context - never make up articles
 
-Be conversational, helpful, and practical. Focus on actionable solutions.
-
-IMPORTANT: You can ONLY recommend articles that are provided to you in the context. Do not make up or hallucinate articles that don't exist in the search results.""",
-
-            # Offline mode prompt (used with local Ollama - shorter for efficiency)
-            "offline": """You are Disaster Clippy, a helpful assistant for DIY and humanitarian resources.
-Your role is to help users find relevant articles and answer questions based on the provided context.
-Be concise, practical, and helpful. Focus on actionable information.
-Only recommend articles that are in the provided context - do not make up articles."""
+Example format:
+Here are some guides that can help:
+1. [How to Build a Solar Panel](/zim/appropedia/wiki/Solar_Panel) - Step-by-step instructions for DIY solar
+2. [Water Purification Methods](/zim/appropedia/wiki/Water) - Overview of filtration techniques"""
         },
         "personal_cloud": {
             "enabled": False,
@@ -81,6 +79,17 @@ Only recommend articles that are in the provided context - do not make up articl
             "secret_access_key": "",
             "bucket_name": "",
             "region": "auto"
+        },
+        "models": {
+            "embedding_model": "all-mpnet-base-v2",  # Active embedding model
+            "llm_model": None,                        # Active LLM model
+            "llm_runtime": "llama.cpp"               # LLM runtime: llama.cpp or ollama
+        },
+        "translation": {
+            "enabled": False,                         # Enable article translation
+            "active_language": "en",                  # Target language code ("en" = no translation)
+            "cache_enabled": True,                    # Cache translated articles
+            "cache_max_mb": 500                       # Max cache size in MB
         }
     }
 
@@ -360,26 +369,27 @@ Only recommend articles that are in the provided context - do not make up articl
             return os.path.join(backup_folder, "ollama")
         return ""
 
-    # Prompt settings
+    # Prompt settings (unified - same prompt for online and offline)
     def get_prompt(self, mode: str = "online") -> str:
-        """Get system prompt for chat (online or offline mode)"""
+        """Get system prompt for chat (mode param kept for backward compatibility)"""
         prompts = self.config.get("prompts", self.DEFAULT_CONFIG["prompts"])
-        return prompts.get(mode, prompts.get("online", ""))
+        # Prefer unified "system" prompt, fall back to mode-specific for legacy configs
+        return prompts.get("system", prompts.get(mode, prompts.get("online", "")))
 
-    def set_prompt(self, mode: str, prompt: str) -> None:
-        """Set system prompt for a mode (online or offline)"""
+    def set_prompt(self, mode: str = None, prompt: str = None) -> None:
+        """Set unified system prompt (mode param ignored - kept for backward compatibility)"""
         if "prompts" not in self.config:
             self.config["prompts"] = self.DEFAULT_CONFIG["prompts"].copy()
-        self.config["prompts"][mode] = prompt
+        self.config["prompts"]["system"] = prompt
 
     def get_prompts(self) -> Dict[str, str]:
         """Get all prompts"""
         return self.config.get("prompts", self.DEFAULT_CONFIG["prompts"])
 
-    def reset_prompt(self, mode: str) -> str:
-        """Reset a prompt to default and return the default value"""
-        default_prompt = self.DEFAULT_CONFIG["prompts"].get(mode, "")
-        self.set_prompt(mode, default_prompt)
+    def reset_prompt(self, mode: str = None) -> str:
+        """Reset prompt to default and return the default value"""
+        default_prompt = self.DEFAULT_CONFIG["prompts"].get("system", "")
+        self.set_prompt(prompt=default_prompt)
         return default_prompt
 
     # Personal Cloud Backup settings
@@ -411,6 +421,128 @@ Only recommend articles that are in the provided context - do not make up articl
     def is_personal_cloud_enabled(self) -> bool:
         """Check if personal cloud backup is enabled"""
         return self.config.get("personal_cloud", {}).get("enabled", False)
+
+    # Models settings
+    def get_models_config(self) -> Dict[str, Any]:
+        """Get models configuration"""
+        return self.config.get("models", self.DEFAULT_CONFIG["models"])
+
+    def set_models_config(self, **kwargs) -> None:
+        """Update models configuration with provided values"""
+        if "models" not in self.config:
+            self.config["models"] = self.DEFAULT_CONFIG["models"].copy()
+        for key, value in kwargs.items():
+            if key in self.config["models"]:
+                self.config["models"][key] = value
+
+    def get_embedding_model(self) -> Optional[str]:
+        """Get the configured embedding model name"""
+        return self.config.get("models", {}).get("embedding_model", "all-mpnet-base-v2")
+
+    def set_embedding_model(self, model_name: str) -> None:
+        """Set the active embedding model"""
+        if "models" not in self.config:
+            self.config["models"] = self.DEFAULT_CONFIG["models"].copy()
+        self.config["models"]["embedding_model"] = model_name
+
+    def get_llm_model(self) -> Optional[str]:
+        """Get the configured LLM model name"""
+        return self.config.get("models", {}).get("llm_model")
+
+    def set_llm_model(self, model_name: Optional[str]) -> None:
+        """Set the active LLM model"""
+        if "models" not in self.config:
+            self.config["models"] = self.DEFAULT_CONFIG["models"].copy()
+        self.config["models"]["llm_model"] = model_name
+
+    def get_llm_runtime(self) -> str:
+        """Get the LLM runtime (llama.cpp or ollama)"""
+        return self.config.get("models", {}).get("llm_runtime", "llama.cpp")
+
+    def set_llm_runtime(self, runtime: str) -> None:
+        """Set the LLM runtime"""
+        if runtime not in ["llama.cpp", "ollama"]:
+            raise ValueError("Runtime must be 'llama.cpp' or 'ollama'")
+        if "models" not in self.config:
+            self.config["models"] = self.DEFAULT_CONFIG["models"].copy()
+        self.config["models"]["llm_runtime"] = runtime
+
+    # Translation settings
+    def get_translation_language(self) -> str:
+        """Get the active translation language code"""
+        return self.config.get("translation", {}).get("active_language", "en")
+
+    def set_translation_language(self, lang_code: str) -> None:
+        """Set the active translation language"""
+        if "translation" not in self.config:
+            self.config["translation"] = self.DEFAULT_CONFIG["translation"].copy()
+        self.config["translation"]["active_language"] = lang_code
+        # Enable translation if setting a non-English language
+        self.config["translation"]["enabled"] = (lang_code != "en")
+
+    def is_translation_enabled(self) -> bool:
+        """Check if translation is enabled"""
+        return self.config.get("translation", {}).get("enabled", False)
+
+    def set_translation_enabled(self, enabled: bool) -> None:
+        """Enable or disable translation"""
+        if "translation" not in self.config:
+            self.config["translation"] = self.DEFAULT_CONFIG["translation"].copy()
+        self.config["translation"]["enabled"] = enabled
+
+    def is_translation_cache_enabled(self) -> bool:
+        """Check if translation caching is enabled"""
+        return self.config.get("translation", {}).get("cache_enabled", True)
+
+    def get_translation_cache_max_mb(self) -> int:
+        """Get max translation cache size in MB"""
+        return self.config.get("translation", {}).get("cache_max_mb", 500)
+
+    # GPU Configuration
+    def is_gpu_enabled(self) -> bool:
+        """Check if GPU acceleration is enabled"""
+        gpu_config = self.config.get("gpu", {})
+        if gpu_config.get("auto_detect", True):
+            return self._detect_gpu_available()
+        return gpu_config.get("enabled", False)
+
+    def get_gpu_llm_layers(self) -> int:
+        """
+        Get number of LLM layers to offload to GPU.
+        Returns: -1 for all layers, 0 for none, or specific count
+        """
+        if not self.is_gpu_enabled():
+            return 0
+        return self.config.get("gpu", {}).get("llm_layers", -1)
+
+    def set_gpu_enabled(self, enabled: bool) -> None:
+        """Enable or disable GPU acceleration"""
+        if "gpu" not in self.config:
+            self.config["gpu"] = self.DEFAULT_CONFIG["gpu"].copy()
+        self.config["gpu"]["enabled"] = enabled
+        self.config["gpu"]["auto_detect"] = False  # Manual override
+
+    def set_gpu_llm_layers(self, layers: int) -> None:
+        """Set number of LLM layers to offload to GPU"""
+        if "gpu" not in self.config:
+            self.config["gpu"] = self.DEFAULT_CONFIG["gpu"].copy()
+        self.config["gpu"]["llm_layers"] = layers
+
+    def _detect_gpu_available(self) -> bool:
+        """Auto-detect if CUDA GPU is available"""
+        try:
+            import torch
+            return torch.cuda.is_available()
+        except ImportError:
+            pass
+        # Also check for llama-cpp-python CUDA support
+        try:
+            from llama_cpp import Llama
+            # If llama_cpp is built with CUDA, this should work
+            return True  # Assume available if llama_cpp is installed
+        except ImportError:
+            pass
+        return False
 
 
 def scan_backup_folder(folder_path: str, file_type: str = "zim") -> List[Dict[str, Any]]:
@@ -546,14 +678,29 @@ def scan_all_backups(folder_path: str) -> Dict[str, List[Dict[str, Any]]]:
     }
 
 
+_internet_check_cache = {"result": None, "timestamp": 0}
+
 def check_internet_available() -> bool:
-    """Quick check if internet is available"""
+    """Quick check if internet is available (cached for 30 seconds)"""
     import socket
+    import time
+
+    # Return cached result if less than 30 seconds old
+    cache_ttl = 30
+    now = time.time()
+    if _internet_check_cache["result"] is not None:
+        if now - _internet_check_cache["timestamp"] < cache_ttl:
+            return _internet_check_cache["result"]
+
     try:
-        socket.create_connection(("8.8.8.8", 53), timeout=3)
-        return True
+        socket.create_connection(("8.8.8.8", 53), timeout=2)
+        result = True
     except OSError:
-        return False
+        result = False
+
+    _internet_check_cache["result"] = result
+    _internet_check_cache["timestamp"] = now
+    return result
 
 
 # Singleton instance for easy access

@@ -91,7 +91,11 @@ def read_json_header_only(file_path: Path) -> dict:
     This is critical for performance - metadata files can be 50-200MB with 100k docs.
     This function reads just the first few KB to extract counts.
 
-    Returns dict with: document_count, total_chars, schema_version
+    Works with:
+    - _metadata.json: document_count, total_chars, schema_version
+    - _master.json: total_documents, total_chars, total_size_bytes, source_count
+
+    Returns dict with available header fields.
     """
     import re
 
@@ -106,24 +110,43 @@ def read_json_header_only(file_path: Path) -> dict:
             with open(file_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
             return {
-                "document_count": data.get("document_count", len(data.get("documents", data.get("vectors", {})))),
+                "document_count": data.get("document_count", data.get("total_documents", len(data.get("documents", data.get("vectors", {}))))),
+                "total_documents": data.get("total_documents", data.get("document_count", 0)),
                 "total_chars": data.get("total_chars", 0),
+                "total_size_bytes": data.get("total_size_bytes", 0),
+                "source_count": data.get("source_count", len(data.get("sources", {}))),
                 "schema_version": data.get("schema_version", 1)
             }
 
-        # Large files - read just the header (first 5KB)
+        # Large files - read just the header (first 2KB should be enough for header fields)
         with open(file_path, 'r', encoding='utf-8') as f:
-            header_chunk = f.read(5000)
+            header_chunk = f.read(2000)
 
         result = {}
 
+        # _metadata.json fields
         count_match = re.search(r'"document_count"\s*:\s*(\d+)', header_chunk)
         if count_match:
             result["document_count"] = int(count_match.group(1))
 
+        # _master.json fields (total_documents instead of document_count)
+        total_docs_match = re.search(r'"total_documents"\s*:\s*(\d+)', header_chunk)
+        if total_docs_match:
+            result["total_documents"] = int(total_docs_match.group(1))
+            if "document_count" not in result:
+                result["document_count"] = result["total_documents"]
+
         chars_match = re.search(r'"total_chars"\s*:\s*(\d+)', header_chunk)
         if chars_match:
             result["total_chars"] = int(chars_match.group(1))
+
+        size_match = re.search(r'"total_size_bytes"\s*:\s*(\d+)', header_chunk)
+        if size_match:
+            result["total_size_bytes"] = int(size_match.group(1))
+
+        source_count_match = re.search(r'"source_count"\s*:\s*(\d+)', header_chunk)
+        if source_count_match:
+            result["source_count"] = int(source_count_match.group(1))
 
         version_match = re.search(r'"schema_version"\s*:\s*(\d+)', header_chunk)
         if version_match:
@@ -754,13 +777,18 @@ def sync_master_metadata() -> Dict[str, Any]:
             vec_header = read_json_header_only(vectors_path)
             doc_count = vec_header.get("document_count", 0)
 
-        # Get tags from manifest (manifests are small, safe to load fully)
+        # Get tags, size, and total_chars from manifest (manifests are small, safe to load fully)
         tags = []
+        size_bytes = 0
         if manifest_path.exists():
             try:
                 with open(manifest_path, 'r', encoding='utf-8') as f:
                     manifest_data = json.load(f)
                 tags = manifest_data.get("tags", [])
+                size_bytes = manifest_data.get("total_size_bytes", 0)
+                # Get total_chars from manifest if not already set from metadata
+                if total_chars == 0:
+                    total_chars = manifest_data.get("total_chars", 0)
             except Exception:
                 pass
 
@@ -769,6 +797,7 @@ def sync_master_metadata() -> Dict[str, Any]:
         new_sources[source_id] = {
             "count": doc_count,
             "chars": total_chars,
+            "size_bytes": size_bytes,
             "last_sync": datetime.now().isoformat(),
             "file": f"{source_id}.json",
             "topics": tags
@@ -785,16 +814,25 @@ def sync_master_metadata() -> Dict[str, Any]:
     current_sources = set(new_sources.keys())
     removed = len(old_sources - current_sources)
 
-    # Build new master
-    master["version"] = 2
-    master["sources"] = new_sources
-    master["total_documents"] = sum(s.get("count", 0) for s in new_sources.values())
-    master["total_chars"] = sum(s.get("chars", 0) for s in new_sources.values())
-    master["last_updated"] = datetime.now().isoformat()
+    # Build new master with header fields FIRST for fast header scanning
+    # This allows read_json_header_only() to extract totals without loading sources dict
+    total_docs = sum(s.get("count", 0) for s in new_sources.values())
+    total_chars = sum(s.get("chars", 0) for s in new_sources.values())
+    total_size = sum(s.get("size_bytes", 0) for s in new_sources.values())
+
+    new_master = {
+        "version": 2,
+        "source_count": len(new_sources),
+        "total_documents": total_docs,
+        "total_chars": total_chars,
+        "total_size_bytes": total_size,
+        "last_updated": datetime.now().isoformat(),
+        "sources": new_sources  # Large dict comes LAST
+    }
 
     # Save
     with open(master_file, 'w', encoding='utf-8') as f:
-        json.dump(master, f, indent=2)
+        json.dump(new_master, f, indent=2)
 
     return {
         "added": added,

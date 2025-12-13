@@ -215,6 +215,123 @@ Open your browser:
 
 ---
 
+## Performance Guidelines
+
+Storage is cheap (assume 1TB drives on most deployments), but user-facing latency is expensive. Optimize for read/scan speed, not storage size.
+
+### Key Principles
+
+1. **Never load full `_vectors.json` or `_index.json` into memory** unless absolutely necessary
+   - These files can be 100MB+ for large sources
+   - Use `read_json_header_only()` for counts/stats
+   - Stream or batch process when you need content
+
+2. **Use header reading for counts/stats**
+   - `_master.json` has header fields (`source_count`, `total_documents`, `total_size_bytes`) before the large `sources` dict
+   - `read_json_header_only()` in `packager.py` reads first 2KB only
+
+3. **Stream large operations with progress callbacks**
+   - All indexing operations use `progress_callback(current, total, message)`
+   - Show users what's happening during long operations
+
+4. **Background jobs for anything over ~2 seconds**
+   - Use `JobManager.submit()` for delete, index, metadata generation
+   - Jobs page shows progress and allows cancellation
+
+5. **Use `read_only=True` when you don't need to write**
+   - `VectorStore(read_only=True)` skips loading the embedding model
+   - Saves ~2 seconds on startup for read-only operations
+
+### Optimized Operations
+
+| Operation | Before | After |
+|-----------|--------|-------|
+| Dashboard stats | Load all source folders | Read 2KB header from `_master.json` |
+| Delete source IDs | Scan entire ChromaDB | Read keys from `_vectors.json` |
+| Vector count check | ChromaDB where query | Read from `_vectors.json` |
+| Internet check | 3-sec network call every page | 30-sec cached result |
+| R2 source list | Fetch on every request | 1-hour cache |
+| VectorStore init | Load embedding model | `read_only=True` skips model |
+
+### Why Duplicate Storage is OK
+
+The system intentionally stores data in multiple formats:
+
+| Storage | Purpose | Optimized For |
+|---------|---------|---------------|
+| `_vectors.json` | Portable, shareable | Distribution, ID lookup |
+| `_index.json` | Full content | Display, content scanning |
+| `_metadata.json` | Lightweight metadata | Quick lookups, stats |
+| ChromaDB | Vector similarity | Fast semantic search |
+
+Duplicating data with increased storage is a fair trade for faster document scanning and operations.
+
+---
+
+## Source Validation System
+
+The validation system has two modes to support different use cases: fast local checks for iterative development, and thorough integrity checks before publishing to the global repository.
+
+### Validation Modes
+
+| Mode | Function | Speed | Use Case |
+|------|----------|-------|----------|
+| **Light** | `validate_source(source_id)` | Fast (<1 sec) | Local admin quick checks |
+| **Deep** | `validate_source(source_id, deep=True)` | Slow (loads files) | Global admin integrity verification |
+| **Production** | `validate_for_production(source_id)` | Slow | Publishing gate (uses deep + blockers) |
+
+### Light Validation (Default)
+
+Uses header reading (`read_json_header_only()`) to check:
+- File existence (manifest, metadata, vectors, backup)
+- Document counts from headers
+- License and tag presence
+- Schema version
+
+### Deep Validation
+
+Loads full files to verify integrity:
+- **Header vs Actual Count**: Verifies `document_count` in header matches actual dict size
+- **ID Cross-Reference**: Compares metadata doc IDs with vector doc IDs
+- **Missing Vectors**: Reports documents in metadata but missing from vectors (warns if >10%)
+- **Orphaned Vectors**: Reports vectors not in metadata (warns if >5%) - indicates stale data
+- **Empty Vector Sampling**: Checks 100 vectors for corruption (empty arrays)
+
+### Production Blockers
+
+`validate_for_production()` uses deep validation plus additional gates:
+- Source MUST have embeddings (users need offline search)
+- Schema v3 format required (compatibility)
+- License MUST be specified (legal requirement for distribution)
+
+### Workflow
+
+```
+Local Admin                          Global Admin
+-----------                          ------------
+1. Create source
+2. Light validation (fast feedback)
+3. Fix issues iteratively
+4. Submit for review
+                                     5. Deep validation (full integrity)
+                                     6. Review warnings/issues
+                                     7. If passes -> publish to R2/Pinecone
+```
+
+### API Usage
+
+```python
+# Light validation (default - fast)
+POST /useradmin/api/validate-source
+{ "source_id": "my_source" }
+
+# Deep validation (full integrity)
+POST /useradmin/api/validate-source
+{ "source_id": "my_source", "deep": true }
+```
+
+---
+
 ## AI Service Architecture
 
 The AI service (`admin/ai_service.py`) provides a unified interface for search and response generation across all connection modes.
@@ -1205,25 +1322,101 @@ Most legacy fallback code has been removed. The following locations still contai
 
 ## Offline Architecture (Dual Embedding System)
 
-The system uses a dual embedding architecture to support both online and offline semantic search. See:
-- [docs/offline-upgrade.md](docs/offline-upgrade.md) - Portable model packs, embedding architecture, user tiers
+The system uses a dual embedding architecture to support both online and offline semantic search.
+
+Related docs:
 - [docs/language-packs.md](docs/language-packs.md) - Offline translation for non-English users
 
-### Quick Reference
+### Dual Embedding Standard
 
 | Context | Dimension | Model | Purpose |
 |---------|-----------|-------|---------|
 | Online (Pinecone) | 1536 | OpenAI text-embedding-3-small | Cloud search |
 | Offline (ChromaDB) | 768 | all-mpnet-base-v2 | Local search |
 
+**Why two dimensions?** To do semantic search, the query must be embedded in the SAME dimension as stored vectors. Offline mode has no API access to generate 1536-dim query embeddings, so we use a local 768-dim model instead.
+
 ### User Tiers
 
-| Tier | Role | Capabilities |
-|------|------|--------------|
-| Consumer | End user (RPi5) | Download packs, search, browse |
-| Local Admin | Content creator | Create sources, submit to global |
-| Global Admin | Curator | Review, re-embed, publish |
-| Super Powered | Heavy processing | Parallel API, mass indexing |
+| Tier | Hardware | Role | Primary Actions |
+|------|----------|------|-----------------|
+| **Consumer** | RPi5 / Field device | End user | Download packs, search, browse |
+| **Local Admin** | Laptop 8-16GB | Content creator | Create sources, submit to global |
+| **Global Admin** | Desktop + API | Curator | Review, re-embed, publish |
+| **Super Powered** | Cloud/GPU farm | Heavy processing | Parallel API, mass indexing |
+
+### Tier Capabilities
+
+| Capability | Consumer | Local Admin | Global Admin |
+|------------|----------|-------------|--------------|
+| Download packs | Yes | Yes | N/A |
+| Search (semantic) | Yes (768) | Yes (768) | Yes (both) |
+| Create sources | No | Yes | Yes |
+| Embed documents | No | Yes (any dim) | Yes (768+1536) |
+| Submit to global | No | Yes | N/A |
+| Pinecone write | No | No | Yes |
+| R2 backups write | No | No | Yes |
+
+### Two-Pack Model System
+
+Users download two separate model packs for full offline capability:
+
+**Pack 1: Embedding Model (Essential)**
+- Model: all-mpnet-base-v2
+- Size: ~420MB
+- Dimensions: 768
+- Purpose: Enable semantic search offline
+
+**Pack 2: LLM Model (Enhancement)**
+- Model: Llama 3.2 3B Q4 (recommended)
+- Size: ~2GB
+- Purpose: Generate AI responses from search results
+
+| Installed | Search Type | Response Type | Experience |
+|-----------|-------------|---------------|------------|
+| Neither | Keyword | Raw results | Basic |
+| Embedding only | **Semantic** | Raw results | Good |
+| LLM only | Keyword | AI response | Mixed |
+| **Both** | **Semantic** | **AI response** | **Full offline** |
+
+### LLM Model Options
+
+| Tier | Model | Size | RAM | Speed | Use Case |
+|------|-------|------|-----|-------|----------|
+| Lite | TinyLlama 1.1B Q4 | 700MB | 2GB | 15-30 tok/s | Very constrained |
+| **Standard** | **Llama 3.2 3B Q4** | **2GB** | **4GB** | **8-15 tok/s** | **Recommended** |
+| Full | Mistral 7B Q4 | 4GB | 8GB | 5-10 tok/s | Desktop |
+
+### Prompt Format Detection
+
+The llama.cpp runtime (`offline_tools/llama_runtime.py`) auto-detects model format based on filename:
+
+| Model Type | Format | Stop Tokens |
+|------------|--------|-------------|
+| Llama 3.x | `llama3` | `<\|eot_id\|>`, `<\|end_of_text\|>` |
+| Mistral | `mistral` | `</s>`, `[INST]` |
+| TinyLlama | `chatml` | `</s>`, `<\|im_end\|>` |
+| Other | `llama2` | `</s>`, `[INST]`, `[/INST]` |
+
+### Models Folder Structure
+
+```
+BACKUP_PATH/
+|-- models/
+|   |-- _models.json          # Model registry
+|   |-- embeddings/
+|   |   |-- all-mpnet-base-v2/
+|   |       |-- _manifest.json
+|   |       |-- pytorch_model.bin
+|   |       |-- config.json
+|   |       |-- tokenizer.json
+|   |-- llm/
+|       |-- llama-3.2-3b-q4/
+|           |-- _manifest.json
+|           |-- Llama-3.2-3B-Instruct-Q4_K_M.gguf
+|-- chroma_db_768/            # Offline vectors
+|-- chroma_db_1536/           # Online vectors (if hybrid)
+```
 
 ### File Structure (Dual Vectors)
 
@@ -1238,6 +1431,76 @@ The system uses a dual embedding architecture to support both online and offline
 
 Global Admin creates BOTH. Users download 768 only.
 
+### RPi5 Consumer Experience
+
+**Memory Budget (8GB RPi5):**
+```
+OS + ChromaDB:        ~1.5GB
+Embedding model:      ~0.5GB
+LLM (3B quantized):   ~2.0GB
+Buffer:               ~1.0GB
+---------------------------------
+Total:                ~5GB of 8GB
+```
+
+**Typical Response Time:**
+```
+Query embedding:      200-500ms
+ChromaDB search:      50-100ms
+Retrieve docs:        50ms
+LLM generation:       ~15 seconds (150 tokens @ 10 tok/s)
+---------------------------------
+Total:                ~15-20 seconds
+First query:          +15-30 sec for model loading
+```
+
+### Key Architecture Decisions
+
+| Decision | Choice | Rationale |
+|----------|--------|-----------|
+| Offline dimension | 768 | Works on RPi5, good quality |
+| Online dimension | 1536 | OpenAI standard, best quality |
+| Who creates both | Global Admin | Centralized quality control |
+| What users download | 768 only | Smaller, works offline |
+| Consumer LLM | Llama 3.2 3B Q4 | Best quality/speed for RPi5 |
+| LLM Runtime | llama.cpp | Portable, no service to manage |
+
+---
+
+## Knowledge Map Visualization
+
+Interactive 3D visualization of the document network for admin users.
+
+**Purpose:**
+- Find gaps in coverage (sparse areas = missing topics)
+- Spot duplicate/redundant content (dense clusters)
+- Explore document relationships
+
+**Access:** `/useradmin/visualise` (admin-only)
+
+**Technical Implementation:**
+- Uses PCA to reduce embedding vectors to 3D coordinates
+- Plotly.js for interactive 3D scatter plot
+- Edge building from internal links in `_metadata.json`
+- Per-source lazy loading for performance (URLs and edges loaded on demand)
+
+**File Structure:**
+```
+BACKUP_PATH/visualisation/
+|-- _visualisation.json              # Core data (points, coordinates)
+|-- _visualisation_urls_{source}.json   # URLs per source (lazy loaded)
+|-- _visualisation_edges_{source}.json  # Link edges per source (lazy loaded)
+```
+
+**Key Files:**
+- `admin/routes/visualise.py` - Backend API and generation
+- `admin/templates/visualise.html` - Plotly 3D frontend
+
+**Future Enhancements (not implemented):**
+- UMAP algorithm option (better cluster preservation)
+- Density scoring for duplicate detection
+- Graph layout algorithms (igraph)
+
 ---
 
 ## Other Documentation
@@ -1248,7 +1511,6 @@ Global Admin creates BOTH. Users download 768 only.
 | [CONTEXT.md](CONTEXT.md) | Architecture and design decisions (AI onboarding) |
 | [SUMMARY.md](SUMMARY.md) | Executive summary (non-technical) |
 | [ROADMAP.md](ROADMAP.md) | Future plans, testing, and feature development |
-| [docs/offline-upgrade.md](docs/offline-upgrade.md) | Portable model packs, embedding architecture, user tiers |
 | [docs/language-packs.md](docs/language-packs.md) | Offline translation for non-English users |
 
 ---
@@ -2002,4 +2264,4 @@ Articles with less than 100 characters of extracted text are filtered out during
 
 ---
 
-*Last Updated: December 11, 2025*
+*Last Updated: December 12, 2025 (validation system documented)*

@@ -117,19 +117,38 @@ def _build_url_index(source_id: str, zim) -> None:
                 continue
 
             url = getattr(article, 'url', '')
+            namespace = getattr(article, 'namespace', '')
+
             if url:
                 # Store multiple variations for flexible lookup
                 url_index[url] = i
-                # Also store without namespace prefix (A/, I/, etc.)
+
+                # Store with explicit namespace prefix for assets
+                if namespace and namespace not in ('A', ''):
+                    prefixed_url = f"{namespace}/{url}"
+                    if prefixed_url not in url_index:
+                        url_index[prefixed_url] = i
+
+                # Also store without namespace prefix (A/, I/, -, etc.)
                 if '/' in url:
-                    stripped = url.split('/', 1)[1]
-                    if stripped not in url_index:
-                        url_index[stripped] = i
+                    parts = url.split('/', 1)
+                    # If first part looks like a namespace (single char or -)
+                    if len(parts[0]) <= 1 or parts[0] == '-':
+                        stripped = parts[1]
+                        if stripped not in url_index:
+                            url_index[stripped] = i
         except Exception:
             continue
 
     _url_index_cache[source_id] = url_index
     print(f"URL index built for {source_id}: {len(url_index)} entries")
+
+    # Log some sample asset URLs for debugging
+    asset_urls = [u for u in url_index.keys() if u.startswith('-/') or '.css' in u or '.js' in u]
+    if asset_urls:
+        print(f"[ZIM] Sample asset URLs in {source_id}: {asset_urls[:5]}")
+    else:
+        print(f"[ZIM] Warning: No asset URLs found in {source_id} - CSS/JS may not be available")
 
 
 def _get_article_by_url(source_id: str, zim, url_path: str) -> Optional[Tuple[bytes, str]]:
@@ -153,10 +172,20 @@ def _get_article_by_url(source_id: str, zim, url_path: str) -> Optional[Tuple[by
         url_path,
         f"A/{url_path}",  # Article namespace
         f"I/{url_path}",  # Image namespace
-        f"-/{url_path}",  # Special namespace
+        f"-/{url_path}",  # Special namespace (assets/css/js)
+        f"M/{url_path}",  # Metadata namespace
         url_path.replace('_', ' '),
         url_path.replace(' ', '_'),
     ]
+
+    # If path starts with -/, it's already a namespace path - also try without the prefix
+    # ZIM files store these as namespace "-" with url "mw/style.css"
+    if url_path.startswith('-/'):
+        inner_path = url_path[2:]  # Remove -/ prefix
+        variations.extend([
+            inner_path,
+            f"-/{inner_path}",  # Explicitly with namespace
+        ])
 
     article_idx = None
     for var in variations:
@@ -173,6 +202,14 @@ def _get_article_by_url(source_id: str, zim, url_path: str) -> Optional[Tuple[by
                 break
 
     if article_idx is None:
+        # Debug: log failed lookups for assets (to help diagnose)
+        if url_path.startswith('-/') or url_path.endswith('.css') or url_path.endswith('.js'):
+            # Only log first few failures to avoid spam
+            if not hasattr(_get_article_by_url, '_logged_failures'):
+                _get_article_by_url._logged_failures = set()
+            if url_path not in _get_article_by_url._logged_failures and len(_get_article_by_url._logged_failures) < 10:
+                _get_article_by_url._logged_failures.add(url_path)
+                print(f"[ZIM] Asset not found: {url_path} (tried {len(variations)} variations)")
         return None
 
     try:
@@ -220,6 +257,8 @@ def _rewrite_internal_links(html_content: str, source_id: str) -> str:
     - href="../Page" -> href="/zim/{source_id}/Page"
     - src="/images/foo.png" -> src="/zim/{source_id}/images/foo.png"
     - href="https://deadsite.com/page" -> href="/zim/{source_id}/page" (if base_url matches)
+
+    Also marks remaining external links with class="external-link" for styling.
     """
     # First, handle absolute URLs to the original site (for dead sites)
     # This allows seamless browsing even if the original site is gone
@@ -282,16 +321,131 @@ def _rewrite_internal_links(html_content: str, source_id: str) -> str:
         html_content
     )
 
+    # Mark remaining external links (http:// or https://) with a class for styling
+    # These are links that weren't matched by base_url rewrites
+    # Add class="external-link" and data-external="true" for JS detection
+    html_content = re.sub(
+        r'<a\s+([^>]*?)href="(https?://[^"]+)"([^>]*)>',
+        r'<a \1href="\2" class="external-link" data-external="true"\3>',
+        html_content,
+        flags=re.IGNORECASE
+    )
+
     return html_content
 
 
-def _inject_offline_banner(html_content: str, source_id: str, title: str = "") -> str:
+def _inject_offline_banner(html_content: str, source_id: str, title: str = "", translation_lang: str = None) -> str:
     """
     Inject a minimal floating button for navigation back to search.
+    Also injects CSS/JS for external link handling (strikethrough when offline).
     Designed to be unobtrusive - user won't notice unless they need it.
+
+    Args:
+        html_content: HTML to modify
+        source_id: Source identifier
+        title: Optional title (unused currently)
+        translation_lang: Language code if content was translated, None otherwise
     """
+    # CSS for external links - strikethrough by default (offline mode)
+    # JS will remove strikethrough if online connectivity detected
+    external_link_css = '''
+<style id="clippy-external-link-styles">
+/* External links: strikethrough when offline, normal when online */
+a.external-link {
+    text-decoration: line-through;
+    color: #888;
+    cursor: not-allowed;
+    pointer-events: none;
+}
+a.external-link::after {
+    content: " (offline)";
+    font-size: 0.8em;
+    color: #666;
+}
+/* When online, restore normal link behavior */
+body.clippy-online a.external-link {
+    text-decoration: underline;
+    color: inherit;
+    cursor: pointer;
+    pointer-events: auto;
+}
+body.clippy-online a.external-link::after {
+    content: "";
+}
+</style>
+'''
+
+    # JavaScript to check online status based on the app's connection mode
+    # Not just internet connectivity - respects the app's offline_mode setting
+    online_check_js = '''
+<script id="clippy-online-check">
+(function() {
+    // Check the app's connection status (respects offline_mode setting)
+    function checkOnlineStatus() {
+        fetch('/api/v1/connection-status', {
+            method: 'GET',
+            cache: 'no-store'
+        })
+        .then(function(response) { return response.json(); })
+        .then(function(data) {
+            // Only enable external links if app is in online mode AND actually connected
+            if (data.state === 'online' || data.state === 'degraded') {
+                document.body.classList.add('clippy-online');
+            } else {
+                document.body.classList.remove('clippy-online');
+            }
+        })
+        .catch(function() {
+            // If we can't reach the local server, assume offline
+            document.body.classList.remove('clippy-online');
+        });
+    }
+
+    // Check on page load
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', checkOnlineStatus);
+    } else {
+        checkOnlineStatus();
+    }
+
+    // Re-check periodically (every 30 seconds)
+    setInterval(checkOnlineStatus, 30000);
+})();
+</script>
+'''
+
+    # Translation indicator (shows when content was translated)
+    translation_indicator = ""
+    if translation_lang and translation_lang != "en":
+        # Get language display name
+        lang_names = {
+            "es": "Spanish", "fr": "French", "ar": "Arabic", "zh": "Chinese",
+            "pt": "Portuguese", "hi": "Hindi", "sw": "Swahili", "ht": "Haitian Creole"
+        }
+        lang_display = lang_names.get(translation_lang, translation_lang.upper())
+        translation_indicator = f'''
+<div id="clippy-translation-badge" style="
+    position: fixed;
+    bottom: 70px;
+    right: 20px;
+    background: rgba(78, 204, 163, 0.9);
+    color: #1a1a2e;
+    padding: 6px 12px;
+    border-radius: 16px;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-size: 11px;
+    z-index: 10000;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+">
+    Translated to {lang_display}
+</div>
+'''
+
     # Minimal floating button in bottom-right corner
     banner_html = f'''
+{external_link_css}
+{online_check_js}
+{translation_indicator}
 <div id="clippy-nav-btn" style="
     position: fixed;
     bottom: 20px;
@@ -329,6 +483,68 @@ def _inject_offline_banner(html_content: str, source_id: str, title: str = "") -
     return html_content
 
 
+def _translate_if_enabled(html_content: str, source_id: str, path: str) -> Tuple[str, Optional[str]]:
+    """
+    Translate HTML content if translation is enabled and a language pack is active.
+
+    Phase 1: Translates article content from English to user's selected language.
+    Uses TranslationService with caching for performance.
+
+    Args:
+        html_content: The HTML string to translate
+        source_id: Source identifier (e.g., "appropedia")
+        path: Article path within the source
+
+    Returns:
+        Tuple of (translated_html, language_code) where language_code is None if not translated
+    """
+    try:
+        config = get_local_config()
+
+        # Check if translation is enabled
+        translation_enabled = config.is_translation_enabled()
+        active_lang = config.get_translation_language()
+
+        # Debug logging (only on first request or when settings change)
+        if not hasattr(_translate_if_enabled, '_last_log') or \
+           _translate_if_enabled._last_log != (translation_enabled, active_lang):
+            _translate_if_enabled._last_log = (translation_enabled, active_lang)
+            print(f"[Translation] Status: enabled={translation_enabled}, language={active_lang}")
+
+        if not translation_enabled:
+            return (html_content, None)
+
+        if not active_lang or active_lang == "en":
+            return (html_content, None)
+
+        # Check if language pack is installed
+        from offline_tools.language_registry import get_language_registry
+        registry = get_language_registry()
+        if not registry.is_pack_installed(active_lang):
+            print(f"[Translation] Language pack not installed: {active_lang}")
+            print(f"[Translation] Download the {active_lang} pack from Languages tab to enable auto-translation")
+            return (html_content, None)
+
+        # Create article ID for caching
+        article_id = f"{source_id}/{path}"
+
+        # Translate using singleton TranslationService (avoids reloading model)
+        from offline_tools.translation import get_translation_service
+        service = get_translation_service(active_lang)
+
+        if not service.is_available():
+            print(f"[Translation] Service not available for: {active_lang}")
+            return (html_content, None)
+
+        print(f"[Translation] Translating article to {active_lang}: {article_id}")
+        translated = service.translate_html(html_content, article_id)
+        return (translated, active_lang)
+
+    except Exception as e:
+        print(f"[Translation] Error translating content: {e}")
+        return (html_content, None)
+
+
 @router.get("/{source_id}/{path:path}")
 async def serve_zim_content(source_id: str, path: str):
     """
@@ -336,6 +552,11 @@ async def serve_zim_content(source_id: str, path: str):
 
     Example: /zim/bitcoin/wiki/Bitcoin -> serves the Bitcoin wiki page from bitcoin.zim
     """
+    # Handle trailing slash: /zim/bitcoin/ becomes path="" - redirect to index
+    if not path or path.strip() == "":
+        from fastapi.responses import RedirectResponse
+        return RedirectResponse(url=f"/zim/{source_id}", status_code=307)
+
     zim = _get_zim_file(source_id)
     if zim is None:
         raise HTTPException(
@@ -347,19 +568,60 @@ async def serve_zim_content(source_id: str, path: str):
     result = _get_article_by_url(source_id, zim, path)
 
     if result is None:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Article not found in ZIM: {path}"
-        )
+        # Return a friendly HTML error page instead of JSON error
+        error_html = f'''<!DOCTYPE html>
+<html>
+<head>
+    <title>Article Not Found</title>
+    <style>
+        body {{
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 600px;
+            margin: 100px auto;
+            padding: 20px;
+            background: #1a1a2e;
+            color: #e0e0e0;
+            text-align: center;
+        }}
+        h1 {{ color: #f0ad4e; margin-bottom: 10px; }}
+        .path {{ color: #4fc3f7; font-family: monospace; background: #16213e; padding: 8px 16px; border-radius: 4px; display: inline-block; margin: 10px 0; }}
+        p {{ color: #aaa; line-height: 1.6; }}
+        .back-btn {{
+            display: inline-block;
+            margin-top: 20px;
+            padding: 12px 24px;
+            background: #4fc3f7;
+            color: #1a1a2e;
+            text-decoration: none;
+            border-radius: 6px;
+            font-weight: 500;
+        }}
+        .back-btn:hover {{ background: #81d4fa; }}
+    </style>
+</head>
+<body>
+    <h1>Article Not Found</h1>
+    <div class="path">{path}</div>
+    <p>This article isn't included in the <strong>{source_id}</strong> offline archive.</p>
+    <p>ZIM archives only contain a subset of articles. Links to articles outside the archive won't work offline.</p>
+    <a href="/" class="back-btn">Back to Search</a>
+</body>
+</html>'''
+        return HTMLResponse(content=error_html, status_code=404)
 
     content, mimetype = result
 
-    # For HTML content, rewrite links and add banner
+    # For HTML content, rewrite links, translate if enabled, and add banner
     if 'text/html' in mimetype:
         try:
             html_str = content.decode('utf-8', errors='ignore')
             html_str = _rewrite_internal_links(html_str, source_id)
-            html_str = _inject_offline_banner(html_str, source_id)
+
+            # Phase 1: Translate article content if translation is enabled
+            html_str, translation_lang = _translate_if_enabled(html_str, source_id, path)
+
+            # Inject banner with translation indicator (if translated)
+            html_str = _inject_offline_banner(html_str, source_id, translation_lang=translation_lang)
             return HTMLResponse(content=html_str)
         except Exception as e:
             print(f"Error processing HTML: {e}")
@@ -382,11 +644,23 @@ async def serve_zim_index(source_id: str):
             detail=f"ZIM source not found: {source_id}"
         )
 
-    # Try to find the main page
-    main_page = zim.header_fields.get('mainPage', '')
-    if main_page:
-        from fastapi.responses import RedirectResponse
-        return RedirectResponse(url=f"/zim/{source_id}/{main_page}")
+    # Try to find the main page - mainPage is an article INDEX, not a URL
+    main_page_idx = zim.header_fields.get('mainPage', None)
+    if main_page_idx is not None and main_page_idx != 4294967295:  # 4294967295 = no main page
+        try:
+            # Look up the article by index to get its URL
+            article = zim.get_article_by_id(int(main_page_idx))
+            if article:
+                url = getattr(article, 'url', '')
+                if url:
+                    # Strip namespace prefix if present (A/, I/, etc.)
+                    if '/' in url and len(url.split('/')[0]) <= 2:
+                        url = url.split('/', 1)[1]
+                    print(f"[ZIM] {source_id} mainPage index {main_page_idx} -> URL: {url}")
+                    from fastapi.responses import RedirectResponse
+                    return RedirectResponse(url=f"/zim/{source_id}/{url}")
+        except Exception as e:
+            print(f"[ZIM] Error looking up mainPage article: {e}")
 
     # Otherwise, return a simple index page
     return HTMLResponse(content=f"""
@@ -488,3 +762,7 @@ def cleanup_zim_cache():
             pass
     _zim_cache = {}
     _url_index_cache = {}
+    # Clear logged failures tracker
+    if hasattr(_get_article_by_url, '_logged_failures'):
+        _get_article_by_url._logged_failures = set()
+    print("[ZIM] Cache cleared - indexes will be rebuilt on next access")

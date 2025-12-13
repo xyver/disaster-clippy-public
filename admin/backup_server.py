@@ -92,7 +92,7 @@ def _find_file_in_source(source_path: Path, file_path: str) -> Optional[Path]:
         return direct_path
 
     # Try with .html extension if not found
-    if not file_path.endswith('.html') and not file_path.endswith('.htm'):
+    if not file_path.endswith('.html'):
         html_path = source_path / "pages" / f"{file_path}.html"
         if html_path.exists():
             return html_path
@@ -100,7 +100,7 @@ def _find_file_in_source(source_path: Path, file_path: str) -> Optional[Path]:
     return None
 
 
-def _rewrite_internal_links(html_content: str, source_id: str) -> str:
+def _rewrite_internal_links(html_content: str, source_id: str, page_path: str = None) -> str:
     """
     Rewrite internal links in HTML content to point to our backup server.
 
@@ -108,7 +108,27 @@ def _rewrite_internal_links(html_content: str, source_id: str) -> str:
     - href="/path" -> href="/backup/{source_id}/path"
     - src="/images/foo.png" -> src="/backup/{source_id}/images/foo.png"
     - href="https://originalsite.com/page" -> href="/backup/{source_id}/page" (if base_url matches)
+    - src="image.jpg" -> src="/backup/{source_id}/virtual/path/image.jpg" (simple relative)
+
+    Args:
+        html_content: The HTML content to rewrite
+        source_id: The backup source ID
+        page_path: The flattened page filename (e.g., "Projects_PV_EnphasePV_Main.htm.html")
     """
+    # Determine virtual directory from flattened page path
+    # e.g., "Projects_PV_EnphasePV_Main.htm.html" -> "Projects/PV/EnphasePV"
+    virtual_dir = ""
+    if page_path:
+        # Remove .html suffix (may have .htm.html)
+        base_name = page_path
+        if base_name.endswith('.html'):
+            base_name = base_name[:-5]
+        if base_name.endswith('.htm'):
+            base_name = base_name[:-4]
+        # Split by underscore and take all but last part (filename)
+        parts = base_name.split('_')
+        if len(parts) > 1:
+            virtual_dir = '/'.join(parts[:-1])
     # Handle absolute URLs to the original site
     base_url = _get_source_base_url(source_id)
     if base_url:
@@ -151,12 +171,52 @@ def _rewrite_internal_links(html_content: str, source_id: str) -> str:
         html_content
     )
 
-    # Rewrite parent paths: href="../something"
+    # Rewrite relative paths with ../ sequences: href="../something" or href="../../foo/bar"
+    # Strip all leading ../ sequences and use just the remaining path
+    def rewrite_relative_path(match):
+        attr = match.group(1)  # href or src
+        rel_path = match.group(2)  # The relative path like "../../../Styles/Site.css"
+        # Strip all leading ../ or .. sequences
+        clean_path = re.sub(r'^(\.\./)+', '', rel_path)
+        # Also strip leading ./ if present
+        clean_path = re.sub(r'^\./', '', clean_path)
+        return f'{attr}="/backup/{source_id}/{clean_path}"'
+
+    # Match href/src with relative paths starting with ../ or ./
     html_content = re.sub(
-        r'(href|src)="\.\.(/[^"]*)"',
-        rf'\1="/backup/{source_id}\2"',
+        r'(href|src)="((?:\.\./)+[^"]*)"',
+        rewrite_relative_path,
         html_content
     )
+
+    # Also handle ./ relative paths
+    html_content = re.sub(
+        r'(href|src)="(\./[^"]*)"',
+        rewrite_relative_path,
+        html_content
+    )
+
+    # Handle simple relative paths (no ./ or ../ prefix) like src="image.jpg"
+    # These are relative to the original page's directory
+    if virtual_dir:
+        def rewrite_simple_relative(match):
+            attr = match.group(1)  # href or src
+            filename = match.group(2)  # Just the filename like "PanelL6.jpg"
+            # Skip if it looks like an external URL or already absolute
+            if filename.startswith(('http://', 'https://', '//', '/', '#', 'mailto:', 'tel:')):
+                return match.group(0)
+            # Skip data: URLs
+            if filename.startswith('data:'):
+                return match.group(0)
+            return f'{attr}="/backup/{source_id}/{virtual_dir}/{filename}"'
+
+        # Match simple relative paths - filename with extension, no path separators at start
+        # Excludes paths starting with . / # or protocol
+        html_content = re.sub(
+            r'(href|src)="([^"./:#][^"]*\.[a-zA-Z0-9]+)"',
+            rewrite_simple_relative,
+            html_content
+        )
 
     return html_content
 
@@ -232,7 +292,7 @@ async def serve_backup_content(source_id: str, path: str):
             with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                 html_content = f.read()
 
-            html_content = _rewrite_internal_links(html_content, source_id)
+            html_content = _rewrite_internal_links(html_content, source_id, path)
             html_content = _inject_offline_banner(html_content, source_id)
             return HTMLResponse(content=html_content)
 

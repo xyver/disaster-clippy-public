@@ -21,8 +21,8 @@ from dataclasses import dataclass, asdict
 
 from .schemas import (
     get_manifest_file, get_metadata_file, get_index_file,
-    get_vectors_file, get_backup_manifest_file, validate_source_files,
-    html_filename_to_url
+    get_vectors_file, get_vectors_768_file, get_backup_manifest_file,
+    validate_source_files, html_filename_to_url
 )
 
 
@@ -106,8 +106,12 @@ class ValidationResult:
     has_manifest: bool = False  # _manifest.json
     has_metadata_file: bool = False  # _metadata.json
     has_index_file: bool = False  # _index.json
-    has_vectors_file: bool = False  # _vectors.json
+    has_vectors_file: bool = False  # _vectors.json (1536-dim, legacy field)
     has_backup_manifest: bool = False  # _backup_manifest.json
+
+    # Dual-dimension vector support
+    has_vectors_768: bool = False  # _vectors_768.json (offline/local use)
+    has_vectors_1536: bool = False  # _vectors.json (online/global use)
 
     # Actionable issues with fix hints
     actionable_issues: List[ValidationIssue] = None
@@ -1690,7 +1694,8 @@ class SourceManager:
                      progress_callback: Callable = None,
                      language_filter: str = None,
                      resume: bool = False,
-                     cancel_checker: Callable = None) -> IndexResult:
+                     cancel_checker: Callable = None,
+                     dimension: int = 1536) -> IndexResult:
         """
         Create an index for a source.
 
@@ -1704,10 +1709,15 @@ class SourceManager:
                            Only applies to ZIM files. None = index all languages.
             resume: If True, attempt to resume from checkpoint (ZIM only)
             cancel_checker: Function that returns True if job was cancelled
+            dimension: Embedding dimension (768 for local/offline, 1536 for OpenAI/online)
 
         Returns:
             IndexResult with success status and counts
         """
+        # Store dimension for use in indexing methods
+        self._embedding_dimension = dimension
+        print(f"[SourceManager] Creating {dimension}-dim embeddings for {source_id}")
+
         # Note: normalize_filenames is called in validate_source, which should
         # be called before indexing. We don't duplicate it here.
 
@@ -1728,12 +1738,12 @@ class SourceManager:
         clear_existing = not skip_existing
 
         if source_type == "html":
-            return self._index_html(source_id, limit, skip_existing, progress_callback)
+            return self._index_html(source_id, limit, skip_existing, progress_callback, dimension)
         elif source_type == "zim":
             return self._index_zim(source_id, limit, progress_callback, language_filter,
-                                   clear_existing, resume, cancel_checker)
+                                   clear_existing, resume, cancel_checker, dimension)
         elif source_type == "pdf":
-            return self._index_pdf(source_id, limit, skip_existing, progress_callback)
+            return self._index_pdf(source_id, limit, skip_existing, progress_callback, dimension)
         else:
             return IndexResult(
                 success=False,
@@ -1784,7 +1794,7 @@ class SourceManager:
         return None
 
     def _index_html(self, source_id: str, limit: int, skip_existing: bool,
-                    progress_callback: Callable) -> IndexResult:
+                    progress_callback: Callable, dimension: int = 1536) -> IndexResult:
         """Index an HTML backup"""
         try:
             from offline_tools.indexer import index_html_backup
@@ -1797,7 +1807,8 @@ class SourceManager:
                 limit=limit,
                 progress_callback=progress_callback,
                 skip_existing=skip_existing,
-                backup_folder=str(source_path)
+                backup_folder=str(source_path),
+                dimension=dimension
             )
 
             return IndexResult(
@@ -1822,7 +1833,8 @@ class SourceManager:
                    language_filter: str = None,
                    clear_existing: bool = False,
                    resume: bool = False,
-                   cancel_checker: Callable = None) -> IndexResult:
+                   cancel_checker: Callable = None,
+                   dimension: int = 1536) -> IndexResult:
         """Index a ZIM file with optional checkpoint support"""
         try:
             from offline_tools.indexer import index_zim_file
@@ -1850,7 +1862,8 @@ class SourceManager:
                 language_filter=language_filter,
                 clear_existing=clear_existing,
                 resume=resume,
-                cancel_checker=cancel_checker
+                cancel_checker=cancel_checker,
+                dimension=dimension
             )
 
             return IndexResult(
@@ -1872,7 +1885,7 @@ class SourceManager:
             )
 
     def _index_pdf(self, source_id: str, limit: int, skip_existing: bool,
-                   progress_callback: Callable) -> IndexResult:
+                   progress_callback: Callable, dimension: int = 1536) -> IndexResult:
         """Index a PDF folder"""
         try:
             from offline_tools.indexer import index_pdf_folder
@@ -1885,7 +1898,8 @@ class SourceManager:
                 limit=limit,
                 progress_callback=progress_callback,
                 skip_existing=skip_existing,
-                backup_folder=str(source_path)
+                backup_folder=str(source_path),
+                dimension=dimension
             )
 
             return IndexResult(
@@ -1909,23 +1923,35 @@ class SourceManager:
     # =========================================================================
 
     def validate_source(self, source_id: str,
-                        source_config: Dict[str, Any] = None) -> ValidationResult:
+                        source_config: Dict[str, Any] = None,
+                        deep: bool = False) -> ValidationResult:
         """
         Validate a source is ready for distribution.
 
         Uses validate_source_files() from schemas.py for core file checks,
         then adds additional validation for license, tags, and content.
 
-        Checks:
+        Two validation modes:
+        - Light (deep=False, default): Fast header-based checks for local admin
+        - Deep (deep=True): Full file loading for global admin integrity checks
+
+        Light validation checks:
         - Has backup files (HTML/ZIM/PDF)
         - Has required schema files (manifest, metadata/index, vectors)
-        - Has embeddings with content
+        - Has embeddings with content (from header counts)
         - Has license (tries auto-detection if missing)
         - Has proper tags
+
+        Deep validation adds:
+        - Full document/vector count verification (loads actual dicts)
+        - Document ID cross-reference (metadata IDs vs vector IDs)
+        - Vector integrity sampling (checks vectors aren't empty)
+        - Duplicate detection
 
         Args:
             source_id: Source identifier
             source_config: Optional source config from _manifest.json
+            deep: If True, performs full integrity checks (slower but thorough)
 
         Returns:
             ValidationResult with issues and suggestions
@@ -1967,6 +1993,10 @@ class SourceManager:
         result.has_backup_manifest = schema_validation["has_backup_manifest"]
         result.has_backup = schema_validation["has_backup"]
 
+        # Map dual-dimension vector fields
+        result.has_vectors_768 = schema_validation.get("has_vectors_768", False)
+        result.has_vectors_1536 = schema_validation.get("has_vectors_1536", False)
+
         # Add schema validation issues with actionable hints
         for issue in schema_validation.get("issues", []):
             # Map schema issues to specific steps
@@ -1999,13 +2029,36 @@ class SourceManager:
             result.has_backup = True
 
         # Verify metadata file has content (not just exists)
+        # Light mode: Use header reading to avoid loading full file (can be 100MB+)
+        # Deep mode: Load full file to verify actual content
         metadata_doc_count = 0
+        metadata_doc_ids = set()  # For deep validation cross-reference
         metadata_file = source_path / get_metadata_file()
         if metadata_file.exists():
             try:
-                with open(metadata_file, 'r', encoding='utf-8') as f:
-                    docs_data = json.load(f)
-                metadata_doc_count = len(docs_data.get("documents", {}))
+                if deep:
+                    # Deep validation: load full file to verify integrity
+                    with open(metadata_file, 'r', encoding='utf-8') as f:
+                        metadata_data = json.load(f)
+                    docs = metadata_data.get("documents", {})
+                    metadata_doc_count = len(docs)
+                    metadata_doc_ids = set(docs.keys())
+
+                    # Check for header/actual count mismatch
+                    header_count = metadata_data.get("document_count", 0)
+                    if header_count > 0 and header_count != metadata_doc_count:
+                        result.add_warning(
+                            f"Metadata count mismatch: header says {header_count}, actual is {metadata_doc_count}",
+                            action="step3_metadata",
+                            action_label="Regenerate Metadata",
+                            step=3
+                        )
+                else:
+                    # Light validation: read header only
+                    from offline_tools.packager import read_json_header_only
+                    header = read_json_header_only(metadata_file)
+                    metadata_doc_count = header.get("document_count", 0)
+
                 if metadata_doc_count == 0:
                     result.has_metadata = False
                     result.has_metadata_file = False
@@ -2016,11 +2069,11 @@ class SourceManager:
                         step=3
                     )
                     result.is_valid = False
-            except Exception:
+            except Exception as e:
                 result.has_metadata = False
                 result.has_metadata_file = False
                 result.add_issue(
-                    "Metadata file exists but could not be read",
+                    f"Metadata file exists but could not be read: {str(e)[:50]}",
                     action="step3_metadata",
                     action_label="Generate Metadata",
                     step=3
@@ -2028,16 +2081,54 @@ class SourceManager:
                 result.is_valid = False
 
         # Check vectors file has content
+        # Light mode: Use header reading to avoid loading full file (can be 100MB+)
+        # Deep mode: Load full file for integrity and cross-reference checks
         vectors_doc_count = 0
+        vectors_doc_ids = set()  # For deep validation cross-reference
         vectors_file = source_path / get_vectors_file()
         if vectors_file.exists():
             result.has_embeddings = True
             try:
-                with open(vectors_file, 'r', encoding='utf-8') as f:
-                    embed_data = json.load(f)
-                vectors_doc_count = len(embed_data.get("vectors", {}))
-                if vectors_doc_count == 0:
-                    vectors_doc_count = embed_data.get("document_count", 0)
+                if deep:
+                    # Deep validation: load full file to verify integrity
+                    with open(vectors_file, 'r', encoding='utf-8') as f:
+                        vectors_data = json.load(f)
+                    vectors_dict = vectors_data.get("vectors", {})
+                    vectors_doc_count = len(vectors_dict)
+                    vectors_doc_ids = set(vectors_dict.keys())
+
+                    # Check for header/actual count mismatch
+                    header_count = vectors_data.get("document_count", 0)
+                    if header_count > 0 and header_count != vectors_doc_count:
+                        result.add_warning(
+                            f"Vectors count mismatch: header says {header_count}, actual is {vectors_doc_count}",
+                            action="step5_index",
+                            action_label="Force Re-index",
+                            step=5
+                        )
+
+                    # Sample vectors to check for corruption (empty vectors)
+                    empty_vectors = 0
+                    sample_size = min(100, len(vectors_dict))
+                    for i, (doc_id, vector) in enumerate(vectors_dict.items()):
+                        if i >= sample_size:
+                            break
+                        if not vector or (isinstance(vector, list) and len(vector) == 0):
+                            empty_vectors += 1
+
+                    if empty_vectors > 0:
+                        result.add_warning(
+                            f"Found {empty_vectors} empty vectors in sample of {sample_size}",
+                            action="step5_index",
+                            action_label="Force Re-index",
+                            step=5
+                        )
+                else:
+                    # Light validation: read header only
+                    from offline_tools.packager import read_json_header_only
+                    header = read_json_header_only(vectors_file)
+                    vectors_doc_count = header.get("document_count", 0)
+
                 if vectors_doc_count == 0:
                     result.has_embeddings = False
                     result.has_vectors_file = False
@@ -2048,11 +2139,11 @@ class SourceManager:
                         step=5
                     )
                     result.is_valid = False
-            except Exception:
+            except Exception as e:
                 result.has_embeddings = False
                 result.has_vectors_file = False
                 result.add_issue(
-                    "Vectors file exists but could not be read",
+                    f"Vectors file exists but could not be read: {str(e)[:50]}",
                     action="step5_index",
                     action_label="Create Index",
                     step=5
@@ -2060,6 +2151,32 @@ class SourceManager:
                 result.is_valid = False
         else:
             result.has_embeddings = False
+
+        # Deep validation: Cross-reference document IDs
+        if deep and metadata_doc_ids and vectors_doc_ids:
+            # Check for documents in metadata but not in vectors
+            missing_vectors = metadata_doc_ids - vectors_doc_ids
+            if missing_vectors:
+                missing_pct = (len(missing_vectors) / len(metadata_doc_ids)) * 100
+                if missing_pct > 10:  # More than 10% missing is a warning
+                    result.add_warning(
+                        f"{len(missing_vectors):,} documents in metadata missing from vectors ({missing_pct:.1f}%)",
+                        action="step5_index",
+                        action_label="Force Re-index",
+                        step=5
+                    )
+
+            # Check for orphaned vectors (in vectors but not in metadata)
+            orphaned_vectors = vectors_doc_ids - metadata_doc_ids
+            if orphaned_vectors:
+                orphan_pct = (len(orphaned_vectors) / len(vectors_doc_ids)) * 100
+                if orphan_pct > 5:  # More than 5% orphaned is suspicious
+                    result.add_warning(
+                        f"{len(orphaned_vectors):,} vectors not found in metadata ({orphan_pct:.1f}%) - possible stale data",
+                        action="step5_index",
+                        action_label="Force Re-index",
+                        step=5
+                    )
 
         # Check for metadata/index count mismatch
         if metadata_doc_count > 0 and vectors_doc_count > 0:
@@ -2158,7 +2275,8 @@ class SourceManager:
         result.schema_version = 3
 
         # Determine if production ready (all critical checks pass)
-        # Using schema validation: manifest + (metadata or index) + vectors
+        # Light validation: manifest + (metadata or index) + any vectors + license
+        # Full production validation (validate_for_production) adds dual-dimension requirement
         result.production_ready = (
             result.has_backup and
             result.has_manifest and
@@ -2166,6 +2284,9 @@ class SourceManager:
             result.has_vectors_file and
             result.has_license
         )
+
+        # Note: For full production publishing, validate_for_production() adds
+        # the requirement for BOTH has_vectors_768 AND has_vectors_1536
 
         return result
 
@@ -2175,6 +2296,9 @@ class SourceManager:
         """
         Strict validation for production upload (R2 backups/ or Pinecone).
 
+        Uses DEEP validation to perform full integrity checks before allowing
+        a source to be published to the global repository.
+
         This is the gate that prevents incomplete packages from being
         uploaded to the global repository. A source must pass ALL checks:
 
@@ -2183,6 +2307,12 @@ class SourceManager:
         - Has metadata file
         - Has embeddings file with content
         - Has license specified (not "Unknown")
+
+        DEEP VALIDATION (global admin checks):
+        - Full document/vector count verification (loads actual dicts)
+        - Document ID cross-reference (metadata IDs vs vector IDs)
+        - Vector integrity sampling (checks vectors aren't empty)
+        - Header vs actual count consistency
 
         SCHEMA v3 FILES:
         - _manifest.json (source-level metadata)
@@ -2201,12 +2331,35 @@ class SourceManager:
         Returns:
             ValidationResult with production_ready flag
         """
-        result = self.validate_source(source_id, source_config)
+        # Use deep validation for production - full file loading and integrity checks
+        result = self.validate_source(source_id, source_config, deep=True)
 
         # Add stricter checks for production
         if not result.has_embeddings:
             # Promote from warning to issue for production
             result.issues.append("PRODUCTION BLOCKER: No embeddings file - users cannot search offline")
+            result.is_valid = False
+            result.production_ready = False
+
+        # GLOBAL ADMIN REQUIREMENT: Must have BOTH 768-dim AND 1536-dim vectors for publishing
+        # This ensures offline users get 768-dim vectors and online users get 1536-dim vectors
+        if not result.has_vectors_1536:
+            result.add_issue(
+                f"PRODUCTION BLOCKER: Missing 1536-dim vectors ({get_vectors_file()}) - required for online users",
+                action="step3_index",
+                action_label="Create 1536-dim Index",
+                step=3
+            )
+            result.is_valid = False
+            result.production_ready = False
+
+        if not result.has_vectors_768:
+            result.add_issue(
+                f"PRODUCTION BLOCKER: Missing 768-dim vectors ({get_vectors_768_file()}) - required for offline users",
+                action="step3_generate_768",
+                action_label="Generate 768-dim Vectors",
+                step=3
+            )
             result.is_valid = False
             result.production_ready = False
 
@@ -3157,6 +3310,14 @@ def update_cloud_master_metadata(source_id: str, source_info: Dict[str, Any]) ->
         success = r2.upload_file(tmp_path, MASTER_METADATA_KEY)
         if success:
             print(f"[update_master] Updated master metadata with {source_id}")
+            # Invalidate PineconeStore cache so new data is picked up
+            try:
+                from offline_tools.vectordb import get_vector_store
+                store = get_vector_store()
+                if hasattr(store, 'invalidate_sources_cache'):
+                    store.invalidate_sources_cache()
+            except Exception:
+                pass  # Cache will expire naturally
         return success
 
     except Exception as e:

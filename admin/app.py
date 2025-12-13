@@ -111,6 +111,7 @@ from .routes.source_tools import router as source_tools_router
 from .routes.packs import router as packs_router
 from .routes.jobs import router as jobs_router
 from .routes.visualise import router as visualise_router
+from .routes.models import router as models_router
 
 # Create router with public mode check - blocks all routes when VECTOR_DB_MODE=pinecone
 router = APIRouter(
@@ -123,6 +124,7 @@ router.include_router(source_tools_router)
 router.include_router(packs_router)
 router.include_router(jobs_router)
 router.include_router(visualise_router)
+router.include_router(models_router)
 
 
 # =============================================================================
@@ -359,6 +361,7 @@ class SettingsUpdate(BaseModel):
     cache_responses: Optional[bool] = None
     prompts: Optional[Dict[str, str]] = None  # {"online": "...", "offline": "..."}
     personal_cloud: Optional[Dict[str, Any]] = None  # Personal cloud storage config
+    models: Optional[Dict[str, Any]] = None  # {"embedding_model": "all-mpnet-base-v2", ...}
 
 
 # Routes
@@ -412,11 +415,18 @@ async def update_settings(updates: SettingsUpdate):
 
     if updates.prompts is not None:
         for mode, prompt in updates.prompts.items():
-            if mode in ["online", "offline"]:
+            if mode in ["online", "offline", "system"]:
                 config.set_prompt(mode, prompt)
 
     if updates.personal_cloud is not None:
         config.set_personal_cloud_config(**updates.personal_cloud)
+
+    if updates.models is not None:
+        # Handle model settings (embedding_model, llm_model, etc.)
+        if "embedding_model" in updates.models:
+            config.set_embedding_model(updates.models["embedding_model"])
+        if "llm_model" in updates.models:
+            config.set("models.llm_model", updates.models["llm_model"])
 
     if config.save():
         return {"status": "success", "settings": config.config}
@@ -670,38 +680,37 @@ async def get_status():
     pdf_count = len(scan_backup_folder(paths.get("pdf_folder", ""), "pdf"))
 
     # Count local sources and documents for dashboard
+    # Use _master.json header for fast stats (avoids loading large files)
     local_sources = 0
     total_documents = 0
     storage_bytes = 0
 
     if backup_folder:
         backup_path = Path(backup_folder)
-        if backup_path.exists():
+        master_file = backup_path / "_master.json"
+
+        # Fast path: read header from _master.json
+        if master_file.exists():
+            from offline_tools.packager import read_json_header_only
+            header = read_json_header_only(master_file)
+            local_sources = header.get("source_count", 0)
+            total_documents = header.get("total_documents", 0)
+            storage_bytes = header.get("total_size_bytes", 0)
+
+        # Fallback: scan folders if _master.json not available or empty
+        if local_sources == 0 and backup_path.exists():
+            from offline_tools.packager import read_json_header_only
             for source_folder in backup_path.iterdir():
-                if source_folder.is_dir():
-                    source_id = source_folder.name
-                    # Check for manifest file
+                if source_folder.is_dir() and not source_folder.name.startswith("_"):
                     manifest_file = source_folder / get_manifest_file()
                     if manifest_file.exists():
                         local_sources += 1
-
-                        # Count documents from metadata
+                        # Fast header reading for metadata
                         metadata_file = source_folder / get_metadata_file()
                         if metadata_file.exists():
-                            try:
-                                with open(metadata_file, 'r', encoding='utf-8') as f:
-                                    meta = json.load(f)
-                                    total_documents += meta.get("document_count", meta.get("total_documents", 0))
-                            except:
-                                pass
-
-                        # Calculate folder size
-                        try:
-                            for f in source_folder.rglob("*"):
-                                if f.is_file():
-                                    storage_bytes += f.stat().st_size
-                        except:
-                            pass
+                            header = read_json_header_only(metadata_file)
+                            total_documents += header.get("document_count", 0)
+                            storage_bytes += header.get("total_chars", 0)
 
     storage_mb = round(storage_bytes / (1024 * 1024), 1) if storage_bytes > 0 else 0
 
@@ -732,7 +741,8 @@ async def get_chromadb_status():
     """Get local ChromaDB stats for dashboard"""
     try:
         from offline_tools.vectordb import get_vector_store
-        store = get_vector_store(mode="local")
+        # Use read_only=True to skip embedding model initialization
+        store = get_vector_store(mode="local", read_only=True)
         stats = store.get_stats()
 
         return {

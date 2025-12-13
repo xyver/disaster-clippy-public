@@ -129,6 +129,70 @@
         .btn-update:hover { background: #1a4a7a; }
         .btn-replace { background: #5c2030; border: 1px solid #e94560; }
         .btn-replace:hover { background: #7a2a40; }
+
+        /* Model cards styles */
+        .model-card {
+            background: #1a1a2e;
+            border: 1px solid #0f3460;
+            border-radius: 8px;
+            padding: 1rem;
+        }
+        .model-card.installed { border-color: #4ecca3; }
+        .model-card.active { border-color: #e94560; box-shadow: 0 0 10px rgba(233, 69, 96, 0.2); }
+        .model-card h3 { color: #4ecca3; font-size: 1rem; margin-bottom: 0.5rem; }
+        .model-card .model-meta { font-size: 0.8rem; color: #888; margin-bottom: 0.5rem; }
+        .model-card .model-meta span { display: inline-block; margin-right: 1rem; }
+        .model-card .model-desc { font-size: 0.85rem; color: #aaa; margin-bottom: 0.75rem; }
+        .model-card .model-badges {
+            display: flex;
+            gap: 0.25rem;
+            margin-bottom: 0.75rem;
+            flex-wrap: wrap;
+        }
+        .model-badge {
+            font-size: 0.65rem;
+            padding: 0.2rem 0.4rem;
+            border-radius: 3px;
+            text-transform: uppercase;
+            font-weight: 500;
+        }
+        .model-badge.installed { background: #4ecca320; color: #4ecca3; }
+        .model-badge.active { background: #e9456020; color: #e94560; }
+        .model-badge.recommended { background: #f9a82520; color: #f9a825; }
+        .model-section-title {
+            color: #4ecca3;
+            margin: 1.5rem 0 0.75rem 0;
+            font-size: 1rem;
+            border-bottom: 1px solid #0f3460;
+            padding-bottom: 0.5rem;
+        }
+        .system-info-box {
+            background: #0f3460;
+            border-radius: 8px;
+            padding: 1rem;
+            margin-bottom: 1.5rem;
+            font-size: 0.85rem;
+        }
+        .system-info-box .info-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 0.5rem;
+        }
+        .system-info-box .info-label { color: #888; }
+        .system-info-box .info-value { color: #4ecca3; }
+        .progress-bar {
+            height: 4px;
+            background: #0f3460;
+            border-radius: 2px;
+            margin-top: 0.5rem;
+            overflow: hidden;
+        }
+        .progress-bar .progress-fill {
+            height: 100%;
+            background: #4ecca3;
+            border-radius: 2px;
+            transition: width 0.3s ease;
+        }
     </style>
 </head>
 <body>
@@ -172,12 +236,12 @@
 
                 <h3 style="color: #4ecca3; margin: 1.5rem 0 0.5rem 0; font-size: 0.95rem;">Languages</h3>
                 <div id="languagesSection" class="source-grid">
-                    <div class="placeholder">Language packs coming soon</div>
+                    <div class="loading">Loading languages...</div>
                 </div>
 
                 <h3 style="color: #4ecca3; margin: 1.5rem 0 0.5rem 0; font-size: 0.95rem;">LLM Models</h3>
                 <div id="modelsSection" class="source-grid">
-                    <div class="placeholder">LLM model management coming soon</div>
+                    <div class="loading">Loading models...</div>
                 </div>
             </div>
 
@@ -188,14 +252,73 @@
                 </div>
             </div>
 
-            <!-- Languages tab placeholder -->
+            <!-- Languages tab content -->
             <div id="languagesTabContent" style="display: none;">
-                <div class="placeholder">Language packs coming soon. Configure language filters for ZIM indexing and download language-specific content packs.</div>
+                <div id="languageSystemInfo" class="system-info-box">
+                    <div class="info-row">
+                        <span class="info-label">Active Language:</span>
+                        <span class="info-value" id="activeLanguage">English (default)</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">Translation Enabled:</span>
+                        <span class="info-value" id="translationEnabled">No</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">Cache Size:</span>
+                        <span class="info-value" id="cacheSize">0 MB</span>
+                    </div>
+                </div>
+
+                <h3 class="model-section-title">Available Language Packs</h3>
+                <p style="color: #888; font-size: 0.85rem; margin-bottom: 1rem;">
+                    Download language packs to translate article content offline. Chat remains in English (Phase 1).
+                </p>
+                <div id="languagePacksList" class="source-grid">
+                    <div class="loading">Loading language packs...</div>
+                </div>
+
+                <h3 class="model-section-title" style="margin-top: 2rem;">Translation Cache</h3>
+                <div id="cacheStatsBox" class="system-info-box">
+                    <div class="info-row">
+                        <span class="info-label">Cached Articles:</span>
+                        <span class="info-value" id="cachedArticleCount">0</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">Cache Languages:</span>
+                        <span class="info-value" id="cachedLanguages">None</span>
+                    </div>
+                    <div style="margin-top: 0.75rem;">
+                        <button class="btn-small btn-edit" onclick="clearTranslationCache()">Clear Cache</button>
+                    </div>
+                </div>
             </div>
 
-            <!-- Models tab placeholder -->
+            <!-- Models tab content -->
             <div id="modelsTabContent" style="display: none;">
-                <div class="placeholder">LLM model management coming soon. Download and manage local LLM models for offline AI capabilities.</div>
+                <div id="modelsSystemInfo" class="system-info-box">
+                    <div class="info-row">
+                        <span class="info-label">System RAM:</span>
+                        <span class="info-value" id="systemRam">--</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">Available Storage:</span>
+                        <span class="info-value" id="systemStorage">--</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">Recommended Tier:</span>
+                        <span class="info-value" id="systemTier">--</span>
+                    </div>
+                </div>
+
+                <h3 class="model-section-title">Embedding Models (for Semantic Search)</h3>
+                <div id="embeddingModels" class="source-grid">
+                    <div class="loading">Loading models...</div>
+                </div>
+
+                <h3 class="model-section-title">LLM Models (for AI Conversation)</h3>
+                <div id="llmModels" class="source-grid">
+                    <div class="loading">Loading models...</div>
+                </div>
             </div>
         </div>
     </div>
@@ -329,7 +452,16 @@
                 filtered = allSources.filter(s => s.status === 'installed');
             } else if (currentFilter === 'available') {
                 // Show ALL cloud sources (both installed and not)
-                filtered = allSources.filter(s => s.is_cloud === true);
+                // Sort: not-installed first, already-installed last
+                filtered = allSources
+                    .filter(s => s.is_cloud === true)
+                    .sort((a, b) => {
+                        // 'available' (not installed) comes before 'installed'
+                        if (a.status === 'available' && b.status !== 'available') return -1;
+                        if (a.status !== 'available' && b.status === 'available') return 1;
+                        // Within same status, sort alphabetically by name
+                        return (a.name || a.source_id).localeCompare(b.name || b.source_id);
+                    });
             } else if (currentFilter === 'local') {
                 filtered = allSources.filter(s => s.status === 'local_only');
             }
@@ -371,7 +503,8 @@
                 const hasConfig = source.has_config !== false;
                 const hasBackup = source.has_backup !== false;
                 const hasMetadata = source.has_metadata === true;
-                const hasEmbeddings = source.has_embeddings === true;
+                const has1536 = source.has_vectors_1536 === true;
+                const has768 = source.has_vectors_768 === true;
                 const hasLicense = source.license && source.license !== 'Unknown';
 
                 statusBoxesHtml = `
@@ -379,7 +512,8 @@
                         <span class="status-box ${hasConfig ? 'ok' : 'missing'}">Config</span>
                         <span class="status-box ${hasBackup ? 'ok' : 'missing'}">Backup</span>
                         <span class="status-box ${hasMetadata ? 'ok' : 'missing'}">Metadata</span>
-                        <span class="status-box ${hasEmbeddings ? 'ok' : 'warning'}">Index</span>
+                        <span class="status-box ${has1536 ? 'ok' : 'warning'}">1536</span>
+                        <span class="status-box ${has768 ? 'ok' : 'warning'}">768</span>
                         <span class="status-box ${hasLicense ? 'ok' : 'warning'}">License</span>
                     </div>
                 `;
@@ -586,10 +720,555 @@
                 tab.classList.add('active');
                 currentFilter = tab.dataset.filter;
                 renderSources();
+
+                // Load models when switching to models tab
+                if (tab.dataset.filter === 'models') {
+                    loadModels();
+                }
+
+                // Load languages when switching to languages tab
+                if (tab.dataset.filter === 'languages') {
+                    loadLanguages();
+                }
             });
         });
 
+        // =============================================================================
+        // MODEL MANAGEMENT
+        // =============================================================================
+
+        let modelsData = null;
+
+        async function loadModels() {
+            const embeddingContainer = document.getElementById('embeddingModels');
+            const llmContainer = document.getElementById('llmModels');
+
+            embeddingContainer.innerHTML = '<div class="loading">Loading models...</div>';
+            llmContainer.innerHTML = '<div class="loading">Loading models...</div>';
+
+            try {
+                const response = await fetch('/useradmin/api/available-models');
+                modelsData = await response.json();
+
+                // Update system info
+                if (modelsData.system_info) {
+                    document.getElementById('systemRam').textContent = modelsData.system_info.ram_gb + ' GB';
+                    document.getElementById('systemStorage').textContent = modelsData.system_info.disk_free_gb + ' GB free';
+                    document.getElementById('systemTier').textContent = modelsData.system_info.tier.charAt(0).toUpperCase() + modelsData.system_info.tier.slice(1);
+                }
+
+                // Render embedding models
+                const embeddingModels = modelsData.models.filter(m => m.type === 'embedding');
+                if (embeddingModels.length === 0) {
+                    embeddingContainer.innerHTML = '<div class="placeholder">No embedding models available</div>';
+                } else {
+                    embeddingContainer.innerHTML = embeddingModels.map(m => renderModelCard(m, modelsData.system_info)).join('');
+                }
+
+                // Render LLM models
+                const llmModels = modelsData.models.filter(m => m.type === 'llm');
+                if (llmModels.length === 0) {
+                    llmContainer.innerHTML = '<div class="placeholder">No LLM models available</div>';
+                } else {
+                    llmContainer.innerHTML = llmModels.map(m => renderModelCard(m, modelsData.system_info)).join('');
+                }
+
+            } catch (e) {
+                embeddingContainer.innerHTML = '<div class="placeholder">Error loading models: ' + e.message + '</div>';
+                llmContainer.innerHTML = '';
+            }
+        }
+
+        function renderModelCard(model, systemInfo) {
+            const isInstalled = model.installed;
+            const isActive = model.active;
+            const isRecommended = (systemInfo && (
+                (model.type === 'embedding' && model.id === systemInfo.recommended_embedding) ||
+                (model.type === 'llm' && model.id === systemInfo.recommended_llm)
+            ));
+
+            let cardClasses = 'model-card';
+            if (isActive) cardClasses += ' active';
+            else if (isInstalled) cardClasses += ' installed';
+
+            // Build badges
+            let badges = '';
+            if (isActive) badges += '<span class="model-badge active">Active</span>';
+            if (isInstalled && !isActive) badges += '<span class="model-badge installed">Installed</span>';
+            if (isRecommended) badges += '<span class="model-badge recommended">Recommended</span>';
+
+            // Build meta info
+            let meta = `<span>${model.size_mb} MB</span>`;
+            meta += `<span>Min RAM: ${model.min_ram_gb} GB</span>`;
+            if (model.dimensions) {
+                meta += `<span>${model.dimensions}-dim</span>`;
+            }
+            if (model.tokens_per_sec) {
+                meta += `<span>${model.tokens_per_sec} tok/s</span>`;
+            }
+
+            // Build action buttons
+            let actions = '';
+            if (isInstalled) {
+                if (!isActive) {
+                    actions = `<button class="btn-small btn-edit" onclick="setActiveModel('${model.id}')">Set Active</button>`;
+                } else {
+                    actions = `<span style="color: #4ecca3; font-size: 0.8rem;">Currently Active</span>`;
+                }
+            } else {
+                actions = `<button class="btn-small btn-install" onclick="downloadModel('${model.id}', this)">Download</button>`;
+            }
+
+            return `
+                <div class="${cardClasses}" id="model-card-${model.id}">
+                    <h3>${escapeHtml(model.display_name)}</h3>
+                    <div class="model-badges">${badges}</div>
+                    <div class="model-meta">${meta}</div>
+                    <div class="model-desc">${escapeHtml(model.description)}</div>
+                    <div class="actions">${actions}</div>
+                    <div class="progress-bar" id="progress-${model.id}" style="display: none;">
+                        <div class="progress-fill" style="width: 0%;"></div>
+                    </div>
+                </div>
+            `;
+        }
+
+        async function downloadModel(modelId, btn) {
+            const originalText = btn.textContent;
+            btn.disabled = true;
+            btn.textContent = 'Starting...';
+            btn.style.opacity = '0.7';
+
+            try {
+                const response = await fetch('/useradmin/api/download-model', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ model_id: modelId })
+                });
+
+                const data = await response.json();
+
+                if (response.ok && data.status === 'submitted') {
+                    // Show progress bar
+                    const progressBar = document.getElementById('progress-' + modelId);
+                    if (progressBar) progressBar.style.display = 'block';
+
+                    btn.textContent = 'Downloading...';
+                    pollModelDownload(data.job_id, modelId, btn, originalText);
+                } else if (response.status === 409) {
+                    alert('A download is already in progress for this model.');
+                    btn.textContent = originalText;
+                    btn.disabled = false;
+                    btn.style.opacity = '1';
+                } else {
+                    alert('Failed to start download: ' + (data.detail || 'Unknown error'));
+                    btn.textContent = originalText;
+                    btn.disabled = false;
+                    btn.style.opacity = '1';
+                }
+            } catch (e) {
+                alert('Error: ' + e.message);
+                btn.textContent = originalText;
+                btn.disabled = false;
+                btn.style.opacity = '1';
+            }
+        }
+
+        async function pollModelDownload(jobId, modelId, btn, originalText) {
+            try {
+                const response = await fetch('/useradmin/api/jobs/' + jobId);
+                const job = await response.json();
+
+                // Update progress bar
+                const progressBar = document.getElementById('progress-' + modelId);
+                if (progressBar) {
+                    const fill = progressBar.querySelector('.progress-fill');
+                    if (fill) fill.style.width = (job.progress || 0) + '%';
+                }
+
+                if (job.status === 'running' || job.status === 'pending') {
+                    btn.textContent = (job.progress || 0) + '%';
+                    setTimeout(() => pollModelDownload(jobId, modelId, btn, originalText), 1000);
+                } else if (job.status === 'completed') {
+                    btn.textContent = 'Installed';
+                    btn.style.background = '#0f3460';
+                    btn.style.color = '#4ecca3';
+                    if (progressBar) progressBar.style.display = 'none';
+
+                    // Refresh models list
+                    setTimeout(() => loadModels(), 1000);
+                } else {
+                    alert('Download failed: ' + (job.error || 'Unknown error'));
+                    btn.textContent = originalText;
+                    btn.disabled = false;
+                    btn.style.opacity = '1';
+                    if (progressBar) progressBar.style.display = 'none';
+                }
+            } catch (e) {
+                setTimeout(() => pollModelDownload(jobId, modelId, btn, originalText), 2000);
+            }
+        }
+
+        async function setActiveModel(modelId) {
+            try {
+                const response = await fetch('/useradmin/api/set-active-model', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ model_id: modelId })
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    // Refresh models list
+                    loadModels();
+                } else {
+                    alert('Failed to set active model: ' + (data.detail || 'Unknown error'));
+                }
+            } catch (e) {
+                alert('Error: ' + e.message);
+            }
+        }
+
+        // =============================================================================
+        // LANGUAGE PACK MANAGEMENT
+        // =============================================================================
+
+        let languagesData = null;
+
+        async function loadLanguages() {
+            const container = document.getElementById('languagePacksList');
+            container.innerHTML = '<div class="loading">Loading language packs...</div>';
+
+            try {
+                // Load available languages
+                const langResponse = await fetch('/useradmin/api/available-languages');
+                languagesData = await langResponse.json();
+
+                // Load language status
+                const statusResponse = await fetch('/useradmin/api/language-status');
+                const statusData = await statusResponse.json();
+
+                // Update status info
+                if (statusData.active_language && statusData.active_language !== 'en') {
+                    const langInfo = languagesData.languages.find(l => l.code === statusData.active_language);
+                    document.getElementById('activeLanguage').textContent = langInfo ? langInfo.display_name : statusData.active_language;
+                } else {
+                    document.getElementById('activeLanguage').textContent = 'English (default)';
+                }
+                document.getElementById('translationEnabled').textContent = statusData.translation_enabled ? 'Yes' : 'No';
+                document.getElementById('translationEnabled').style.color = statusData.translation_enabled ? '#4ecca3' : '#888';
+
+                // Update cache stats
+                if (statusData.cache) {
+                    document.getElementById('cacheSize').textContent = (statusData.cache.size_mb || 0).toFixed(1) + ' MB';
+                    document.getElementById('cachedArticleCount').textContent = statusData.cache.article_count || 0;
+                    const cachedLangs = statusData.cache.languages || [];
+                    document.getElementById('cachedLanguages').textContent = cachedLangs.length > 0 ? cachedLangs.join(', ') : 'None';
+                }
+
+                // Render language cards
+                if (!languagesData.languages || languagesData.languages.length === 0) {
+                    container.innerHTML = '<div class="placeholder">No language packs available</div>';
+                } else {
+                    container.innerHTML = languagesData.languages.map(lang => renderLanguageCard(lang, statusData)).join('');
+                }
+
+            } catch (e) {
+                container.innerHTML = '<div class="placeholder">Error loading languages: ' + e.message + '</div>';
+            }
+        }
+
+        function renderLanguageCard(lang, statusData) {
+            const isInstalled = lang.installed;
+            const isActive = statusData.active_language === lang.code;
+
+            let cardClasses = 'model-card';
+            if (isActive) cardClasses += ' active';
+            else if (isInstalled) cardClasses += ' installed';
+
+            // Build badges
+            let badges = '';
+            if (isActive) badges += '<span class="model-badge active">Active</span>';
+            if (isInstalled && !isActive) badges += '<span class="model-badge installed">Installed</span>';
+            if (lang.direction === 'rtl') badges += '<span class="model-badge" style="background: #4ecca320; color: #4ecca3;">RTL</span>';
+
+            // Build meta info
+            let meta = `<span>${lang.size_mb} MB</span>`;
+            meta += `<span>Min RAM: ${lang.min_ram_gb} GB</span>`;
+            meta += `<span>${lang.native_name}</span>`;
+
+            // Build action buttons
+            let actions = '';
+            if (isInstalled) {
+                if (!isActive) {
+                    actions = `<button class="btn-small btn-edit" onclick="setActiveLanguage('${lang.code}')">Set Active</button>`;
+                    actions += `<button class="btn-small btn-edit" onclick="removeLanguage('${lang.code}')" style="margin-left: 0.5rem; background: #5c2030; border-color: #e94560;">Remove</button>`;
+                } else {
+                    actions = `<span style="color: #4ecca3; font-size: 0.8rem;">Currently Active</span>`;
+                    actions += `<button class="btn-small btn-edit" onclick="disableTranslation()" style="margin-left: 0.5rem;">Disable</button>`;
+                }
+            } else {
+                actions = `<button class="btn-small btn-install" onclick="downloadLanguage('${lang.code}', this)">Download</button>`;
+            }
+
+            return `
+                <div class="${cardClasses}" id="lang-card-${lang.code}">
+                    <h3>${escapeHtml(lang.display_name)}</h3>
+                    <div class="model-badges">${badges}</div>
+                    <div class="model-meta">${meta}</div>
+                    <div class="model-desc">${escapeHtml(lang.description || 'MarianMT translation model for ' + lang.display_name)}</div>
+                    <div class="actions">${actions}</div>
+                    <div class="progress-bar" id="lang-progress-${lang.code}" style="display: none;">
+                        <div class="progress-fill" style="width: 0%;"></div>
+                    </div>
+                </div>
+            `;
+        }
+
+        async function downloadLanguage(langCode, btn) {
+            const originalText = btn.textContent;
+            btn.disabled = true;
+            btn.textContent = 'Starting...';
+            btn.style.opacity = '0.7';
+
+            try {
+                const response = await fetch('/useradmin/api/download-language', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ language_code: langCode })
+                });
+
+                const data = await response.json();
+
+                if (response.ok && data.status === 'submitted') {
+                    // Show progress bar
+                    const progressBar = document.getElementById('lang-progress-' + langCode);
+                    if (progressBar) progressBar.style.display = 'block';
+
+                    btn.textContent = 'Downloading...';
+                    pollLanguageDownload(data.job_id, langCode, btn, originalText);
+                } else if (response.status === 409) {
+                    alert('A download is already in progress for this language.');
+                    btn.textContent = originalText;
+                    btn.disabled = false;
+                    btn.style.opacity = '1';
+                } else {
+                    alert('Failed to start download: ' + (data.detail || 'Unknown error'));
+                    btn.textContent = originalText;
+                    btn.disabled = false;
+                    btn.style.opacity = '1';
+                }
+            } catch (e) {
+                alert('Error: ' + e.message);
+                btn.textContent = originalText;
+                btn.disabled = false;
+                btn.style.opacity = '1';
+            }
+        }
+
+        async function pollLanguageDownload(jobId, langCode, btn, originalText) {
+            try {
+                const response = await fetch('/useradmin/api/jobs/' + jobId);
+                const job = await response.json();
+
+                // Update progress bar
+                const progressBar = document.getElementById('lang-progress-' + langCode);
+                if (progressBar) {
+                    const fill = progressBar.querySelector('.progress-fill');
+                    if (fill) fill.style.width = (job.progress || 0) + '%';
+                }
+
+                if (job.status === 'running' || job.status === 'pending') {
+                    btn.textContent = (job.progress || 0) + '%';
+                    setTimeout(() => pollLanguageDownload(jobId, langCode, btn, originalText), 1000);
+                } else if (job.status === 'completed') {
+                    btn.textContent = 'Installed';
+                    btn.style.background = '#0f3460';
+                    btn.style.color = '#4ecca3';
+                    if (progressBar) progressBar.style.display = 'none';
+
+                    // Refresh languages list
+                    setTimeout(() => loadLanguages(), 1000);
+                } else {
+                    alert('Download failed: ' + (job.error || 'Unknown error'));
+                    btn.textContent = originalText;
+                    btn.disabled = false;
+                    btn.style.opacity = '1';
+                    if (progressBar) progressBar.style.display = 'none';
+                }
+            } catch (e) {
+                setTimeout(() => pollLanguageDownload(jobId, langCode, btn, originalText), 2000);
+            }
+        }
+
+        async function setActiveLanguage(langCode) {
+            try {
+                const response = await fetch('/useradmin/api/set-language', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ language_code: langCode })
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    // Refresh languages list
+                    loadLanguages();
+                } else {
+                    alert('Failed to set active language: ' + (data.detail || 'Unknown error'));
+                }
+            } catch (e) {
+                alert('Error: ' + e.message);
+            }
+        }
+
+        async function disableTranslation() {
+            try {
+                const response = await fetch('/useradmin/api/set-language', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ language_code: 'en' })
+                });
+
+                if (response.ok) {
+                    loadLanguages();
+                } else {
+                    const data = await response.json();
+                    alert('Failed to disable translation: ' + (data.detail || 'Unknown error'));
+                }
+            } catch (e) {
+                alert('Error: ' + e.message);
+            }
+        }
+
+        async function removeLanguage(langCode) {
+            if (!confirm('Remove this language pack? Downloaded model files will be deleted.')) {
+                return;
+            }
+
+            try {
+                const response = await fetch('/useradmin/api/remove-language', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ language_code: langCode })
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    loadLanguages();
+                } else {
+                    alert('Failed to remove language: ' + (data.detail || 'Unknown error'));
+                }
+            } catch (e) {
+                alert('Error: ' + e.message);
+            }
+        }
+
+        async function clearTranslationCache() {
+            if (!confirm('Clear all cached article translations? This will not remove downloaded language packs.')) {
+                return;
+            }
+
+            try {
+                const response = await fetch('/useradmin/api/clear-translation-cache', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    alert('Cleared ' + (data.cleared_count || 0) + ' cached translations.');
+                    loadLanguages();
+                } else {
+                    alert('Failed to clear cache: ' + (data.detail || 'Unknown error'));
+                }
+            } catch (e) {
+                alert('Error: ' + e.message);
+            }
+        }
+
+        // Load languages for the "All" tab summary section
+        async function loadLanguagesSummary() {
+            const container = document.getElementById('languagesSection');
+            if (!container) return;
+
+            try {
+                const response = await fetch('/useradmin/api/available-languages');
+                const data = await response.json();
+
+                const installed = (data.languages || []).filter(l => l.installed);
+                if (installed.length === 0) {
+                    container.innerHTML = '<div class="placeholder">No language packs installed. <a href="#" onclick="document.querySelector(\'[data-filter=languages]\').click(); return false;" style="color: #4ecca3;">Install one</a></div>';
+                } else {
+                    container.innerHTML = installed.map(lang => `
+                        <div class="source-card">
+                            <h3>${escapeHtml(lang.display_name)}</h3>
+                            <div class="meta">
+                                <div>${lang.native_name}</div>
+                                <div>${lang.size_mb} MB</div>
+                            </div>
+                            <div class="status-boxes">
+                                <span class="status-box ok">Installed</span>
+                            </div>
+                        </div>
+                    `).join('');
+                }
+            } catch (e) {
+                container.innerHTML = '<div class="placeholder">Error loading languages</div>';
+            }
+        }
+
+        // Load models for the "All" tab summary section
+        async function loadModelsSummary() {
+            const container = document.getElementById('modelsSection');
+            if (!container) return;
+
+            try {
+                const response = await fetch('/useradmin/api/available-models');
+                const data = await response.json();
+
+                const installed = (data.models || []).filter(m => m.installed);
+                if (installed.length === 0) {
+                    container.innerHTML = '<div class="placeholder">No models installed. <a href="#" onclick="document.querySelector(\'[data-filter=models]\').click(); return false;" style="color: #4ecca3;">Install one</a></div>';
+                } else {
+                    container.innerHTML = installed.map(model => `
+                        <div class="source-card">
+                            <h3>${escapeHtml(model.display_name)}</h3>
+                            <div class="meta">
+                                <div>${model.type === 'embedding' ? 'Embedding' : 'LLM'}</div>
+                                <div>${model.size_mb} MB</div>
+                            </div>
+                            <div class="status-boxes">
+                                <span class="status-box ok">Installed</span>
+                                ${model.active ? '<span class="status-box" style="background: #e9456020; color: #e94560;">Active</span>' : ''}
+                            </div>
+                        </div>
+                    `).join('');
+                }
+            } catch (e) {
+                container.innerHTML = '<div class="placeholder">Error loading models</div>';
+            }
+        }
+
         loadSources();
+        loadLanguagesSummary();
+        loadModelsSummary();
+
+        // Handle URL hash to auto-select tab (e.g., #models)
+        function selectTabFromHash() {
+            const hash = window.location.hash.replace('#', '');
+            if (hash) {
+                const tab = document.querySelector(`.tab[data-filter="${hash}"]`);
+                if (tab) {
+                    tab.click();
+                }
+            }
+        }
+        selectTabFromHash();
+        window.addEventListener('hashchange', selectTabFromHash);
     </script>
     <script src="/admin/static/admin-common.js"></script>
 

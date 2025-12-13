@@ -34,7 +34,7 @@ try:
 except ImportError:
     ANTHROPIC_AVAILABLE = False
 
-from offline_tools.vectordb import get_vector_store as create_vector_store, MetadataIndex, DOC_TYPE_GUIDE, DOC_TYPE_ARTICLE, DOC_TYPE_PRODUCT, DOC_TYPE_ACADEMIC
+from offline_tools.vectordb import get_vector_store as create_vector_store, get_vector_store_for_search, MetadataIndex, DOC_TYPE_GUIDE, DOC_TYPE_ARTICLE, DOC_TYPE_PRODUCT, DOC_TYPE_ACADEMIC
 from offline_tools.schemas import get_manifest_file
 
 # Import admin panel
@@ -156,10 +156,14 @@ llm = None
 def get_vector_store():
     global vector_store
     if vector_store is None:
-        # Uses VECTOR_DB_MODE env var: local, pinecone, or railway
-        mode = os.getenv("VECTOR_DB_MODE", "local")
-        print(f"Initializing vector store in '{mode}' mode...")
-        vector_store = create_vector_store(mode=mode)
+        # Use get_vector_store_for_search which respects offline_mode from local_settings.json
+        # This returns the appropriate store (ChromaDB 768 for offline, Pinecone/1536 for online)
+        from admin.local_config import get_local_config
+        offline_mode = get_local_config().get_offline_mode()
+        print(f"Initializing vector store for '{offline_mode}' mode...")
+        result = get_vector_store_for_search(fallback=False)
+        # Handle tuple return in hybrid mode (shouldn't happen with fallback=False, but be safe)
+        vector_store = result[0] if isinstance(result, tuple) else result
         print(f"Vector store ready: {type(vector_store).__name__}")
     return vector_store
 
@@ -721,12 +725,17 @@ async def get_welcome():
 @app.get("/sources")
 async def get_sources():
     """
-    Get list of available sources with document counts.
+    Get list of available sources with document counts and availability info.
 
     IMPORTANT: Uses ChromaDB as source of truth (what's actually searchable),
     with _manifest.json files for display names only.
+
+    Returns availability flags:
+    - has_1536: Has 1536-dim vectors (for online/Pinecone search)
+    - has_768: Has 768-dim vectors (for offline/local search)
     """
     from admin.local_config import get_local_config
+    from offline_tools.schemas import get_vectors_file, get_vectors_768_file
 
     # ChromaDB is the source of truth for searchable sources
     store = get_vector_store()
@@ -734,36 +743,53 @@ async def get_sources():
     sources_counts = stats.get("sources", {})
     total_docs = stats.get("total_documents", 0)
 
-    # Load source names from _manifest.json files (for display only)
+    # Load source names and check vector availability from backup folder
     local_config = get_local_config()
     backup_folder = local_config.get_backup_folder()
+    offline_mode = local_config.get_offline_mode()
 
-    source_names = {}
+    source_info = {}
     if backup_folder:
         backup_path = Path(backup_folder)
         if backup_path.exists():
             for source_id in sources_counts.keys():
                 source_folder = backup_path / source_id
                 manifest_file = source_folder / get_manifest_file()
+
+                # Get display name from manifest
+                display_name = source_id
                 if manifest_file.exists():
                     try:
                         with open(manifest_file) as f:
                             source_data = json.load(f)
-                            source_names[source_id] = source_data.get("name", source_id)
+                            display_name = source_data.get("name", source_id)
                     except Exception:
                         pass
 
-    # Build sources dict with names and counts
+                source_info[source_id] = {"name": display_name, "folder": source_folder}
+
+    # Build sources dict - check both vector files for accurate status
+    # File existence is source of truth (metadata index may include sources not yet indexed)
     sources = {}
     for source_id, count in sources_counts.items():
+        info = source_info.get(source_id, {})
+        folder = info.get("folder")
+
+        # Check both vector files (2 fast stat calls per source)
+        has_1536 = folder and (folder / get_vectors_file()).exists()
+        has_768 = folder and (folder / get_vectors_768_file()).exists()
+
         sources[source_id] = {
-            "name": source_names.get(source_id, source_id.replace("_", " ").replace("-", " ").title()),
-            "count": count
+            "name": info.get("name", source_id.replace("_", " ").replace("-", " ").title()),
+            "count": count,
+            "has_1536": has_1536,
+            "has_768": has_768
         }
 
     return {
         "sources": sources,
-        "total": total_docs
+        "total": total_docs,
+        "offline_mode": offline_mode
     }
 
 
@@ -826,7 +852,7 @@ def generate_response(query: str, context: str, history: list, mode: str = None)
         mode: Connection mode override (optional)
 
     Returns:
-        Response text
+        Response text (may include fallback notice prefix)
     """
     # Sync mode if provided
     if mode:
@@ -839,7 +865,22 @@ def generate_response(query: str, context: str, history: list, mode: str = None)
     ai_service = get_ai_service()
     result = ai_service.generate_response(query, context, history)
 
-    return result.text
+    # Add fallback notice if needed
+    response_text = result.text
+    conn = get_connection_manager()
+    current_mode = conn.get_mode()
+
+    # If we wanted cloud but got local, add a notice
+    if current_mode in ("online_only", "hybrid") and result.method == ResponseMethod.LOCAL_LLM:
+        response_text = "[Using local AI model - cloud unavailable]\n\n" + response_text
+    elif result.method == ResponseMethod.SIMPLE:
+        # Simple response means no LLM was available
+        if current_mode == "offline_only":
+            response_text = "[Running in offline mode without local LLM]\n\n" + response_text
+        else:
+            response_text = "[AI unavailable - showing formatted results]\n\n" + response_text
+
+    return response_text
 
 
 # Legacy functions for backward compatibility
@@ -1133,6 +1174,8 @@ async def stream_chat(request: Request, body: SimpleQueryRequest):
         } for a in articles])
         yield f"data: [ARTICLES]{articles_json}\n\n"
 
+        # Mode info available via /api/v1/connection-status endpoint if needed
+
         full_response = []
         try:
             for chunk in ai_service.generate_response_stream(message, context, history):
@@ -1276,10 +1319,10 @@ function escapeHtml(text) {{
 function parseMarkdown(text) {{
     if (!text) return '';
     let html = escapeHtml(text);
-    // Convert [text](url) to clickable links
-    html = html.replace(/\\[([^\\]]+)\\]\\((https?:\\/\\/[^\\)]+)\\)/g,
+    // Convert [text](url) to clickable links (handles URLs with parentheses like Wikipedia)
+    html = html.replace(/\\[([^\\]]+)\\]\\((https?:\\/\\/[^()\\s]*(?:\\([^()]*\\)[^()\\s]*)*)\\)/g,
         '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
-    html = html.replace(/\\[([^\\]]+)\\]\\((\\/[^\\)]+)\\)/g,
+    html = html.replace(/\\[([^\\]]+)\\]\\((\\/[^()\\s]*(?:\\([^()]*\\)[^()\\s]*)*)\\)/g,
         '<a href="{base_url}$2" target="_blank">$1</a>');
     // Convert **bold** and *italic*
     html = html.replace(/\\*\\*([^*]+)\\*\\*/g, '<strong>$1</strong>');
@@ -2274,18 +2317,13 @@ def format_articles_for_context(articles: List[dict]) -> str:
             DOC_TYPE_ACADEMIC: "Academic (research paper/study)"
         }.get(doc_type, "Article")
 
-        # Handle ZIM URLs - convert to real URLs if base_url is known
-        url = metadata.get('url', 'N/A')
-        if url.startswith('zim://'):
-            # Try to convert zim:// URL to real URL
-            # Format: zim://{source_id}/{article_path}
-            real_url = _convert_zim_url(url, metadata.get('source', ''))
-            if real_url:
-                url_line = f"URL: {real_url}"
-            else:
-                url_line = "URL: (offline archive)"
-        else:
+        # Get appropriate URL for this context (local_url for offline, url for online)
+        # _get_display_url handles ZIM URLs, HTML backup local_urls, and online URLs
+        url = _get_display_url(article)
+        if url:
             url_line = f"URL: {url}"
+        else:
+            url_line = "URL: (offline archive)"
 
         formatted.append(f"""
 Article #{i}: {metadata.get('title', 'Unknown Title')}
@@ -2335,4 +2373,27 @@ if __name__ == "__main__":
         print(f"Port 8000 in use, using port {port}")
 
     print(f"Starting Disaster Clippy on http://localhost:{port}")
+
+    # Configure logging to reduce noise - only show errors in access logs
+    import logging
+
+    class ErrorOnlyFilter(logging.Filter):
+        """Filter that only allows non-200 status codes through"""
+        def filter(self, record):
+            # Allow all non-access log messages
+            if not hasattr(record, 'args') or not record.args:
+                return True
+            # For access logs, check the status code (usually 3rd arg)
+            try:
+                if len(record.args) >= 3:
+                    status_code = record.args[2]
+                    if isinstance(status_code, int) and 200 <= status_code < 300:
+                        return False  # Filter out 2xx responses
+            except (TypeError, IndexError):
+                pass
+            return True
+
+    # Apply filter to uvicorn access logger
+    logging.getLogger("uvicorn.access").addFilter(ErrorOnlyFilter())
+
     uvicorn.run(app, host="0.0.0.0", port=port)

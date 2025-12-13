@@ -267,6 +267,17 @@ class PineconeStore:
         # (not local files - those reflect local state, not cloud state)
         self.metadata_index = PineconeMetadataWrapper(self)
 
+        # Cache for R2 source data (avoid repeated downloads)
+        # Cache is long-lived (1 hour) since data rarely changes
+        # Call invalidate_sources_cache() after syncing new data to R2
+        self._r2_sources_cache = None
+        self._r2_sources_cache_time = 0
+
+    def invalidate_sources_cache(self):
+        """Clear the R2 sources cache. Call after uploading new data to R2."""
+        self._r2_sources_cache = None
+        self._r2_sources_cache_time = 0
+
     def _ensure_index(self):
         """Create index if it doesn't exist"""
         existing_indexes = [idx.name for idx in self.pc.list_indexes()]
@@ -670,40 +681,43 @@ class PineconeStore:
         """
         Get full source info from R2 cloud storage metadata.
         Returns dict with source_id -> {name, count, topics, etc.}
+        Uses caching to avoid repeated R2 downloads (1 hour cache).
+        Call invalidate_sources_cache() after uploading new data.
         """
-        try:
-            from offline_tools.cloud.r2 import get_r2_storage
-            import tempfile
+        import time
 
-            r2 = get_r2_storage()
+        # Check cache first (1 hour TTL - data rarely changes)
+        cache_ttl = 3600  # 1 hour
+        if self._r2_sources_cache is not None:
+            if time.time() - self._r2_sources_cache_time < cache_ttl:
+                return self._r2_sources_cache
+
+        try:
+            from offline_tools.cloud.r2 import get_backups_storage
+
+            r2 = get_backups_storage()
             if not r2.is_configured():
                 print("R2 storage not configured, cannot fetch metadata")
-                return {}
+                return self._r2_sources_cache or {}
 
-            # Download _master.json to temp file
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as tmp:
-                tmp_path = tmp.name
-
-            # Try backups/_master.json first (current structure), then metadata/_master.json (legacy)
-            if not r2.download_file("backups/_master.json", tmp_path):
-                if not r2.download_file("metadata/_master.json", tmp_path):
-                    # Silently return empty - this is expected if no master.json exists yet
-                    return {}
+            # Use download_file_content for small JSON files (no temp file needed)
+            content = r2.download_file_content("backups/_master.json")
+            if not content:
+                # Silently return cached or empty - this is expected if no master.json exists yet
+                return self._r2_sources_cache or {}
 
             # Parse the metadata
-            with open(tmp_path, 'r', encoding='utf-8') as f:
-                master_data = json.load(f)
+            master_data = json.loads(content)
 
-            # Clean up temp file
-            import os as os_module
-            os_module.unlink(tmp_path)
+            # Cache the result
+            self._r2_sources_cache = master_data.get("sources", {})
+            self._r2_sources_cache_time = time.time()
 
-            # Return full sources data
-            return master_data.get("sources", {})
+            return self._r2_sources_cache
 
         except Exception as e:
             print(f"Warning: Could not get sources from R2: {e}")
-            return {}
+            return self._r2_sources_cache or {}
 
     def get_existing_ids(self, limit: int = 10000) -> set:
         """Get document IDs from metadata index"""

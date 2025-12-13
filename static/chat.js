@@ -20,7 +20,13 @@ const selectNoneBtn = document.getElementById('selectNone');
 // Load welcome message and stats on page load
 async function loadWelcome() {
     try {
-        const response = await fetch('/welcome');
+        // Use AbortController for timeout - database may be busy during indexing
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 5000);
+
+        const response = await fetch('/welcome', { signal: controller.signal });
+        clearTimeout(timeoutId);
+
         const data = await response.json();
 
         // Update stats bar
@@ -40,7 +46,12 @@ async function loadWelcome() {
 
     } catch (e) {
         console.error('Failed to load welcome:', e);
-        indexStats.textContent = 'Unable to load stats';
+        // Check if it was a timeout (abort) - likely database busy with indexing
+        if (e.name === 'AbortError') {
+            indexStats.textContent = 'Database in use (indexing)';
+        } else {
+            indexStats.textContent = 'Unable to load stats';
+        }
     }
 }
 
@@ -65,6 +76,7 @@ function renderArticles(articles) {
     articlesList.innerHTML = articles.map((article, idx) => {
         const url = article.url || '';
         const isLocalZim = url.startsWith('/zim/');
+        const isLocalBackup = url.startsWith('/backup/');
         const isExternalUrl = url.startsWith('http://') || url.startsWith('https://');
 
         // Build the title HTML with appropriate link
@@ -72,6 +84,9 @@ function renderArticles(articles) {
         if (isLocalZim) {
             // Local ZIM URL - opens in new tab to preserve chat history
             titleHtml = `<a href="${escapeHtml(url)}" target="_blank" class="zim-link">${escapeHtml(article.title)}</a><span class="zim-badge">local</span>`;
+        } else if (isLocalBackup) {
+            // Local HTML backup URL - opens in new tab
+            titleHtml = `<a href="${escapeHtml(url)}" target="_blank" class="backup-link">${escapeHtml(article.title)}</a><span class="zim-badge">local</span>`;
         } else if (isExternalUrl) {
             // External URL - opens in new tab
             titleHtml = `<a href="${escapeHtml(url)}" target="_blank">${escapeHtml(article.title)}</a>`;
@@ -91,7 +106,7 @@ function renderArticles(articles) {
                     <span class="score-badge">${(article.score * 100).toFixed(0)}% match</span>
                 </h3>
                 <div class="article-meta">
-                    Source: ${escapeHtml(article.source)}${isLocalZim ? ' (offline)' : ''}
+                    Source: ${escapeHtml(article.source)}${(isLocalZim || isLocalBackup) ? ' (offline)' : ''}
                 </div>
                 <div class="article-snippet">${escapeHtml(article.snippet)}</div>
             </div>
@@ -229,7 +244,13 @@ userInput.addEventListener('keydown', (e) => {
 // Load sources and render checkboxes
 async function loadSources() {
     try {
-        const response = await fetch('/sources');
+        // Use AbortController for timeout - database may be busy during indexing
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 5000);
+
+        const response = await fetch('/sources', { signal: controller.signal });
+        clearTimeout(timeoutId);
+
         const data = await response.json();
 
         availableSources = data.sources || {};
@@ -254,11 +275,18 @@ async function loadSources() {
 
     } catch (e) {
         console.error('Failed to load sources:', e);
-        sourcesGrid.innerHTML = '<span style="color: #888;">Unable to load sources</span>';
+        // Check if it was a timeout (abort) - likely database busy with indexing
+        if (e.name === 'AbortError') {
+            sourcesGrid.innerHTML = '<span style="color: #f0ad4e;">Database in use (indexing). Try again later.</span>';
+            // Retry after 30 seconds
+            setTimeout(loadSources, 30000);
+        } else {
+            sourcesGrid.innerHTML = '<span style="color: #888;">Unable to load sources</span>';
+        }
     }
 }
 
-// Render the sources checkboxes
+// Render the sources checkboxes with offline/online indicators
 function renderSourcesGrid() {
     const sourceIds = Object.keys(availableSources).sort();
 
@@ -272,13 +300,33 @@ function renderSourcesGrid() {
         const isChecked = selectedSources === null || selectedSources.includes(sourceId);
         const displayName = source.name || sourceId;
 
+        // Check availability - 768-dim means offline ready
+        const has768 = source.has_768 === true;
+        const has1536 = source.has_1536 === true;
+
+        // Build availability indicator
+        let badge = '';
+        let badgeTitle = '';
+
+        if (has768 && has1536) {
+            badge = '<span class="source-badge both" title="Available online and offline">both</span>';
+            badgeTitle = 'Available online and offline';
+        } else if (has768) {
+            badge = '<span class="source-badge offline" title="Offline only (768-dim)">offline</span>';
+            badgeTitle = 'Offline only';
+        } else if (has1536) {
+            badge = '<span class="source-badge online" title="Online only (needs 768-dim for offline)">online</span>';
+            badgeTitle = 'Online only - needs 768-dim for offline';
+        }
+
         return `
-            <div class="source-item">
+            <div class="source-item" title="${badgeTitle}">
                 <input type="checkbox" id="source-${sourceId}" value="${sourceId}"
                        ${isChecked ? 'checked' : ''} onchange="onSourceChange()">
                 <label for="source-${sourceId}">
                     ${escapeHtml(displayName)}
                     <span class="source-count">(${source.count})</span>
+                    ${badge}
                 </label>
             </div>
         `;
@@ -355,7 +403,13 @@ selectNoneBtn.addEventListener('click', selectNoSources);
 // Connection status - uses unified endpoint
 async function loadConnectionStatus() {
     try {
-        const response = await fetch('/api/v1/connection-status');
+        // Use AbortController for timeout - database may be busy during indexing
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 5000);
+
+        const response = await fetch('/api/v1/connection-status', { signal: controller.signal });
+        clearTimeout(timeoutId);
+
         const data = await response.json();
 
         const dot = document.getElementById('connectionDot');
@@ -375,9 +429,11 @@ async function loadConnectionStatus() {
         }
     } catch (e) {
         console.error('Failed to load connection status:', e);
+        const dot = document.getElementById('connectionDot');
         const label = document.getElementById('connectionLabel');
+        if (dot) dot.className = 'connection-dot offline';
         if (label) {
-            label.textContent = 'Error';
+            label.textContent = e.name === 'AbortError' ? 'Busy' : 'Error';
         }
     }
 }

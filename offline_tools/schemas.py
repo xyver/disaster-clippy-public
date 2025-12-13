@@ -36,9 +36,39 @@ def get_index_file() -> str:
     """Full content index file (for display/scanning)"""
     return "_index.json"
 
-def get_vectors_file() -> str:
-    """Vectors file (embeddings only)"""
+def get_vectors_file(dimension: int = 1536) -> str:
+    """
+    Vectors file (embeddings only).
+
+    Args:
+        dimension: Embedding dimension (384, 768, 1024, or 1536)
+
+    Returns:
+        Filename for the vectors file (e.g., _vectors_768.json)
+    """
+    if dimension == 1536:
+        return "_vectors.json"  # Default for backwards compatibility
+    return f"_vectors_{dimension}.json"
+
+
+def get_vectors_768_file() -> str:
+    """768-dim vectors file for offline use (legacy helper)"""
+    return "_vectors_768.json"
+
+
+def get_vectors_1536_file() -> str:
+    """1536-dim vectors file for online use (legacy helper)"""
     return "_vectors.json"
+
+
+def get_vectors_384_file() -> str:
+    """384-dim vectors file (MiniLM - lightweight)"""
+    return "_vectors_384.json"
+
+
+def get_vectors_1024_file() -> str:
+    """1024-dim vectors file (E5-large - high quality)"""
+    return "_vectors_1024.json"
 
 def get_backup_manifest_file() -> str:
     """Backup manifest file (URL to filename mapping)"""
@@ -580,10 +610,14 @@ class IndexFile:
 @dataclass
 class VectorsFile:
     """
-    Vectors file (_vectors.json)
+    Vectors file (_vectors.json or _vectors_768.json)
 
     Contains ONLY embedding vectors, no content duplication.
     Content is in _index.json, metadata is in _metadata.json.
+
+    Two versions may exist:
+    - _vectors.json: 1536-dim (OpenAI text-embedding-3-small) for online/global
+    - _vectors_768.json: 768-dim (all-mpnet-base-v2) for offline/local
     """
     schema_version: int = 3
     source_id: str = ""
@@ -605,6 +639,24 @@ class VectorsFile:
             "created_at": self.created_at,
             "vectors": self.vectors,
         }
+
+    @classmethod
+    def for_768(cls, source_id: str = "") -> "VectorsFile":
+        """Create a VectorsFile configured for 768-dim offline embeddings"""
+        return cls(
+            source_id=source_id,
+            embedding_model="all-mpnet-base-v2",
+            dimensions=768
+        )
+
+    @classmethod
+    def for_1536(cls, source_id: str = "") -> "VectorsFile":
+        """Create a VectorsFile configured for 1536-dim online embeddings"""
+        return cls(
+            source_id=source_id,
+            embedding_model="text-embedding-3-small",
+            dimensions=1536
+        )
 
 
 # =============================================================================
@@ -662,7 +714,12 @@ def validate_source_files(source_path: str, source_id: str) -> Dict[str, Any]:
         - has_manifest: bool
         - has_metadata: bool
         - has_index: bool
-        - has_vectors: bool
+        - has_vectors: bool (True if any dimension exists)
+        - has_vectors_384: bool
+        - has_vectors_768: bool
+        - has_vectors_1024: bool
+        - has_vectors_1536: bool
+        - available_dimensions: List[int]
         - has_backup_manifest: bool
         - has_backup: bool (pages/ folder or ZIM file)
         - issues: List[str]
@@ -676,6 +733,11 @@ def validate_source_files(source_path: str, source_id: str) -> Dict[str, Any]:
         "has_metadata": False,
         "has_index": False,
         "has_vectors": False,
+        "has_vectors_384": False,
+        "has_vectors_768": False,
+        "has_vectors_1024": False,
+        "has_vectors_1536": False,
+        "available_dimensions": [],
         "has_backup_manifest": False,
         "has_backup": False,
         "issues": [],
@@ -685,7 +747,25 @@ def validate_source_files(source_path: str, source_id: str) -> Dict[str, Any]:
     result["has_manifest"] = (path / get_manifest_file()).exists()
     result["has_metadata"] = (path / get_metadata_file()).exists()
     result["has_index"] = (path / get_index_file()).exists()
-    result["has_vectors"] = (path / get_vectors_file()).exists()
+
+    # Check all vector file dimensions
+    result["has_vectors_1536"] = (path / get_vectors_1536_file()).exists()
+    result["has_vectors_768"] = (path / get_vectors_768_file()).exists()
+    result["has_vectors_384"] = (path / get_vectors_384_file()).exists()
+    result["has_vectors_1024"] = (path / get_vectors_1024_file()).exists()
+
+    # Track which dimensions are available
+    if result["has_vectors_384"]:
+        result["available_dimensions"].append(384)
+    if result["has_vectors_768"]:
+        result["available_dimensions"].append(768)
+    if result["has_vectors_1024"]:
+        result["available_dimensions"].append(1024)
+    if result["has_vectors_1536"]:
+        result["available_dimensions"].append(1536)
+
+    result["has_vectors"] = len(result["available_dimensions"]) > 0
+
     result["has_backup_manifest"] = (path / get_backup_manifest_file()).exists()
 
     # Check for backup content
@@ -699,7 +779,7 @@ def validate_source_files(source_path: str, source_id: str) -> Dict[str, Any]:
     if zim_file.exists():
         result["has_backup"] = True
 
-    # Determine validity - minimum: manifest + (metadata or index) + vectors
+    # Determine validity - minimum: manifest + (metadata or index) + vectors (any dimension)
     if result["has_manifest"] and (result["has_metadata"] or result["has_index"]) and result["has_vectors"]:
         result["is_valid"] = True
     else:
@@ -708,7 +788,7 @@ def validate_source_files(source_path: str, source_id: str) -> Dict[str, Any]:
         if not result["has_metadata"] and not result["has_index"]:
             result["issues"].append(f"Missing {get_metadata_file()} or {get_index_file()}")
         if not result["has_vectors"]:
-            result["issues"].append(f"Missing {get_vectors_file()}")
+            result["issues"].append("Missing vectors file (no embeddings for any dimension)")
 
     return result
 

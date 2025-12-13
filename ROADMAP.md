@@ -384,22 +384,33 @@ Support multiple export formats for different use cases.
 
 ### Knowledge Map Visualization
 
-Interactive graph showing document relationships based on embedding similarity.
+Interactive 3D visualization of document embeddings for admin content curation.
 
-**Status:** Planning
+**Status:** IMPLEMENTED (Dec 2025)
 
-**Features:**
-- UMAP projection of embeddings to 2D
-- Plotly scatter plot colored by source/doc_type
-- Hover for document details
-- Outlier detection (low neighbor similarity)
-- Community detection for topic clusters
+**Implemented Features:**
+- PCA projection of embeddings to 3D coordinates
+- Plotly.js interactive 3D scatter plot
+- Color-coded by source with legend
+- Hover for document details (title, source)
+- Click to open article
+- Filter by source checkboxes
+- Edge building from internal links in `_metadata.json`
+- Per-source lazy loading (URLs and edges loaded on demand)
+- Regenerate button to recompute
+- Publish to R2 for public access
 
-**Purpose:**
-- Visualize source overlap
-- Find topic gaps
-- Identify misclassified content
-- Detect redundancy
+**Access:** `/useradmin/visualise` (admin-only)
+
+**Key Files:**
+- `admin/routes/visualise.py` - Backend API and generation
+- `admin/templates/visualise.html` - Plotly 3D frontend
+
+**Future Enhancements (not implemented):**
+- UMAP algorithm option (better cluster preservation, requires `umap-learn`)
+- Density scoring for duplicate detection (nearest neighbor distances)
+- Graph layout algorithms (igraph + Leiden community detection)
+- Outlier highlighting (low neighbor similarity)
 
 ---
 
@@ -440,9 +451,9 @@ Integrate the existing HTML scraper into the admin dashboard for creating custom
 
 Standardized dual-dimension system for online/offline semantic search.
 
-**Status:** DECIDED - Implementation planned
+**Status:** IMPLEMENTED (Dec 2025)
 
-**See [docs/optimization-notes.md](docs/optimization-notes.md) for full details.**
+**See DEVELOPER.md "Offline Architecture" section for full details.**
 
 **The Decision:**
 
@@ -468,7 +479,7 @@ Standardized dual-dimension system for online/offline semantic search.
 
 Four-tier system supporting different hardware and use cases.
 
-**Status:** DECIDED - See [docs/optimization-notes.md](docs/optimization-notes.md)
+**Status:** IMPLEMENTED - See DEVELOPER.md "Offline Architecture" section
 
 | Tier | Hardware | Role | Primary Actions |
 |------|----------|------|-----------------|
@@ -516,46 +527,56 @@ Add FEMA, Cal Fire, EPA sources.
 
 Downloadable translation packs for multi-language support without duplicating content.
 
-**Status:** Planning (after indexing/chat functions stable)
+**Status:** PHASE 1 COMPLETE (Dec 2025)
 
-**Problem:**
-- Multi-language ZIMs contain the same content in 39+ languages
-- Storing all translations = gigabytes of duplicated information
-- Current approach: keep English canonical, filter other languages at index time
+**See [docs/language-packs.md](docs/language-packs.md) for full implementation details.**
 
-**Solution: Offline Translation Packs**
-- Keep one canonical language (English) in the index
-- Downloadable translation packs (~50MB each) for offline use
-- Multi-lingual dictionaries for word/phrase lookup
-- "Preferred language" selector in chat interface
-- Translate on-demand from English to user's preferred language
+**Phase 1 Complete - Article Translation:**
+- LanguageRegistry with 8 priority languages (MarianMT models)
+- TranslationService with article caching
+- API endpoints for download/install/set-active
+- Languages tab in admin panel (Sources page)
+- ZIM viewer auto-translation with visual indicator badge
+- Translations cached for instant repeat visits
 
-**Pack Structure:**
-```
-language_packs/
-  es_spanish.pack       # ~50MB Spanish translation data
-  fr_french.pack        # ~50MB French translation data
-  ar_arabic.pack        # ~50MB Arabic translation data
-```
+**How It Works Now:**
+1. User downloads a language pack from Languages tab (~300MB each)
+2. User clicks "Set Active" on the installed pack
+3. User browses any ZIM article - it's automatically translated
+4. Green badge shows "Translated to [Language]" in corner
+5. Translations are cached for instant repeat visits
 
-**User Experience:**
-1. User downloads base content (English) + language pack
-2. Selects preferred language in chat settings
-3. Search happens in English (canonical)
-4. Results displayed/translated in preferred language
-5. Works fully offline with downloaded pack
+**8 Priority Languages:**
+- Spanish, French, Arabic, Chinese (Simplified)
+- Portuguese, Hindi, Swahili, Haitian Creole
 
-**Benefits:**
-- Storage: 1 copy of content + small language packs vs N copies in N languages
-- Search quality: Single consistent index instead of fragmented language indexes
-- Distribution: Smaller base download, optional language packs
-- Offline: Full translation capability without internet
+**Future Phases (not implemented):**
 
-**UI Placeholders:**
-- Source pages already have language pack download placeholders
-- Chat settings will add "Preferred Language" dropdown
+*Phase 2 - Chat Translation:*
+- User types in their language, query translated to English for search
+- LLM response translated back to user's language
+- Requires `translate_to_english()` method in TranslationService
 
-**Note:** Prioritizing offline translation over online browser translation tools since the core use case is disaster preparedness without internet access.
+*Phase 3 - NLLB Universal Model:*
+- Single ~2.4GB model supporting 200 languages
+- Language dropdown for all online users
+- Auto-detect source language
+- Suitable for Railway deployment (server-side translation)
+
+*Phase 4 - Source Localization (Best Experience):*
+- Local Admin pre-translates entire sources at index time
+- Creates `source_es/` variant with translated metadata
+- Re-embeds translated text (Spanish embeddings for Spanish queries)
+- Zero runtime translation - embeddings match query language natively
+- Multilingual LLMs (Aya 23, Suzume-Llama-3) for native responses
+- Storage doubles per language (local only, not on global R2)
+
+**Key Files:**
+- `offline_tools/translation.py` - TranslationService + TranslationCache
+- `offline_tools/language_registry.py` - 8 language packs metadata
+- `admin/routes/models.py` - Language API endpoints
+- `admin/templates/sources.html` - Languages tab UI
+- `admin/zim_server.py` - Auto-translation integration
 
 ---
 
@@ -773,7 +794,7 @@ disaster-clippy-solar.zim    # 150MB - Solar/energy
 
 Provide AI capabilities without internet.
 
-**Status:** DECIDED - See [docs/optimization-notes.md](docs/optimization-notes.md) for RPi5 analysis
+**Status:** IMPLEMENTED (Dec 2025) - See DEVELOPER.md "Offline Architecture" section
 
 **Recommended for RPi5 (Consumer Tier):**
 - Embedding: all-mpnet-base-v2 (768-dim, ~500MB RAM)
@@ -1222,11 +1243,11 @@ The chat maintains conversation history and article references for follow-up que
 | Document | Purpose |
 |----------|---------|
 | [README.md](README.md) | Quick start and project overview |
-| [DEVELOPER.md](DEVELOPER.md) | Technical details, CLI tools, security |
+| [DEVELOPER.md](DEVELOPER.md) | Technical details, offline architecture, CLI tools |
 | [SUMMARY.md](SUMMARY.md) | Executive summary (non-technical) |
 | [CONTEXT.md](CONTEXT.md) | Architecture and design decisions |
-| [docs/optimization-notes.md](docs/optimization-notes.md) | **Dual embedding architecture, tier system, implementation plan** |
+| [docs/language-packs.md](docs/language-packs.md) | Offline translation system (Phase 1-3 roadmap) |
 
 ---
 
-*Last Updated: December 11, 2025*
+*Last Updated: December 12, 2025*

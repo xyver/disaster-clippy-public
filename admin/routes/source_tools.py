@@ -14,7 +14,7 @@ import json
 
 from offline_tools.schemas import (
     get_manifest_file, get_metadata_file, get_index_file,
-    get_vectors_file, get_backup_manifest_file
+    get_vectors_file, get_vectors_768_file, get_backup_manifest_file
 )
 
 router = APIRouter(prefix="/api", tags=["Source Tools"])
@@ -57,11 +57,18 @@ class CreateIndexRequest(BaseModel):
     force_reindex: bool = False
     language_filter: Optional[str] = None  # ISO code like 'en', 'es' to filter ZIM articles
     resume: bool = False  # If True, resume from checkpoint if available
+    dimension: int = 1536  # Embedding dimension: 1536 (online) or 768 (offline)
+
+
+class Generate768VectorsRequest(BaseModel):
+    """Request to generate 768-dim vectors for offline pack distribution"""
+    source_id: str
 
 
 class ValidateSourceRequest(BaseModel):
     source_id: str
     require_v2: bool = False
+    deep: bool = False  # If True, perform full integrity checks (slower but thorough)
 
 
 class RenameSourceRequest(BaseModel):
@@ -242,6 +249,8 @@ async def get_local_sources():
             "has_metadata": False,
             "has_backup": False,
             "has_embeddings": False,
+            "has_vectors_768": False,  # 768-dim vectors for offline use
+            "has_vectors_1536": False,  # 1536-dim vectors for online use
             "backup_type": None,
             "backup_size_mb": 0,
             "document_count": 0,
@@ -311,13 +320,19 @@ async def get_local_sources():
             manifest_file = source_folder / get_manifest_file()
             metadata_file = source_folder / get_metadata_file()
             vectors_file = source_folder / get_vectors_file()
+            vectors_768_file = source_folder / get_vectors_768_file()
 
             source_status["has_manifest"] = manifest_file.exists()
             source_status["has_metadata_file"] = metadata_file.exists()
             source_status["has_vectors_file"] = vectors_file.exists()
 
+            # Check both vector dimensions
+            source_status["has_vectors_1536"] = vectors_file.exists()
+            source_status["has_vectors_768"] = vectors_768_file.exists()
+
             # Determine schema version and embeddings status
-            if source_status["has_manifest"] and source_status["has_metadata_file"] and source_status["has_vectors_file"]:
+            has_any_vectors = source_status["has_vectors_1536"] or source_status["has_vectors_768"]
+            if source_status["has_manifest"] and source_status["has_metadata_file"] and has_any_vectors:
                 source_status["schema_version"] = 3
                 source_status["has_embeddings"] = True
             else:
@@ -1191,11 +1206,16 @@ async def create_index(request: CreateIndexRequest):
 
     Supports checkpoint-based resumption for ZIM files. If resume=True
     and a checkpoint exists, continues from where it left off.
+
+    The dimension parameter (768 or 1536) determines:
+    - 1536: Uses OpenAI text-embedding-3-small (online search)
+    - 768: Uses local all-mpnet-base-v2 (offline search)
     """
     from admin.job_manager import get_job_manager
 
     def _run_create_index(source_id: str, limit: int, force: bool,
                           language_filter: str = None, resume: bool = False,
+                          dimension: int = 1536,
                           progress_callback=None, cancel_checker=None):
         from offline_tools.source_manager import SourceManager
         manager = SourceManager()
@@ -1206,7 +1226,8 @@ async def create_index(request: CreateIndexRequest):
             progress_callback=progress_callback,
             language_filter=language_filter,
             resume=resume,
-            cancel_checker=cancel_checker
+            cancel_checker=cancel_checker,
+            dimension=dimension
         )
 
         # Handle cancelled jobs
@@ -1226,13 +1247,15 @@ async def create_index(request: CreateIndexRequest):
             request.limit,
             request.force_reindex,
             request.language_filter,
-            request.resume
+            request.resume,
+            request.dimension
         )
     except ValueError as e:
         raise HTTPException(409, str(e))
 
     lang_msg = f" (language: {request.language_filter})" if request.language_filter else ""
     resume_msg = " (resuming)" if request.resume else ""
+    dim_msg = f" ({request.dimension}-dim)"
     return {
         "status": "submitted",
         "job_id": job_id,
@@ -1241,8 +1264,269 @@ async def create_index(request: CreateIndexRequest):
         "force_reindex": request.force_reindex,
         "language_filter": request.language_filter,
         "resume": request.resume,
-        "message": f"Index creation started for {request.source_id}{lang_msg}{resume_msg}"
+        "dimension": request.dimension,
+        "message": f"Index creation started for {request.source_id}{lang_msg}{resume_msg}{dim_msg}"
     }
+
+
+# =============================================================================
+# ADMIN MODE DETECTION
+# =============================================================================
+
+@router.get("/admin-mode")
+async def get_admin_mode():
+    """
+    Detect if user is a global admin (can create both 1536 and 768 vectors)
+    or local admin (only works with local embeddings).
+
+    Global admin detection:
+    - Has OPENAI_API_KEY set (can create 1536-dim embeddings)
+    - Or has GLOBAL_ADMIN=true in .env
+
+    Returns:
+        is_global_admin: bool
+        can_create_1536: bool (has OpenAI API key)
+        can_create_local: bool (configured embedding model is installed)
+        configured_model: dict with model info (id, display_name, dimension)
+        model_installed: bool (is the configured model specifically installed)
+        recommended_workflow: str
+    """
+    import os
+    from offline_tools.model_registry import get_model_registry, AVAILABLE_MODELS
+
+    has_openai_key = bool(os.getenv("OPENAI_API_KEY"))
+    is_global_admin = has_openai_key or os.getenv("GLOBAL_ADMIN", "").lower() == "true"
+
+    # Get configured embedding model from settings
+    configured_model_id = "all-mpnet-base-v2"  # Default
+    try:
+        from admin.local_config import get_local_config
+        config = get_local_config()
+        configured_model_id = config.get_embedding_model() or "all-mpnet-base-v2"
+    except Exception:
+        pass
+
+    # Get model info from registry
+    model_info = AVAILABLE_MODELS.get(configured_model_id, {})
+    configured_dimension = model_info.get("dimensions", 768)
+    configured_display_name = model_info.get("display_name", f"{configured_model_id} ({configured_dimension}-dim)")
+
+    # Check if the configured embedding model is installed
+    model_installed = False
+    can_create_local = False
+    try:
+        registry = get_model_registry()
+        # Check if the specific configured model is installed
+        model_installed = registry.is_model_installed(configured_model_id)
+
+        # Also check if any embedding model is available (fallback)
+        any_embedding = registry.get_installed_embedding_model()
+        can_create_local = model_installed or (any_embedding is not None)
+    except Exception as e:
+        print(f"Model registry check failed: {e}")
+        # Try sentence-transformers directly as fallback
+        try:
+            from sentence_transformers import SentenceTransformer
+            can_create_local = True
+            model_installed = True  # Assume available if sentence-transformers works
+        except ImportError:
+            pass
+
+    # Determine recommended workflow
+    if is_global_admin:
+        if can_create_local:
+            workflow = "Create 1536-dim for online search, then generate local embeddings for pack distribution"
+        else:
+            workflow = "Create 1536-dim for online search. Install embedding model for offline packs."
+    else:
+        if model_installed:
+            workflow = f"Create {configured_dimension}-dim embeddings for offline semantic search"
+        elif can_create_local:
+            workflow = f"Download {configured_display_name} from Models page, then create embeddings"
+        else:
+            workflow = "Install embedding model from Models tab to enable semantic search"
+
+    return {
+        "is_global_admin": is_global_admin,
+        "can_create_1536": has_openai_key,
+        "can_create_local": can_create_local,
+        "can_create_768": can_create_local,  # Backwards compatibility
+        "configured_model": {
+            "id": configured_model_id,
+            "display_name": configured_display_name,
+            "dimension": configured_dimension
+        },
+        "model_installed": model_installed,
+        "recommended_workflow": workflow
+    }
+
+
+@router.post("/generate-768-vectors")
+async def generate_768_vectors(request: Generate768VectorsRequest):
+    """
+    Generate 768-dim embeddings for offline pack distribution.
+
+    This is a separate step from the main indexing (which uses 1536-dim).
+    Global admins use this to create the downloadable offline version
+    of their source packs.
+
+    Runs as a background job since embedding generation can take a while.
+    """
+    from admin.job_manager import get_job_manager
+    import os
+
+    # Verify we have the local embedding model
+    can_create_768 = False
+    try:
+        from offline_tools.model_registry import get_model_registry
+        registry = get_model_registry()
+        embedding_model = registry.get_installed_embedding_model()
+        can_create_768 = embedding_model is not None
+    except Exception:
+        try:
+            from sentence_transformers import SentenceTransformer
+            can_create_768 = True
+        except ImportError:
+            pass
+
+    if not can_create_768:
+        raise HTTPException(
+            400,
+            "Local embedding model not available. Install from Models tab first."
+        )
+
+    def _run_generate_768(source_id: str, progress_callback=None, cancel_checker=None):
+        """Background job to generate 768-dim vectors"""
+        from offline_tools.source_manager import SourceManager
+        from offline_tools.indexer import generate_768_vectors
+        from pathlib import Path
+
+        config = get_local_config()
+        backup_folder = config.get_backup_folder()
+        if not backup_folder:
+            return {"status": "error", "error": "No backup folder configured"}
+
+        source_folder = Path(backup_folder) / source_id
+
+        # Load documents from _index.json
+        index_file = source_folder / "_index.json"
+        if not index_file.exists():
+            return {"status": "error", "error": "Source not indexed. Run Create Index first."}
+
+        try:
+            with open(index_file, 'r', encoding='utf-8') as f:
+                index_data = json.load(f)
+        except Exception as e:
+            return {"status": "error", "error": f"Failed to load index: {e}"}
+
+        # Convert index format to document list
+        documents = []
+        for doc_id, doc_data in index_data.get("documents", {}).items():
+            documents.append({
+                "id": doc_id,
+                "content": doc_data.get("content", ""),
+                "title": doc_data.get("title", ""),
+            })
+
+        if not documents:
+            return {"status": "error", "error": "No documents found in index"}
+
+        # Generate 768-dim vectors
+        result_path = generate_768_vectors(
+            source_folder,
+            source_id,
+            documents,
+            progress_callback=progress_callback
+        )
+
+        if result_path:
+            return {
+                "status": "success",
+                "source_id": source_id,
+                "vectors_file": str(result_path),
+                "document_count": len(documents),
+                "message": f"Generated 768-dim vectors for {len(documents)} documents"
+            }
+        else:
+            return {"status": "error", "error": "Failed to generate 768-dim vectors"}
+
+    manager = get_job_manager()
+
+    try:
+        job_id = manager.submit(
+            "vectors_768",
+            request.source_id,
+            _run_generate_768,
+            request.source_id
+        )
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+
+    return {
+        "status": "submitted",
+        "job_id": job_id,
+        "source_id": request.source_id,
+        "message": f"768-dim vector generation started for {request.source_id}"
+    }
+
+
+@router.get("/vector-status/{source_id}")
+async def get_vector_status(source_id: str):
+    """
+    Get the status of vector files for a source.
+
+    Returns info about all dimension vector files (384, 768, 1024, 1536).
+    """
+    from offline_tools.schemas import get_vectors_file
+    import re
+
+    config = get_local_config()
+    backup_folder = config.get_backup_folder()
+
+    if not backup_folder:
+        raise HTTPException(400, "No backup folder configured")
+
+    source_folder = Path(backup_folder) / source_id
+
+    result = {
+        "source_id": source_id,
+        "has_1536": False,
+        "has_768": False,
+        "has_384": False,
+        "has_1024": False,
+        "vectors_1536": None,
+        "vectors_768": None,
+        "vectors_384": None,
+        "vectors_1024": None
+    }
+
+    def read_vector_info(path, default_dim):
+        """Read vector file header info"""
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                content = f.read(2000)
+                doc_count_match = re.search(r'"document_count":\s*(\d+)', content)
+                dim_match = re.search(r'"dimensions":\s*(\d+)', content)
+                model_match = re.search(r'"embedding_model":\s*"([^"]+)"', content)
+
+                return {
+                    "file": str(path),
+                    "size_mb": path.stat().st_size / (1024 * 1024),
+                    "document_count": int(doc_count_match.group(1)) if doc_count_match else 0,
+                    "dimensions": int(dim_match.group(1)) if dim_match else default_dim,
+                    "embedding_model": model_match.group(1) if model_match else "unknown"
+                }
+        except Exception as e:
+            return {"error": str(e)}
+
+    # Check all supported dimensions
+    for dim in [384, 768, 1024, 1536]:
+        vectors_path = source_folder / get_vectors_file(dim)
+        if vectors_path.exists():
+            result[f"has_{dim}"] = True
+            result[f"vectors_{dim}"] = read_vector_info(vectors_path, dim)
+
+    return result
 
 
 # =============================================================================
@@ -1420,6 +1704,16 @@ async def validate_source(request: ValidateSourceRequest):
     """
     Validate source completeness and readiness for distribution.
 
+    Two validation modes:
+    - Light (deep=False, default): Fast header-based checks for local admin
+    - Deep (deep=True): Full file loading for global admin integrity checks
+
+    Deep validation adds:
+    - Full document/vector count verification
+    - Document ID cross-reference (metadata IDs vs vector IDs)
+    - Vector integrity sampling
+    - Header vs actual count consistency
+
     Returns validation results including actionable_issues - a list of issues
     with hints about which wizard step/tool can fix them.
     """
@@ -1427,7 +1721,7 @@ async def validate_source(request: ValidateSourceRequest):
         from offline_tools.source_manager import SourceManager
 
         manager = SourceManager()
-        result = manager.validate_source(request.source_id)
+        result = manager.validate_source(request.source_id, deep=request.deep)
 
         # Convert actionable_issues to dicts for JSON serialization
         actionable = [issue.to_dict() for issue in result.actionable_issues] if result.actionable_issues else []
@@ -1451,6 +1745,9 @@ async def validate_source(request: ValidateSourceRequest):
             "warnings": result.warnings,
             "detected_license": result.detected_license,
             "suggested_tags": result.suggested_tags,
+            # Dual-dimension vector status
+            "has_vectors_768": result.has_vectors_768,
+            "has_vectors_1536": result.has_vectors_1536,
             # New actionable issues with fix hints
             "actionable_issues": actionable
         }
@@ -1619,15 +1916,16 @@ async def rename_source(request: RenameSourceRequest):
         raise HTTPException(500, f"Rename failed: {e}")
 
 
-@router.post("/delete-source")
-async def delete_source(request: DeleteSourceRequest):
-    """Completely remove a source from the system"""
+def _run_delete_job(source_id: str, delete_files: bool, progress_callback=None, cancel_checker=None):
+    """Background job to delete a source from the system"""
     import shutil
 
-    source_id = request.source_id
     deleted_items = []
     errors = []
     config = get_local_config()
+
+    if progress_callback:
+        progress_callback(5, f"Removing {source_id} from config...")
 
     # 1. Remove from installed_packs in local config
     try:
@@ -1642,7 +1940,9 @@ async def delete_source(request: DeleteSourceRequest):
 
     # 2. Delete local backup folder if requested
     freed_mb = 0
-    if request.delete_files:
+    if delete_files:
+        if progress_callback:
+            progress_callback(15, f"Deleting backup files for {source_id}...")
         try:
             backup_folder = config.get_backup_folder()
             if backup_folder:
@@ -1657,6 +1957,9 @@ async def delete_source(request: DeleteSourceRequest):
         except Exception as e:
             errors.append(f"Failed to delete backup folder: {e}")
 
+    if progress_callback:
+        progress_callback(30, f"Updating _master.json...")
+
     # 3. Remove from _master.json
     try:
         backup_folder = config.get_backup_folder()
@@ -1670,6 +1973,11 @@ async def delete_source(request: DeleteSourceRequest):
                     source_info = master_data["sources"][source_id]
                     master_data["total_documents"] = master_data.get("total_documents", 0) - source_info.get("count", 0)
                     master_data["total_chars"] = master_data.get("total_chars", 0) - source_info.get("chars", 0)
+                    # Also update total_size_bytes if present
+                    if "total_size_bytes" in master_data:
+                        master_data["total_size_bytes"] = master_data.get("total_size_bytes", 0) - source_info.get("size_bytes", 0)
+                    # Update source_count
+                    master_data["source_count"] = len(master_data.get("sources", {})) - 1
 
                     del master_data["sources"][source_id]
                     master_data["last_updated"] = datetime.now().isoformat()
@@ -1681,10 +1989,15 @@ async def delete_source(request: DeleteSourceRequest):
     except Exception as e:
         errors.append(f"Failed to remove from _master.json: {e}")
 
-    # 4. Try to remove from ChromaDB if it exists
+    if progress_callback:
+        progress_callback(40, f"Deleting vectors from ChromaDB (this may take a moment)...")
+
+    # 4. Try to remove from local ChromaDB if it exists
+    deleted_count = 0
     try:
         from offline_tools.vectordb import get_vector_store
-        store = get_vector_store()
+        # Explicitly use mode="local" and read_only=True (delete doesn't need embeddings)
+        store = get_vector_store(mode="local", read_only=True)
         # Note: metadata field is "source", not "source_id"
         result = store.delete_by_source(source_id)
         deleted_count = result.get("deleted_count", 0)
@@ -1693,17 +2006,48 @@ async def delete_source(request: DeleteSourceRequest):
     except Exception as e:
         errors.append(f"Failed to remove from ChromaDB: {e}")
 
-    if errors and not deleted_items:
-        raise HTTPException(500, f"Delete failed: {'; '.join(errors)}")
+    if progress_callback:
+        progress_callback(100, f"Deleted {source_id}")
 
     return {
         "status": "success" if not errors else "partial",
         "source_id": source_id,
         "deleted": deleted_items,
         "freed_mb": round(freed_mb, 2),
+        "deleted_vectors": deleted_count,
         "errors": errors if errors else None,
         "message": f"Deleted {source_id}: {', '.join(deleted_items)}"
     }
+
+
+@router.post("/delete-source")
+async def delete_source(request: DeleteSourceRequest):
+    """
+    Completely remove a source from the system.
+    Runs as a background job since ChromaDB deletion can be slow.
+    """
+    from admin.job_manager import get_job_manager
+
+    source_id = request.source_id
+    manager = get_job_manager()
+
+    try:
+        job_id = manager.submit(
+            "delete_source",
+            source_id,
+            _run_delete_job,
+            source_id,
+            request.delete_files
+        )
+
+        return {
+            "status": "queued",
+            "job_id": job_id,
+            "source_id": source_id,
+            "message": f"Delete job started for {source_id}"
+        }
+    except Exception as e:
+        raise HTTPException(500, f"Failed to start delete job: {e}")
 
 
 # =============================================================================
@@ -2063,7 +2407,8 @@ def _run_install_job(source_id: str, include_backup: bool, sync_mode: str = "upd
             progress_callback(5, f"Deleting old vectors for {source_id}...")
 
         try:
-            store = get_vector_store(mode="local")
+            # read_only=True - delete doesn't need embeddings
+            store = get_vector_store(mode="local", read_only=True)
             delete_result = store.delete_by_source(source_id)
             deleted_count = delete_result.get("deleted_count", 0)
             print(f"[install] Deleted {deleted_count} old vectors for {source_id}")
@@ -2191,7 +2536,8 @@ async def check_local_source(source_id: str):
     source_id = source_id.strip().lower()
 
     try:
-        store = get_vector_store(mode="local")
+        # Use read_only=True to skip embedding model initialization (much faster)
+        store = get_vector_store(mode="local", read_only=True)
         vector_count = store.get_source_vector_count(source_id)
 
         if vector_count > 0:
@@ -2388,8 +2734,8 @@ async def delete_local_source(source_id: str, delete_files: bool = False):
 
     source_id = source_id.strip().lower()
 
-    # Get local ChromaDB store
-    store = get_vector_store(mode="local")
+    # Get local ChromaDB store (read_only=True - delete doesn't need embeddings)
+    store = get_vector_store(mode="local", read_only=True)
 
     # Get documents for this source
     try:
@@ -2427,3 +2773,190 @@ async def delete_local_source(source_id: str, delete_files: bool = False):
         "documents_deleted": deleted_count,
         "files_deleted": files_deleted
     }
+
+
+# =============================================================================
+# DEBUG ENDPOINTS
+# =============================================================================
+
+@router.get("/debug/chromadb-sources")
+async def debug_chromadb_sources(search: str = None):
+    """
+    Debug endpoint to inspect what source values exist in local ChromaDB.
+
+    Args:
+        search: Optional search pattern to filter sources (case-insensitive)
+
+    Returns:
+        List of unique source values and their counts
+    """
+    from offline_tools.vectordb import get_vector_store
+
+    try:
+        # Use read_only=True to skip embedding model initialization
+        store = get_vector_store(mode="local", read_only=True)
+        collection = store.collection
+
+        # Get all documents with their source metadata
+        results = collection.get(include=["metadatas"])
+
+        # Count by source
+        source_counts = {}
+        source_samples = {}  # Store sample doc IDs for each source
+
+        for i, metadata in enumerate(results.get("metadatas", [])):
+            if metadata and "source" in metadata:
+                source = metadata["source"]
+                source_counts[source] = source_counts.get(source, 0) + 1
+
+                # Store up to 3 sample doc IDs per source
+                if source not in source_samples:
+                    source_samples[source] = []
+                if len(source_samples[source]) < 3:
+                    source_samples[source].append(results["ids"][i])
+
+        # Filter if search pattern provided
+        if search:
+            search_lower = search.lower()
+            source_counts = {k: v for k, v in source_counts.items()
+                           if search_lower in k.lower()}
+            source_samples = {k: v for k, v in source_samples.items()
+                            if search_lower in k.lower()}
+
+        # Sort by count descending
+        sorted_sources = sorted(source_counts.items(), key=lambda x: -x[1])
+
+        return {
+            "total_documents": len(results.get("ids", [])),
+            "unique_sources": len(source_counts),
+            "sources": [
+                {
+                    "source": source,
+                    "count": count,
+                    "sample_ids": source_samples.get(source, [])
+                }
+                for source, count in sorted_sources
+            ]
+        }
+
+    except Exception as e:
+        import traceback
+        return {
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }
+
+
+@router.get("/debug/chromadb-search/{source_id}")
+async def debug_chromadb_search_source(source_id: str):
+    """
+    Debug endpoint to find vectors for a specific source.
+    Uses ChromaDB where filter for fast lookup (doesn't scan all docs).
+    """
+    from offline_tools.vectordb import get_vector_store
+
+    try:
+        # Use read_only=True to skip embedding model initialization
+        store = get_vector_store(mode="local", read_only=True)
+        collection = store.collection
+
+        results = {
+            "search_term": source_id,
+            "exact_match": {"count": 0, "sample_ids": []},
+            "lowercase_match": {"count": 0, "sample_ids": []},
+        }
+
+        # Fast query using ChromaDB where filter (exact match)
+        exact_results = collection.get(
+            where={"source": source_id},
+            include=[]
+        )
+        exact_ids = exact_results.get("ids", [])
+        results["exact_match"]["count"] = len(exact_ids)
+        results["exact_match"]["sample_ids"] = exact_ids[:5]
+
+        # Also try lowercase version if different
+        source_lower = source_id.lower()
+        if source_lower != source_id:
+            lower_results = collection.get(
+                where={"source": source_lower},
+                include=[]
+            )
+            lower_ids = lower_results.get("ids", [])
+            results["lowercase_match"]["count"] = len(lower_ids)
+            results["lowercase_match"]["sample_ids"] = lower_ids[:5]
+
+        results["total_found"] = (
+            results["exact_match"]["count"] +
+            results["lowercase_match"]["count"]
+        )
+
+        return results
+
+    except Exception as e:
+        import traceback
+        return {
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }
+
+
+@router.delete("/debug/chromadb-force-delete/{source_pattern}")
+async def debug_force_delete_source(source_pattern: str, dry_run: bool = True):
+    """
+    Force delete vectors matching a source pattern (case-insensitive).
+
+    Args:
+        source_pattern: Pattern to match (will match any source containing this)
+        dry_run: If True, only report what would be deleted without actually deleting
+
+    USE WITH CAUTION - this bypasses normal safety checks.
+    """
+    from offline_tools.vectordb import get_vector_store
+
+    try:
+        # Use read_only=True to skip embedding model initialization
+        store = get_vector_store(mode="local", read_only=True)
+        collection = store.collection
+
+        # Get all documents
+        all_docs = collection.get(include=["metadatas"])
+
+        # Find matching IDs
+        ids_to_delete = []
+        sources_found = set()
+
+        for i, metadata in enumerate(all_docs.get("metadatas", [])):
+            if metadata and "source" in metadata:
+                source = metadata["source"]
+                if source_pattern.lower() in source.lower():
+                    ids_to_delete.append(all_docs["ids"][i])
+                    sources_found.add(source)
+
+        result = {
+            "pattern": source_pattern,
+            "dry_run": dry_run,
+            "sources_matched": list(sources_found),
+            "documents_to_delete": len(ids_to_delete),
+            "sample_ids": ids_to_delete[:10]
+        }
+
+        if not dry_run and ids_to_delete:
+            # Actually delete
+            collection.delete(ids=ids_to_delete)
+            result["deleted"] = True
+            result["message"] = f"Deleted {len(ids_to_delete)} documents"
+        elif not dry_run:
+            result["deleted"] = False
+            result["message"] = "No documents matched the pattern"
+        else:
+            result["message"] = "Dry run - no documents deleted. Set dry_run=false to delete."
+
+        return result
+
+    except Exception as e:
+        import traceback
+        return {
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }

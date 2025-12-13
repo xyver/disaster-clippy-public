@@ -4,26 +4,27 @@ This document covers the implementation of language packs for offline translatio
 
 **Goal:** Enable non-English users to interact with the app in their language, with all content translated on-device.
 
-**Prerequisite:** For full AI experience, users should also have the Embedding Model and LLM Model installed (see [offline-upgrade.md](offline-upgrade.md)).
+**Prerequisite:** For full AI experience, users should also have the Embedding Model and LLM Model installed (see DEVELOPER.md "Offline Architecture" section).
 
 ---
 
 ## Table of Contents
 1. [System Architecture Context](#system-architecture-context)
-2. [Core Concept](#core-concept)
-3. [Translation Flow](#translation-flow)
-4. [Why English-Only Index](#why-english-only-index)
-5. [Translation Model Options](#translation-model-options)
-6. [Language Pack Structure](#language-pack-structure)
-7. [Translation Caching Strategy](#translation-caching-strategy)
-8. [UI Translation](#ui-translation)
-9. [Translation Service Code](#translation-service-code)
-10. [Chat Integration](#chat-integration)
-11. [Website Viewer Integration](#website-viewer-integration)
-12. [Priority Languages](#priority-languages)
-13. [Implementation Phases](#implementation-phases)
-14. [Size Estimates](#size-estimates)
-15. [Three-Pack Model System](#three-pack-model-system)
+2. [Modular Download Architecture](#modular-download-architecture)
+3. [Core Concept](#core-concept)
+4. [Translation Flow](#translation-flow)
+5. [Why English-Only Index](#why-english-only-index)
+6. [Translation Model Options](#translation-model-options)
+7. [Language Pack Structure](#language-pack-structure)
+8. [Translation Caching Strategy](#translation-caching-strategy)
+9. [UI Translation](#ui-translation)
+10. [Translation Service Code](#translation-service-code)
+11. [Chat Integration](#chat-integration)
+12. [Website Viewer Integration](#website-viewer-integration)
+13. [Priority Languages](#priority-languages)
+14. [Implementation Phases](#implementation-phases)
+15. [Size Estimates](#size-estimates)
+16. [Three-Pack Model System](#three-pack-model-system)
 
 ---
 
@@ -76,7 +77,93 @@ User Experience Stack (Non-English User):
 | `admin/ai_service.py` | Chat/search orchestration |
 | `admin/routes/packs.py` | Download system |
 | `local_settings.json` | User configuration |
-| `offline_tools/translation.py` | **NEW: Translation service** |
+| `offline_tools/translation.py` | Translation service (MarianMT/NLLB) |
+| `offline_tools/language_registry.py` | Language pack metadata and install status |
+| `admin/routes/models.py` | API endpoints for models and languages |
+| `admin/templates/sources.html` | Languages tab UI |
+
+---
+
+## Modular Download Architecture
+
+Users can pick and choose exactly what they need from the global system. This creates a flexible pack system for different use cases.
+
+### Source Pack Components
+
+Each source (e.g., `appropedia`) can be downloaded with different components:
+
+| Component | Size | Purpose | Who Needs It |
+|-----------|------|---------|--------------|
+| **Backup files** | Varies | Raw content (ZIM/HTML) | Everyone (offline browsing) |
+| **768-dim vectors** | ~3KB/doc | Offline semantic search | Offline users |
+| **1536-dim vectors** | ~6KB/doc | Online semantic search | Hybrid/online users |
+
+### Download Options Per Source
+
+| Package | Contents | Use Case |
+|---------|----------|----------|
+| Backup only | Raw files | Custom indexing, Kiwix browsing |
+| Backup + 768 | Files + offline vectors | Full offline experience |
+| 768 only | Vectors without files | Space-constrained (search only) |
+| 1536 only | Online vectors | Online-only deployment |
+| Backup + 768 + 1536 | Everything | Hybrid online/offline |
+
+### Global Model Packs (Shared Across Sources)
+
+| Pack | Size | Purpose |
+|------|------|---------|
+| **Embedding Model** | ~420MB | Generate query embeddings offline |
+| **LLM Model** | ~2GB | Generate AI responses offline |
+| **Language Pack** | ~300MB each | Translation (per language) |
+
+### Example Configurations
+
+**Consumer (RPi5 8GB) - Spanish speaker:**
+```
+Downloads:
+- appropedia (backup + 768)       ~500MB
+- ready_gov (backup + 768)        ~50MB
+- Embedding model                 ~420MB
+- LLM (Llama 3.2 3B)             ~2GB
+- Spanish language pack           ~300MB
+Total: ~3.3GB
+```
+
+**Local Admin (Laptop 16GB) - Creating custom sources:**
+```
+Downloads:
+- Same as Consumer, plus:
+- Embedding model for indexing
+- Space for custom sources
+- Multiple language packs (optional)
+```
+
+**Online-only deployment (Railway):**
+```
+No downloads needed - uses:
+- Pinecone (1536-dim vectors)
+- OpenAI API (embeddings + LLM)
+- Server-side translation (NLLB)
+```
+
+### Future: Localized Source Variants (Phase 4)
+
+Local Admins can create localized versions of sources:
+
+```
+Global (R2)                    Local Admin
+-----------                    -----------
+appropedia/                    appropedia_en/  (downloaded)
+  _metadata.json (English)         |
+  _vectors_768.json               [Localize to Spanish]
+                                   |
+                                   v
+                               appropedia_es/  (localized)
+                                 _metadata.json (Spanish titles/content)
+                                 _vectors_768.json (Spanish embeddings)
+```
+
+This eliminates runtime translation entirely - embeddings match query language natively.
 
 ---
 
@@ -863,47 +950,101 @@ def view_article(source_id: str, article_id: str):
 
 ## Implementation Phases
 
-### Phase 1: Translation Infrastructure
+### Phase 1: Translation Infrastructure (COMPLETE)
 
-- [ ] Create TranslationService class
-- [ ] Implement MarianMT model loading from portable path
-- [ ] Basic translate_to/from_english methods
-- [ ] Language detection
+- [x] Create TranslationService class (`offline_tools/translation.py`)
+- [x] Implement MarianMT model loading from portable path
+- [x] Basic translate_to/from_english methods
+- [x] Language detection via LanguageRegistry (`offline_tools/language_registry.py`)
 
-### Phase 2: Caching System
+### Phase 2: Caching System (COMPLETE)
 
-- [ ] TranslationCache class
-- [ ] Article translation caching
-- [ ] Cache invalidation logic
-- [ ] LRU eviction when over size limit
+- [x] TranslationCache class
+- [x] Article translation caching
+- [x] Cache invalidation logic
+- [x] LRU eviction when over size limit
 
-### Phase 3: UI Translation
+### Phase 3: UI Translation (PARTIAL)
 
-- [ ] Built-in locale files (en, es)
-- [ ] UI string translation and caching
-- [ ] Language selector in settings
-- [ ] RTL support for Arabic
+- [ ] Built-in locale files (en, es) - Future enhancement
+- [ ] UI string translation and caching - Future enhancement
+- [x] Language selector in admin (Languages tab)
+- [ ] RTL support for Arabic - Future enhancement
 
-### Phase 4: Integration
+### Phase 4: Integration (PARTIAL - Phase 1 Complete)
 
-- [ ] Chat service translation hooks
-- [ ] Article viewer translation
-- [ ] Search query translation
-- [ ] Error messages in user's language
+- [ ] Chat service translation hooks - Phase 2 feature (query/response translation)
+- [x] Article viewer translation - ZIM viewer auto-translates when language pack active
+- [ ] Search query translation - Phase 2 feature
+- [ ] Error messages in user's language - Future enhancement
 
-### Phase 5: Download UI
+### Phase 5: Download UI (COMPLETE)
 
-- [ ] Language pack cards in Models tab
-- [ ] Download/install flow
-- [ ] Active language selection
-- [ ] NLLB vs MarianMT choice
+- [x] Language pack cards in Languages tab (`admin/templates/sources.html`)
+- [x] Download/install flow (HuggingFace via `admin/routes/models.py`)
+- [x] Active language selection
+- [ ] NLLB vs MarianMT choice - Phase 3 feature
 
-### Phase 6: NLLB Support (Optional)
+### Phase 6: NLLB Support (Future - Phase 3)
 
 - [ ] NLLB model loading
 - [ ] Language code mapping
 - [ ] Mode switching in UI
 - [ ] Auto-recommend based on language count
+
+### Phase 7: Source Localization (Future - Phase 4)
+
+**Goal:** Local Admins can pre-translate entire sources, eliminating runtime translation.
+
+- [ ] `localize_source(source_id, target_language)` function
+- [ ] Translate all titles and content summaries in `_metadata.json`
+- [ ] Re-embed translated text (creates new `_vectors_768.json`)
+- [ ] Create `{source_id}_{lang}/` variant folder
+- [ ] Update local ChromaDB with localized entries
+- [ ] "Localize to [Language]" button on source cards
+- [ ] Progress UI for batch translation
+- [ ] Multilingual LLM support (Aya 23, Suzume-Llama-3)
+
+**Why Phase 4?**
+- Phases 1-3: Runtime translation (works but slower)
+- Phase 4: Pre-translated sources (faster, better search quality)
+
+**Pipeline comparison:**
+
+| Step | Runtime (Phase 1-3) | Pre-Localized (Phase 4) |
+|------|---------------------|-------------------------|
+| User query | Translate to English | Native language |
+| Embedding | English embedding | Native language embedding |
+| Search | English vectors | Native language vectors |
+| Results | English metadata | Native language metadata |
+| LLM prompt | English + translate | Native language |
+| Article view | Translate on demand | Already translated |
+| **Translations per query** | **4+** | **0** |
+
+**Storage:** Doubles per language (local only, not on global R2)
+
+---
+
+## Current Status Summary
+
+**Phase 1 Complete**: Full article translation pipeline working
+- LanguageRegistry with 8 priority languages (MarianMT)
+- TranslationService with caching
+- API endpoints for download/install/set-active
+- Languages tab in admin panel
+- ZIM viewer auto-translation with visual indicator badge
+
+**How It Works Now**:
+1. User downloads a language pack from Languages tab (e.g., Spanish)
+2. User clicks "Set Active" on the installed pack
+3. User browses any ZIM article - it's automatically translated
+4. Green badge shows "Translated to Spanish" in corner
+5. Translations are cached for instant repeat visits
+
+**Next Steps**:
+1. Phase 2 - Chat translation (query to English, response to user language)
+2. Phase 3 - NLLB universal model support (200 languages)
+3. Phase 4 - Source localization (pre-translate at index time, native language search)
 
 ---
 
@@ -1145,4 +1286,4 @@ protobuf>=3.20.0
 
 ---
 
-*Last updated: December 2025*
+*Last updated: December 2025 (Phase 4 source localization added)*

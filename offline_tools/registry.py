@@ -79,12 +79,29 @@ class SourcePackRegistry:
     - _manifest.json files in backup folder
     - _master.json in backup folder (document counts, topics)
     - Backup folder scanning (for offline availability)
+
+    Uses caching to avoid repeated file I/O for the same data.
     """
+
+    # Class-level cache for expensive operations
+    _sources_cache = None
+    _sources_cache_time = 0
+    _metadata_cache = None
+    _metadata_cache_time = 0
+    _cache_ttl = 60  # 60 second cache
 
     def __init__(self, base_dir: Optional[Path] = None):
         self.base_dir = base_dir or Path(__file__).parent.parent
         self.backup_folder = self._get_backup_folder()
         self.metadata_path = self._get_metadata_path()
+
+    @classmethod
+    def invalidate_cache(cls):
+        """Clear all caches - call after modifying sources"""
+        cls._sources_cache = None
+        cls._sources_cache_time = 0
+        cls._metadata_cache = None
+        cls._metadata_cache_time = 0
 
     def _get_backup_folder(self) -> str:
         """Get backup folder from local_config or BACKUP_PATH env var"""
@@ -107,7 +124,20 @@ class SourcePackRegistry:
         raise ValueError("No backup folder configured")
 
     def _load_sources_config(self) -> Dict[str, Any]:
-        """Load source definitions by discovering _manifest.json files in backup folder"""
+        """
+        Load source definitions by discovering _manifest.json files in backup folder.
+
+        Uses class-level caching to avoid repeated disk I/O.
+        """
+        import time
+        now = time.time()
+
+        # Check cache first
+        if (SourcePackRegistry._sources_cache is not None and
+            now - SourcePackRegistry._sources_cache_time < SourcePackRegistry._cache_ttl):
+            return SourcePackRegistry._sources_cache
+
+        # Load from disk
         backup_path = self._get_backup_folder()
         sources = {}
 
@@ -126,14 +156,39 @@ class SourcePackRegistry:
                             except Exception:
                                 pass
 
-        return {"sources": sources}
+        result = {"sources": sources}
+
+        # Update cache
+        SourcePackRegistry._sources_cache = result
+        SourcePackRegistry._sources_cache_time = now
+
+        return result
 
     def _load_metadata(self) -> Dict[str, Any]:
-        """Load metadata master index"""
+        """
+        Load metadata master index (_master.json).
+
+        Uses class-level caching to avoid repeated disk I/O.
+        """
+        import time
+        now = time.time()
+
+        # Check cache first
+        if (SourcePackRegistry._metadata_cache is not None and
+            now - SourcePackRegistry._metadata_cache_time < SourcePackRegistry._cache_ttl):
+            return SourcePackRegistry._metadata_cache
+
+        # Load from disk
+        result = {"sources": {}}
         if self.metadata_path.exists():
             with open(self.metadata_path, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        return {"sources": {}}
+                result = json.load(f)
+
+        # Update cache
+        SourcePackRegistry._metadata_cache = result
+        SourcePackRegistry._metadata_cache_time = now
+
+        return result
 
     def _check_backup_status(self, source_id: str, source_config: Dict) -> tuple:
         """

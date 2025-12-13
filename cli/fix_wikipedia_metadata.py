@@ -80,7 +80,7 @@ if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("Usage: python fix_wikipedia_metadata.py <BACKUP_FOLDER>")
         print("\nExample:")
-        print("  python fix_wikipedia_metadata.py D:\\disaster-backups")
+        print("  python fix_wikipedia_metadata.py D:\\disaster-backups-local")
         sys.exit(1)
 
     backup_folder = sys.argv[1]

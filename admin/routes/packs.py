@@ -12,7 +12,8 @@ import json
 import os
 
 from offline_tools.schemas import (
-    get_manifest_file, get_metadata_file, get_index_file, get_vectors_file
+    get_manifest_file, get_metadata_file, get_index_file, get_vectors_file,
+    get_vectors_768_file
 )
 
 router = APIRouter(prefix="/api", tags=["Pack Management"])
@@ -491,13 +492,85 @@ def _run_download_pack(source_id: str, progress_callback=None, cancel_checker=No
             except Exception as e:
                 print(f"Warning: Could not extract {zip_path.name}: {e}")
 
-    # Import index data into ChromaDB
+    # Import vectors into ChromaDB (prefer 768-dim for offline use)
     update_progress(80, "Importing to ChromaDB...")
+    vectors_768_path = source_folder / get_vectors_768_file()
     index_path = source_folder / get_index_file()
     indexed_count = 0
-    if index_path.exists():
+
+    # Prefer 768-dim vectors for offline/local use
+    if vectors_768_path.exists():
         try:
             from offline_tools.vectordb import get_vector_store
+
+            update_progress(82, "Loading 768-dim vectors for offline use...")
+
+            with open(vectors_768_path, 'r', encoding='utf-8') as f:
+                vectors_data = json.load(f)
+
+            # Load content from _index.json for display text
+            index_data = {}
+            if index_path.exists():
+                with open(index_path, 'r', encoding='utf-8') as f:
+                    index_data = json.load(f)
+            index_docs = index_data.get("documents", {})
+
+            vectors_dict = vectors_data.get("vectors", {})
+            if vectors_dict:
+                # Use 768-dim ChromaDB path
+                store = get_vector_store(dimension=768)
+
+                ids = []
+                embeddings = []
+                contents = []
+                metadatas = []
+
+                for doc_id, embedding in vectors_dict.items():
+                    ids.append(doc_id)
+                    embeddings.append(embedding)
+
+                    # Get content from index file if available
+                    doc_info = index_docs.get(doc_id, {})
+                    contents.append(doc_info.get("content", ""))
+
+                    # Build metadata
+                    metadata = {
+                        "source": source_id,
+                        "title": doc_info.get("title", ""),
+                        "url": doc_info.get("url", ""),
+                    }
+                    metadatas.append(metadata)
+
+                batch_size = 500
+                total_batches = (len(ids) + batch_size - 1) // batch_size
+                for i, start in enumerate(range(0, len(ids), batch_size)):
+                    batch_ids = ids[start:start+batch_size]
+                    batch_embeddings = embeddings[start:start+batch_size]
+                    batch_contents = contents[start:start+batch_size]
+                    batch_metadatas = metadatas[start:start+batch_size]
+
+                    pct = 85 + int((i / total_batches) * 10)
+                    update_progress(pct, f"Importing batch {i+1}/{total_batches} (768-dim)...")
+
+                    store.collection.upsert(
+                        ids=batch_ids,
+                        embeddings=batch_embeddings,
+                        documents=batch_contents,
+                        metadatas=batch_metadatas
+                    )
+
+                indexed_count = len(ids)
+                print(f"Imported {indexed_count} documents from {source_id} into ChromaDB (768-dim)")
+
+        except Exception as e:
+            print(f"Warning: Could not import 768-dim vectors to ChromaDB: {e}")
+
+    # Fallback: Use _index.json embeddings (legacy 1536-dim packs)
+    elif index_path.exists():
+        try:
+            from offline_tools.vectordb import get_vector_store
+
+            update_progress(82, "Loading legacy index (no 768-dim vectors found)...")
 
             with open(index_path, 'r', encoding='utf-8') as f:
                 index_data = json.load(f)
@@ -536,7 +609,7 @@ def _run_download_pack(source_id: str, progress_callback=None, cancel_checker=No
                     )
 
                 indexed_count = len(ids)
-                print(f"Imported {indexed_count} documents from {source_id} into ChromaDB")
+                print(f"Imported {indexed_count} documents from {source_id} into ChromaDB (legacy)")
 
         except Exception as e:
             print(f"Warning: Could not import index to ChromaDB: {e}")
@@ -672,6 +745,7 @@ async def download_pack_from_r2(request: DownloadPackRequest):
 async def reindex_pack(request: ReindexPackRequest):
     """
     Re-index an already downloaded pack into ChromaDB.
+    Prefers 768-dim vectors for offline use.
     """
     config = get_local_config()
     backup_folder = config.get_backup_folder()
@@ -685,46 +759,108 @@ async def reindex_pack(request: ReindexPackRequest):
     if not source_folder.exists():
         raise HTTPException(404, f"Source folder not found: {source_id}")
 
+    vectors_768_path = source_folder / get_vectors_768_file()
     index_path = source_folder / get_index_file()
-    if not index_path.exists():
-        raise HTTPException(404, f"Index file not found: {get_index_file()}")
+
+    # Check we have at least one vector source
+    if not vectors_768_path.exists() and not index_path.exists():
+        raise HTTPException(404, f"No vector files found. Need {get_vectors_768_file()} or {get_index_file()}")
 
     try:
         from offline_tools.vectordb import get_vector_store
 
-        with open(index_path, 'r', encoding='utf-8') as f:
-            index_data = json.load(f)
+        # Prefer 768-dim vectors for offline use
+        if vectors_768_path.exists():
+            with open(vectors_768_path, 'r', encoding='utf-8') as f:
+                vectors_data = json.load(f)
 
-        documents = index_data.get("documents", [])
-        if not documents:
-            raise HTTPException(400, "Index file contains no documents")
+            # Load content from _index.json for display text
+            index_data = {}
+            if index_path.exists():
+                with open(index_path, 'r', encoding='utf-8') as f:
+                    index_data = json.load(f)
+            index_docs = index_data.get("documents", {})
 
-        store = get_vector_store()
+            vectors_dict = vectors_data.get("vectors", {})
+            if not vectors_dict:
+                raise HTTPException(400, "Vectors file contains no vectors")
 
-        ids = []
-        embeddings = []
-        contents = []
-        metadatas = []
+            # Use 768-dim ChromaDB
+            store = get_vector_store(dimension=768)
 
-        for doc in documents:
-            ids.append(doc["id"])
-            embeddings.append(doc["embedding"])
-            contents.append(doc.get("content", ""))
-            metadatas.append(doc.get("metadata", {}))
+            ids = []
+            embeddings = []
+            contents = []
+            metadatas = []
 
-        batch_size = 500
-        for i in range(0, len(ids), batch_size):
-            batch_ids = ids[i:i+batch_size]
-            batch_embeddings = embeddings[i:i+batch_size]
-            batch_contents = contents[i:i+batch_size]
-            batch_metadatas = metadatas[i:i+batch_size]
+            for doc_id, embedding in vectors_dict.items():
+                ids.append(doc_id)
+                embeddings.append(embedding)
 
-            store.collection.upsert(
-                ids=batch_ids,
-                embeddings=batch_embeddings,
-                documents=batch_contents,
-                metadatas=batch_metadatas
-            )
+                # Get content from index file if available
+                doc_info = index_docs.get(doc_id, {})
+                contents.append(doc_info.get("content", ""))
+
+                metadata = {
+                    "source": source_id,
+                    "title": doc_info.get("title", ""),
+                    "url": doc_info.get("url", ""),
+                }
+                metadatas.append(metadata)
+
+            batch_size = 500
+            for i in range(0, len(ids), batch_size):
+                batch_ids = ids[i:i+batch_size]
+                batch_embeddings = embeddings[i:i+batch_size]
+                batch_contents = contents[i:i+batch_size]
+                batch_metadatas = metadatas[i:i+batch_size]
+
+                store.collection.upsert(
+                    ids=batch_ids,
+                    embeddings=batch_embeddings,
+                    documents=batch_contents,
+                    metadatas=batch_metadatas
+                )
+
+            dimension_used = "768-dim"
+
+        # Fallback: Use legacy _index.json embeddings
+        else:
+            with open(index_path, 'r', encoding='utf-8') as f:
+                index_data = json.load(f)
+
+            documents = index_data.get("documents", [])
+            if not documents:
+                raise HTTPException(400, "Index file contains no documents")
+
+            store = get_vector_store()
+
+            ids = []
+            embeddings = []
+            contents = []
+            metadatas = []
+
+            for doc in documents:
+                ids.append(doc["id"])
+                embeddings.append(doc["embedding"])
+                contents.append(doc.get("content", ""))
+                metadatas.append(doc.get("metadata", {}))
+
+            batch_size = 500
+            for i in range(0, len(ids), batch_size):
+                batch_ids = ids[i:i+batch_size]
+                batch_embeddings = embeddings[i:i+batch_size]
+                batch_contents = contents[i:i+batch_size]
+                batch_metadatas = metadatas[i:i+batch_size]
+
+                store.collection.upsert(
+                    ids=batch_ids,
+                    embeddings=batch_embeddings,
+                    documents=batch_contents,
+                    metadatas=batch_metadatas
+                )
+
+            dimension_used = "1536-dim (legacy)"
 
         installed = config.get("installed_packs", [])
         if source_id not in installed:
@@ -736,7 +872,8 @@ async def reindex_pack(request: ReindexPackRequest):
             "status": "success",
             "source_id": source_id,
             "indexed_documents": len(ids),
-            "message": f"Re-indexed {len(ids)} documents for {source_id}"
+            "dimension": dimension_used,
+            "message": f"Re-indexed {len(ids)} documents for {source_id} ({dimension_used})"
         }
 
     except HTTPException:

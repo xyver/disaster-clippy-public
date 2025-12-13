@@ -53,20 +53,61 @@ class AIService:
 
     Provides consistent interface regardless of online/offline mode.
     Handles fallback logic internally.
+
+    Supports multi-dimension search:
+    - 1536-dim: Online search (Pinecone/OpenAI embeddings)
+    - 384/768/1024-dim: Offline search (local ChromaDB with various models)
     """
 
     def __init__(self):
-        self._vector_store = None
+        self._vector_stores = {}  # Cache stores by dimension
         self._llm = None
         self._connection_manager = None
 
-    def _get_vector_store(self):
-        """Lazy load vector store"""
-        if self._vector_store is None:
-            from offline_tools.vectordb import get_vector_store as create_vector_store
-            mode = os.getenv("VECTOR_DB_MODE", "local")
-            self._vector_store = create_vector_store(mode=mode)
-        return self._vector_store
+    def _get_offline_dimension(self) -> int:
+        """Get the configured offline dimension from embedding model settings."""
+        try:
+            from offline_tools.vectordb.factory import get_default_dimension
+            return get_default_dimension()
+        except Exception:
+            return 768  # Safe fallback
+
+    def _get_vector_store(self, dimension: int = None):
+        """
+        Lazy load vector store for specific dimension.
+
+        Args:
+            dimension: Embedding dimension (384, 768, 1024, 1536).
+                      If None, uses configured embedding model's dimension.
+
+        Returns:
+            VectorStore instance for the specified dimension
+        """
+        from offline_tools.vectordb import get_vector_store as create_vector_store
+
+        # Auto-detect dimension based on configured model
+        if dimension is None:
+            from admin.local_config import get_local_config
+            config = get_local_config()
+            offline_mode = config.get_offline_mode()
+            if offline_mode == "offline_only":
+                dimension = self._get_offline_dimension()
+            else:
+                dimension = 1536  # Online uses OpenAI embeddings
+
+        # Cache stores by dimension for reuse
+        if dimension not in self._vector_stores:
+            if dimension == 1536:
+                mode = os.getenv("VECTOR_DB_MODE", "local")
+            else:
+                mode = "local"
+            self._vector_stores[dimension] = create_vector_store(mode=mode, dimension=dimension)
+
+        return self._vector_stores[dimension]
+
+    def _get_fallback_store(self):
+        """Get the offline store for fallback (uses configured embedding dimension)"""
+        return self._get_vector_store(dimension=self._get_offline_dimension())
 
     def _get_connection_manager(self):
         """Lazy load connection manager"""
@@ -141,20 +182,56 @@ class AIService:
             else:
                 return result  # Return error in online_only mode
 
-        # Local search path
-        store = self._get_vector_store()
+        # Get offline mode to determine search strategy
+        from admin.local_config import get_local_config
+        offline_config = get_local_config()
+        offline_mode = offline_config.get_offline_mode()
 
-        # Determine method
-        if force_method:
-            method = force_method
-        elif not conn.should_try_online():
-            method = SearchMethod.KEYWORD
+        # Determine which store(s) to use based on mode
+        if offline_mode == "offline_only":
+            # Offline only - use configured local embedding dimension
+            store = self._get_vector_store(dimension=self._get_offline_dimension())
+            method = force_method or SearchMethod.LOCAL_SEMANTIC
+        elif offline_mode == "online_only":
+            # Online only - use 1536-dim store
+            store = self._get_vector_store(dimension=1536)
+            method = force_method or (SearchMethod.KEYWORD if not conn.should_try_online() else SearchMethod.SEMANTIC)
         else:
-            method = SearchMethod.SEMANTIC
+            # Hybrid mode - try 1536 first, fallback to local
+            store = self._get_vector_store(dimension=1536)
+            method = force_method or (SearchMethod.KEYWORD if not conn.should_try_online() else SearchMethod.SEMANTIC)
 
-        # Execute search with fallback
-        try:
-            if method == SearchMethod.SEMANTIC:
+        # Execute search with fallback chain
+        if method == SearchMethod.LOCAL_SEMANTIC:
+            # Local semantic search (offline mode - uses configured dimension)
+            try:
+                articles = store.search(query, n_results=n_results, filter=source_filter)
+                return SearchResult(
+                    articles=articles,
+                    method=SearchMethod.LOCAL_SEMANTIC,
+                    query=query
+                )
+            except Exception as e:
+                print(f"Local semantic search failed: {e}")
+                # Fallback to keyword search
+                try:
+                    articles = store.search_offline(query, n_results=n_results, filter=source_filter)
+                    return SearchResult(
+                        articles=articles,
+                        method=SearchMethod.KEYWORD,
+                        query=query
+                    )
+                except Exception as e2:
+                    return SearchResult(
+                        articles=[],
+                        method=SearchMethod.KEYWORD,
+                        query=query,
+                        error=str(e2)
+                    )
+
+        # Online semantic search (1536-dim)
+        if method == SearchMethod.SEMANTIC:
+            try:
                 articles = store.search(query, n_results=n_results, filter=source_filter)
                 conn.on_api_success()
                 return SearchResult(
@@ -162,24 +239,37 @@ class AIService:
                     method=SearchMethod.SEMANTIC,
                     query=query
                 )
-        except Exception as e:
-            print(f"Semantic search failed: {e}")
-            conn.on_api_failure(e)
+            except Exception as e:
+                print(f"Semantic search failed: {e}")
+                conn.on_api_failure(e)
 
-            # Fallback to keyword if in hybrid mode
-            if conn.get_mode() == "hybrid":
-                method = SearchMethod.KEYWORD
-            else:
-                return SearchResult(
-                    articles=[],
-                    method=SearchMethod.SEMANTIC,
-                    query=query,
-                    error=str(e)
-                )
+                # In hybrid mode, fallback to local search
+                if offline_mode == "hybrid":
+                    print(f"Falling back to local {self._get_offline_dimension()}-dim search...")
+                    try:
+                        fallback_store = self._get_fallback_store()
+                        articles = fallback_store.search(query, n_results=n_results, filter=source_filter)
+                        return SearchResult(
+                            articles=articles,
+                            method=SearchMethod.LOCAL_SEMANTIC,
+                            query=query
+                        )
+                    except Exception as e2:
+                        print(f"Local fallback search also failed: {e2}")
+                        method = SearchMethod.KEYWORD  # Final fallback to keyword
+                else:
+                    return SearchResult(
+                        articles=[],
+                        method=SearchMethod.SEMANTIC,
+                        query=query,
+                        error=str(e)
+                    )
 
-        # Keyword search (offline or fallback)
+        # Keyword search (final fallback)
         try:
-            articles = store.search_offline(query, n_results=n_results, filter=source_filter)
+            # Use local store for keyword search (has local data)
+            keyword_store = self._get_vector_store(dimension=self._get_offline_dimension()) if offline_mode != "online_only" else store
+            articles = keyword_store.search_offline(query, n_results=n_results, filter=source_filter)
             return SearchResult(
                 articles=articles,
                 method=SearchMethod.KEYWORD,
@@ -347,37 +437,75 @@ class AIService:
             return None
 
     def _try_local_llm(self, query: str, context: str, history: list) -> Optional[ResponseResult]:
-        """Try to generate response with local Ollama"""
-        try:
-            from admin.local_config import get_local_config
-            config = get_local_config()
+        """
+        Try to generate response with local LLM.
 
-            if not config.is_ollama_enabled():
-                return None
+        Tries in order:
+        1. llama.cpp (via llama_runtime) - if llm_runtime is 'llama.cpp'
+        2. Ollama - if enabled in config
+        """
+        from admin.local_config import get_local_config
+        config = get_local_config()
+        runtime = config.get_llm_runtime()
 
-            from admin.ollama_manager import get_ollama_manager
-            ollama = get_ollama_manager()
+        # Build messages for local LLM
+        system = self._get_system_prompt("offline")
+        messages = []
+        for msg in history[-10:]:
+            if hasattr(msg, 'content'):
+                role = "user" if msg.__class__.__name__ == "HumanMessage" else "assistant"
+                messages.append({"role": role, "content": msg.content})
 
-            # Get system prompt
-            system = self._get_system_prompt("offline")
-
-            # Build messages
-            messages = []
-            for msg in history[-10:]:
-                if hasattr(msg, 'content'):
-                    role = "user" if msg.__class__.__name__ == "HumanMessage" else "assistant"
-                    messages.append({"role": role, "content": msg.content})
-
-            # Add current query
-            user_message = f"""User query: {query}
+        user_message = f"""User query: {query}
 
 Relevant articles from knowledge base:
 {context}
 
 Based on these search results, help the user find what they need."""
-            messages.append({"role": "user", "content": user_message})
+        messages.append({"role": "user", "content": user_message})
 
-            # Generate
+        # Try llama.cpp first if configured
+        if runtime == "llama.cpp":
+            result = self._try_llama_cpp(messages, system)
+            if result:
+                return result
+
+        # Try Ollama as fallback or if configured
+        if config.is_ollama_enabled() or runtime == "ollama":
+            result = self._try_ollama(messages, system)
+            if result:
+                return result
+
+        return None
+
+    def _try_llama_cpp(self, messages: list, system: str) -> Optional[ResponseResult]:
+        """Try to generate response with llama.cpp runtime"""
+        try:
+            from offline_tools.llama_runtime import get_llama_runtime
+            runtime = get_llama_runtime()
+
+            if not runtime.is_available():
+                print(f"llama.cpp not available: {runtime.get_status().get('error', 'Unknown error')}")
+                return None
+
+            response = runtime.chat(messages, system_prompt=system)
+            if response:
+                return ResponseResult(
+                    text=response,
+                    method=ResponseMethod.LOCAL_LLM
+                )
+
+            return None
+        except Exception as e:
+            print(f"llama.cpp error: {e}")
+            return None
+
+    def _try_ollama(self, messages: list, system: str) -> Optional[ResponseResult]:
+        """Try to generate response with Ollama"""
+        try:
+            from admin.ollama_manager import get_ollama_manager
+            ollama = get_ollama_manager()
+
             response = ollama.chat(messages, system=system)
             if response:
                 return ResponseResult(
@@ -387,7 +515,7 @@ Based on these search results, help the user find what they need."""
 
             return None
         except Exception as e:
-            print(f"Local LLM error: {e}")
+            print(f"Ollama error: {e}")
             return None
 
     def _generate_simple_response(self, query: str, context: str) -> ResponseResult:
@@ -436,29 +564,20 @@ Based on these search results, help the user find what they need."""
         except Exception:
             pass
 
-        # Defaults
-        if mode == "offline":
-            return """You are Disaster Clippy, a helpful assistant for DIY and humanitarian resources.
-Your role is to help users find relevant articles and answer questions based on the provided context.
-Be concise, practical, and helpful. Focus on actionable information.
-Only recommend articles that are in the provided context - do not make up articles."""
-        else:
-            return """You are Disaster Clippy, a helpful assistant that helps people find DIY guides and humanitarian resources.
+        # Default prompt - same for online and offline (format is handled by LLM runtime)
+        return """You are Disaster Clippy, a helpful assistant for DIY guides and humanitarian resources.
 
-Your role is to:
-1. Understand what the user needs help with
-2. Suggest relevant articles from the knowledge base
-3. Help them refine their search through conversation
-4. Answer follow-up questions about the articles
+Help users find what they need through natural conversation. When you find relevant articles, share them with brief descriptions explaining why they're relevant.
 
-When presenting search results:
-- Summarize what each article is about in 1-2 sentences
-- Explain why it might be relevant to their situation
-- Offer to find more similar articles or narrow down the search
+Guidelines:
+- Answer questions directly based on the article content provided
+- Be conversational and helpful, not robotic
+- Keep responses concise but informative
+- Summarize what's relevant to the user's question
+- Offer to find more similar articles or refine the search
+- ONLY recommend articles from the provided context - never make up articles that don't exist in the search results
 
-Be conversational, helpful, and practical. Focus on actionable solutions.
-
-IMPORTANT: You can ONLY recommend articles that are provided to you in the context. Do not make up or hallucinate articles that don't exist in the search results."""
+Focus on actionable, practical solutions."""
 
     def _build_prompt(self, mode: str = "online"):
         """Build chat prompt template"""
@@ -557,61 +676,122 @@ Based on these search results, help the user find what they need. If the results
     def _stream_local_llm(self, query: str, context: str,
                           history: list) -> Generator[str, None, None]:
         """
-        Stream from local Ollama LLM.
+        Generate response from local LLM (llama.cpp or Ollama).
 
-        Falls back to simple response if:
-        - Ollama is not enabled in config
-        - Ollama is not installed/running
-        - Streaming fails for any reason
+        Tries in order based on llm_runtime config:
+        1. llama.cpp (via llama_runtime)
+        2. Ollama
+
+        Falls back to simple response if neither works.
         """
-        try:
-            from admin.local_config import get_local_config
-            config = get_local_config()
+        from admin.local_config import get_local_config
+        config = get_local_config()
+        runtime = config.get_llm_runtime()
 
-            # Check if Ollama is enabled
-            if not config.is_ollama_enabled():
-                print("Local LLM: Ollama not enabled in config")
-                return  # Let caller handle fallback
+        print(f"[AI] Local LLM mode - runtime: {runtime}")
 
-            from admin.ollama_manager import get_ollama_manager
-            ollama = get_ollama_manager()
+        system = self._get_system_prompt("offline")
 
-            # Check if Ollama is available
-            if not ollama.is_running() and not ollama.is_installed():
-                print("Local LLM: Ollama not installed or running")
-                return  # Let caller handle fallback
+        # Build message history
+        messages = []
+        for msg in history[-10:]:
+            if hasattr(msg, 'content'):
+                role = "user" if msg.__class__.__name__ == "HumanMessage" else "assistant"
+                messages.append({"role": role, "content": msg.content})
 
-            system = self._get_system_prompt("offline")
-
-            # Build message history
-            messages = []
-            for msg in history[-10:]:
-                if hasattr(msg, 'content'):
-                    role = "user" if msg.__class__.__name__ == "HumanMessage" else "assistant"
-                    messages.append({"role": role, "content": msg.content})
-
-            # Add current query with context
-            user_message = f"""User query: {query}
+        # Add current query with context
+        user_message = f"""User query: {query}
 
 Relevant articles from knowledge base:
 {context}
 
 Based on these search results, help the user find what they need."""
-            messages.append({"role": "user", "content": user_message})
+        messages.append({"role": "user", "content": user_message})
 
-            # Stream response
+        # Try llama.cpp first if configured
+        if runtime == "llama.cpp":
+            print("[AI] Trying llama.cpp...")
             chunk_count = 0
-            for chunk in ollama.chat_stream(messages, system=system):
-                chunk_count += 1
-                yield chunk
+            try:
+                for chunk in self._stream_llama_cpp(messages, system):
+                    chunk_count += 1
+                    print(f"[AI] Got chunk {chunk_count}: {len(chunk)} chars")
+                    yield chunk
+                print(f"[AI] llama.cpp finished, yielded {chunk_count} chunks")
+                if chunk_count > 0:
+                    return
+            except Exception as e:
+                print(f"[AI] llama.cpp error: {e}")
+                import traceback
+                traceback.print_exc()
 
-            if chunk_count == 0:
-                print("Local LLM: No chunks received from Ollama")
-                # Don't yield anything - let caller handle fallback
+        # Try Ollama as fallback or if configured
+        if config.is_ollama_enabled() or runtime == "ollama":
+            print("[AI] Trying Ollama...")
+            chunk_count = 0
+            try:
+                for chunk in self._stream_ollama(messages, system):
+                    chunk_count += 1
+                    yield chunk
+                if chunk_count > 0:
+                    return
+            except Exception as e:
+                print(f"[AI] Ollama error: {e}")
+
+        # No local LLM available - let caller handle fallback
+        print("[AI] No local LLM produced output")
+
+    def _stream_llama_cpp(self, messages: list, system: str) -> Generator[str, None, None]:
+        """
+        Generate response from llama.cpp runtime.
+
+        Uses non-streaming generation for reliability, then yields the full response.
+        This avoids generator chain issues that can cause silent failures.
+        """
+        from offline_tools.llama_runtime import get_llama_runtime
+
+        print("[AI] Getting llama.cpp runtime...")
+        runtime = get_llama_runtime()
+
+        if not runtime.is_available():
+            error_msg = runtime.get_status().get('error', 'Unknown error')
+            print(f"[AI] llama.cpp not available: {error_msg}")
+            yield f"Local LLM not available: {error_msg}"
+            return
+
+        print("[AI] Generating response with llama.cpp (non-streaming)...")
+        try:
+            # Use non-streaming for reliability
+            response = runtime.chat(messages, system_prompt=system, max_tokens=1024)
+            print(f"[AI] Response generated: {len(response)} chars")
+
+            if response:
+                yield response
+            else:
+                yield "I found some relevant articles above. Let me know if you need more specific information."
 
         except Exception as e:
-            print(f"Local LLM streaming error: {e}")
-            # Don't yield anything - let caller handle fallback
+            print(f"[AI] llama.cpp generation error: {e}")
+            yield f"Error generating response: {str(e)}"
+
+    def _stream_ollama(self, messages: list, system: str) -> Generator[str, None, None]:
+        """Stream from Ollama"""
+        from admin.local_config import get_local_config
+        config = get_local_config()
+
+        if not config.is_ollama_enabled():
+            print("Local LLM: Ollama not enabled in config")
+            return
+
+        from admin.ollama_manager import get_ollama_manager
+        ollama = get_ollama_manager()
+
+        if not ollama.is_running() and not ollama.is_installed():
+            print("Local LLM: Ollama not installed or running")
+            return
+
+        for chunk in ollama.chat_stream(messages, system=system):
+            yield chunk
 
 
 # Singleton instance

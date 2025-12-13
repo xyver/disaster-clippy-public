@@ -8,41 +8,71 @@ from typing import List, Dict, Optional, Any
 from pathlib import Path
 import json
 import os
+import numpy as np
 
 from offline_tools.embeddings import EmbeddingService
 
 
-def get_default_chroma_path() -> str:
-    """Get default ChromaDB path from local_config or BACKUP_PATH env var"""
-    # Try local_config first (user's GUI setting)
+def get_default_chroma_path(dimension: int = None) -> str:
+    """
+    Get default ChromaDB path from local_config or BACKUP_PATH env var.
+
+    Args:
+        dimension: Embedding dimension (384, 768, 1024, or 1536). If None, uses configured model.
+
+    Returns:
+        Path to the dimension-specific ChromaDB directory
+    """
+    # Auto-detect dimension based on configured embedding model
+    if dimension is None:
+        try:
+            from admin.local_config import get_local_config
+            from offline_tools.model_registry import AVAILABLE_MODELS
+            config = get_local_config()
+            offline_mode = config.get_offline_mode()
+
+            if offline_mode == "offline_only":
+                # Use dimension from configured embedding model
+                model_id = config.get_embedding_model()
+                if model_id and model_id in AVAILABLE_MODELS:
+                    dimension = AVAILABLE_MODELS[model_id].get("dimensions", 768)
+                else:
+                    dimension = 768  # Fallback for offline
+            else:
+                dimension = 1536  # Online uses OpenAI
+        except Exception:
+            dimension = 768  # Safe fallback
+
+    # Get base backup path
+    backup_path = None
     try:
         from admin.local_config import get_local_config
         config = get_local_config()
-        backup_folder = config.get_backup_folder()
-        if backup_folder:
-            return os.path.join(backup_folder, "chroma")
+        backup_path = config.get_backup_folder()
     except ImportError:
         pass
 
-    # Fallback to env var
-    backup_path = os.getenv("BACKUP_PATH", "")
-    if backup_path:
-        return os.path.join(backup_path, "chroma")
-    return "data/chroma"
+    if not backup_path:
+        backup_path = os.getenv("BACKUP_PATH", "data")
+
+    # Return dimension-specific path
+    return os.path.join(backup_path, f"chroma_db_{dimension}")
 
 
 class VectorStore:
     """ChromaDB-based vector store for article embeddings"""
 
-    def __init__(self, persist_dir: str = None, collection_name: str = "articles", read_only: bool = False):
+    def __init__(self, persist_dir: str = None, collection_name: str = "articles", read_only: bool = False, dimension: int = None):
         """
         Args:
             persist_dir: Directory to persist ChromaDB data (defaults to BACKUP_PATH/chroma)
             collection_name: Name of the collection
             read_only: If True, skip embedding model initialization (faster for read-only ops)
+            dimension: Embedding dimension (768 for local, 1536 for OpenAI). If None, auto-detects.
         """
+        self.dimension = dimension
         if persist_dir is None:
-            persist_dir = get_default_chroma_path()
+            persist_dir = get_default_chroma_path(dimension)
         self.persist_dir = Path(persist_dir)
         self.persist_dir.mkdir(parents=True, exist_ok=True)
 
@@ -57,17 +87,38 @@ class VectorStore:
 
         # Embedding service for queries - skip in read_only mode for faster init
         self._read_only = read_only
-        self._embedding_service = None if read_only else EmbeddingService()
+        self._embedding_service = None
+        if not read_only:
+            self._embedding_service = self._create_embedding_service()
 
         # Metadata index for sync operations - reads from backup folder JSON files
         from .metadata import MetadataIndex
         self.metadata_index = MetadataIndex()
 
+    def _create_embedding_service(self):
+        """Create the appropriate embedding service based on dimension"""
+        # Dimension -> model mapping
+        DIMENSION_MODELS = {
+            384: "all-MiniLM-L6-v2",       # Fast, lightweight
+            768: "all-mpnet-base-v2",       # Balanced (recommended)
+            1024: "intfloat/e5-large-v2",   # High quality local
+            1536: "text-embedding-3-small", # OpenAI API
+        }
+
+        if self.dimension in DIMENSION_MODELS:
+            model = DIMENSION_MODELS[self.dimension]
+            print(f"[VectorStore] Using {model} for {self.dimension}-dim embeddings")
+            return EmbeddingService(model=model)
+        else:
+            # Auto-detect based on offline_mode
+            print(f"[VectorStore] Unknown dimension {self.dimension}, auto-detecting model")
+            return EmbeddingService()
+
     @property
     def embedding_service(self):
         """Lazy-load embedding service on first access if in read_only mode"""
         if self._embedding_service is None:
-            self._embedding_service = EmbeddingService()
+            self._embedding_service = self._create_embedding_service()
         return self._embedding_service
 
     def add_documents(self, documents: List[Dict[str, Any]],
@@ -255,16 +306,12 @@ class VectorStore:
 
     def get_stats(self) -> Dict[str, Any]:
         """Get collection statistics including source breakdown"""
-        # Get source breakdown directly from ChromaDB
+        # Use metadata index (_master.json) for fast source stats
+        # This avoids loading all documents from ChromaDB which is very slow
+        metadata_stats = self.metadata_index.get_stats()
         sources = {}
-        try:
-            result = self.collection.get(include=["metadatas"])
-            for metadata in result.get("metadatas", []):
-                if metadata and "source" in metadata:
-                    source = metadata["source"]
-                    sources[source] = sources.get(source, 0) + 1
-        except:
-            pass
+        for source_name, source_info in metadata_stats.get("sources", {}).items():
+            sources[source_name] = source_info.get("count", 0)
 
         return {
             "total_documents": self.collection.count(),
@@ -328,7 +375,9 @@ class VectorStore:
                 return False
 
             # Check if all values are zero (invalid embedding)
-            if all(v == 0 for v in embedding):
+            # Convert to numpy array for proper comparison
+            embedding_array = np.array(embedding)
+            if np.all(embedding_array == 0):
                 return False
 
             return True
@@ -503,11 +552,66 @@ class VectorStore:
         result = self.delete_by_source(source_id)
         return result.get("deleted_count", 0)
 
+    def _get_ids_from_source_files(self, source_id: str) -> Optional[List[str]]:
+        """
+        Try to get document IDs from source files (_vectors.json or _metadata.json).
+
+        This is MUCH faster than scanning ChromaDB when the source folder exists.
+
+        Returns:
+            List of document IDs if found, None if files not available
+        """
+        try:
+            # Get backup path
+            backup_path = None
+            try:
+                from admin.local_config import get_local_config
+                config = get_local_config()
+                backup_path = config.get_backup_folder()
+            except ImportError:
+                pass
+
+            if not backup_path:
+                backup_path = os.getenv("BACKUP_PATH", "")
+
+            if not backup_path:
+                return None
+
+            source_folder = Path(backup_path) / source_id
+
+            # Try _vectors.json first (has IDs as keys)
+            vectors_file = source_folder / "_vectors.json"
+            if vectors_file.exists():
+                with open(vectors_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    if "vectors" in data and isinstance(data["vectors"], dict):
+                        ids = list(data["vectors"].keys())
+                        print(f"[VectorStore] Got {len(ids)} IDs from _vectors.json (fast path)")
+                        return ids
+
+            # Fallback to _metadata.json (also has IDs as keys)
+            metadata_file = source_folder / "_metadata.json"
+            if metadata_file.exists():
+                with open(metadata_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    if "documents" in data and isinstance(data["documents"], dict):
+                        ids = list(data["documents"].keys())
+                        print(f"[VectorStore] Got {len(ids)} IDs from _metadata.json (fast path)")
+                        return ids
+
+            return None
+        except Exception as e:
+            print(f"[VectorStore] Could not read source files for {source_id}: {e}")
+            return None
+
     def delete_by_source(self, source_id: str, progress_callback=None) -> Dict[str, Any]:
         """
         Delete all vectors for a specific source.
 
         This method matches the PineconeStore interface for unified handling.
+
+        Optimization: First tries to read IDs from _vectors.json or _metadata.json
+        which is instant. Only falls back to ChromaDB scan if files not available.
 
         Args:
             source_id: The source identifier to delete
@@ -519,12 +623,18 @@ class VectorStore:
         try:
             print(f"[VectorStore] Deleting documents for source: '{source_id}'")
 
-            # Get all document IDs for this source
-            result = self.collection.get(
-                where={"source": source_id},
-                include=[]
-            )
-            ids_to_delete = result.get("ids", [])
+            # OPTIMIZATION: Try to get IDs from source files first (instant)
+            ids_to_delete = self._get_ids_from_source_files(source_id)
+
+            # Fall back to ChromaDB scan if source files not available
+            if ids_to_delete is None:
+                print(f"[VectorStore] Source files not found, scanning ChromaDB (slow)...")
+                result = self.collection.get(
+                    where={"source": source_id},
+                    include=[]
+                )
+                ids_to_delete = result.get("ids", [])
+
             total_to_delete = len(ids_to_delete)
             print(f"[VectorStore] Found {total_to_delete} documents to delete")
 
@@ -563,10 +673,19 @@ class VectorStore:
 
         This method matches the PineconeStore interface for unified handling.
 
+        Optimization: First tries to get count from source files (_vectors.json
+        or _metadata.json) which is much faster than scanning ChromaDB.
+
         Returns:
             Number of vectors for this source
         """
         try:
+            # OPTIMIZATION: Try to get count from source files first (instant)
+            ids = self._get_ids_from_source_files(source_id)
+            if ids is not None:
+                return len(ids)
+
+            # Fall back to ChromaDB scan
             result = self.collection.get(
                 where={"source": source_id},
                 include=[]
