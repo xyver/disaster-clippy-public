@@ -1,0 +1,29 @@
+# Git history (can be large)
+.git/
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+*.so
+venv/
+.venv/
+
+# IDE and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Local config (cloud uses env vars)
+local_config.json
+.env
+.env.*
+
+# Logs and temp
+*.log
+*.tmp
+
+# Dev files
+docs/
+*.md
+!README.md
