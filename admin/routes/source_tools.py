@@ -1238,9 +1238,12 @@ async def create_index(request: CreateIndexRequest):
 
     manager = get_job_manager()
 
+    # Job type based on dimension: online (1536/API) vs offline (local model)
+    job_type = "index_online" if request.dimension == 1536 else "index_offline"
+
     try:
         job_id = manager.submit(
-            "index",
+            job_type,
             request.source_id,
             _run_create_index,
             request.source_id,
@@ -1266,6 +1269,205 @@ async def create_index(request: CreateIndexRequest):
         "resume": request.resume,
         "dimension": request.dimension,
         "message": f"Index creation started for {request.source_id}{lang_msg}{resume_msg}{dim_msg}"
+    }
+
+
+# =============================================================================
+# CLEAR VECTORS (delete ChromaDB entries only, not files)
+# =============================================================================
+
+class ClearVectorsRequest(BaseModel):
+    """Request model for clearing vectors from ChromaDB"""
+    source_id: str
+    dimension: int = 768  # Which dimension DB to clear from
+
+
+@router.post("/clear-vectors")
+async def clear_vectors(request: ClearVectorsRequest):
+    """Clear vector embeddings for a source from ChromaDB (runs as background job)
+
+    This only removes the ChromaDB entries - does NOT delete backup files,
+    metadata, or index files. Use this before re-indexing a source.
+
+    Args:
+        source_id: Source to clear vectors for
+        dimension: Which dimension DB to clear (768 for local, 1536 for OpenAI)
+    """
+    from admin.job_manager import get_job_manager
+
+    def _run_clear_vectors(source_id: str, dimension: int,
+                           progress_callback=None, cancel_checker=None):
+        from offline_tools.vectordb import get_vector_store
+
+        if progress_callback:
+            progress_callback(0, 100, f"Clearing {dimension}-dim vectors for {source_id}...")
+
+        try:
+            # read_only=True skips embedding model loading - fast!
+            store = get_vector_store(mode="local", dimension=dimension, read_only=True)
+            result = store.delete_by_source(source_id)
+            deleted_count = result.get("deleted_count", 0) if isinstance(result, dict) else 0
+
+            if progress_callback:
+                progress_callback(100, 100, f"Cleared {deleted_count} vectors")
+
+            return {
+                "success": True,
+                "source_id": source_id,
+                "dimension": dimension,
+                "deleted_count": deleted_count,
+                "message": f"Cleared {deleted_count} vectors for {source_id} ({dimension}-dim)"
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "source_id": source_id,
+                "dimension": dimension,
+                "error": str(e)
+            }
+
+    manager = get_job_manager()
+
+    try:
+        job_id = manager.submit(
+            "clear_vectors",
+            request.source_id,
+            _run_clear_vectors,
+            request.source_id,
+            request.dimension
+        )
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+
+    return {
+        "status": "submitted",
+        "job_id": job_id,
+        "source_id": request.source_id,
+        "dimension": request.dimension,
+        "message": f"Vector clearing started for {request.source_id} ({request.dimension}-dim)"
+    }
+
+
+# =============================================================================
+# REINDEX (Clear vectors + Create new index as combined job)
+# =============================================================================
+
+class ReindexRequest(BaseModel):
+    """Request model for reindexing - clears vectors then creates fresh index"""
+    source_id: str
+    limit: int = 1000
+    force_reindex: bool = True  # Default True since we're clearing anyway
+    language_filter: Optional[str] = None
+    dimension: int = 768  # Which dimension to reindex (768 local, 1536 cloud)
+
+
+@router.post("/reindex")
+async def reindex_source(request: ReindexRequest):
+    """Clear vectors and create fresh index as a single combined job.
+
+    This is a convenience endpoint that chains:
+    1. clear_vectors - Remove existing ChromaDB entries
+    2. create_index - Build fresh embeddings
+
+    Progress is tracked across both phases (clear: 10%, index: 90%).
+    """
+    from admin.job_manager import get_job_manager, JobPhase, run_combined_job
+
+    def _run_clear_phase(source_id: str, dimension: int,
+                         progress_callback=None, cancel_checker=None):
+        """Phase 1: Clear existing vectors"""
+        from offline_tools.vectordb import get_vector_store
+
+        if progress_callback:
+            progress_callback(0, 100, f"Clearing {dimension}-dim vectors...")
+
+        try:
+            store = get_vector_store(mode="local", dimension=dimension, read_only=True)
+            result = store.delete_by_source(source_id)
+            deleted_count = result.get("deleted_count", 0) if isinstance(result, dict) else 0
+
+            if progress_callback:
+                progress_callback(100, 100, f"Cleared {deleted_count} vectors")
+
+            return {
+                "success": True,
+                "deleted_count": deleted_count,
+                "message": f"Cleared {deleted_count} vectors"
+            }
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def _run_index_phase(source_id: str, limit: int, force: bool,
+                         language_filter: str, dimension: int,
+                         progress_callback=None, cancel_checker=None):
+        """Phase 2: Create fresh index"""
+        from offline_tools.source_manager import SourceManager
+
+        sm = SourceManager()
+        result = sm.create_index(
+            source_id,
+            limit=limit,
+            skip_existing=not force,
+            progress_callback=progress_callback,
+            language_filter=language_filter,
+            resume=False,  # Never resume on reindex - we just cleared!
+            cancel_checker=cancel_checker,
+            dimension=dimension
+        )
+
+        if hasattr(result, 'error') and result.error == "Cancelled by user":
+            return {"status": "cancelled", "error": "Job cancelled by user"}
+
+        return result
+
+    def _run_reindex_combined(source_id: str, limit: int, force: bool,
+                              language_filter: str, dimension: int,
+                              progress_callback=None, cancel_checker=None):
+        """Combined job: clear then index"""
+        phases = [
+            JobPhase(
+                name="Clear vectors",
+                func=_run_clear_phase,
+                weight=10,  # Clearing is fast
+                args=(source_id, dimension)
+            ),
+            JobPhase(
+                name="Create index",
+                func=_run_index_phase,
+                weight=90,  # Indexing takes most of the time
+                args=(source_id, limit, force, language_filter, dimension)
+            ),
+        ]
+
+        return run_combined_job(phases, progress_callback, cancel_checker)
+
+    manager = get_job_manager()
+
+    # Job type based on dimension: online (1536/API) vs offline (local model)
+    job_type = "reindex_online" if request.dimension == 1536 else "reindex_offline"
+
+    try:
+        job_id = manager.submit(
+            job_type,
+            request.source_id,
+            _run_reindex_combined,
+            request.source_id,
+            request.limit,
+            request.force_reindex,
+            request.language_filter,
+            request.dimension
+        )
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+
+    lang_msg = f" (language: {request.language_filter})" if request.language_filter else ""
+    return {
+        "status": "submitted",
+        "job_id": job_id,
+        "source_id": request.source_id,
+        "limit": request.limit,
+        "dimension": request.dimension,
+        "message": f"Reindex started for {request.source_id} ({request.dimension}-dim){lang_msg}"
     }
 
 

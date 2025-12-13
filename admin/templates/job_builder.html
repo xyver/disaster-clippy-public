@@ -1,0 +1,1042 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Job Builder - Disaster Clippy Admin</title>
+    <link rel="icon" type="image/png" href="/static/paperclip.png">
+    <link rel="stylesheet" href="/admin/static/{{ admin_css }}">
+    <style>
+        /* Page-specific styles for Job Builder */
+        .container { max-width: 1400px; }
+
+        .sub-nav {
+            display: flex;
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+        }
+        .sub-nav a {
+            color: #4ecca3;
+            text-decoration: none;
+            padding: 0.5rem 1rem;
+            border: 1px solid #0f3460;
+            border-radius: 4px;
+            font-size: 0.85rem;
+        }
+        .sub-nav a:hover { background: #0f3460; }
+        .sub-nav a.active { background: #0f3460; color: #e94560; }
+
+        .builder-layout {
+            display: grid;
+            grid-template-columns: 300px 1fr 350px;
+            gap: 1.5rem;
+            min-height: 600px;
+        }
+
+        /* Available Jobs Panel */
+        .available-jobs {
+            background: #1a1a2e;
+            border: 1px solid #0f3460;
+            border-radius: 6px;
+            padding: 1rem;
+        }
+
+        .available-jobs h3 {
+            color: #4ecca3;
+            margin-bottom: 1rem;
+            font-size: 1rem;
+        }
+
+        .job-category {
+            margin-bottom: 1rem;
+        }
+
+        .category-label {
+            color: #888;
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 0.5rem;
+        }
+
+        .available-job {
+            background: #16213e;
+            border: 1px solid #0f3460;
+            border-radius: 4px;
+            padding: 0.75rem;
+            margin-bottom: 0.5rem;
+            cursor: grab;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            transition: all 0.2s;
+        }
+
+        .available-job:hover {
+            border-color: #4ecca3;
+            background: #1a2744;
+        }
+
+        .available-job.dragging {
+            opacity: 0.5;
+        }
+
+        .job-label {
+            color: #e0e0e0;
+            font-weight: 500;
+        }
+
+        .job-add-btn {
+            background: #0f3460;
+            color: #4ecca3;
+            border: none;
+            width: 24px;
+            height: 24px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 1.2rem;
+            line-height: 1;
+        }
+
+        .job-add-btn:hover {
+            background: #4ecca3;
+            color: #16213e;
+        }
+
+        /* Chain Builder Panel */
+        .chain-builder {
+            background: #1a1a2e;
+            border: 1px solid #0f3460;
+            border-radius: 6px;
+            padding: 1rem;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .chain-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+        }
+
+        .chain-header h3 {
+            color: #4ecca3;
+            font-size: 1rem;
+        }
+
+        .chain-actions {
+            display: flex;
+            gap: 0.5rem;
+        }
+
+        .chain-list {
+            flex: 1;
+            min-height: 300px;
+            background: #16213e;
+            border: 2px dashed #0f3460;
+            border-radius: 4px;
+            padding: 1rem;
+            overflow-y: auto;
+        }
+
+        .chain-list.drag-over {
+            border-color: #4ecca3;
+            background: #1a2744;
+        }
+
+        .chain-empty {
+            color: #666;
+            text-align: center;
+            padding: 3rem 1rem;
+        }
+
+        .chain-item {
+            background: #1a1a2e;
+            border: 1px solid #0f3460;
+            border-radius: 4px;
+            margin-bottom: 0.5rem;
+            cursor: grab;
+        }
+
+        .chain-item.dragging {
+            opacity: 0.5;
+        }
+
+        .chain-item.selected {
+            border-color: #4ecca3;
+        }
+
+        .chain-item-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.75rem;
+        }
+
+        .chain-item-left {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .chain-item-number {
+            background: #0f3460;
+            color: #4ecca3;
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.8rem;
+            font-weight: 600;
+        }
+
+        .chain-item-name {
+            color: #e0e0e0;
+            font-weight: 500;
+        }
+
+        .chain-item-actions {
+            display: flex;
+            gap: 0.25rem;
+        }
+
+        .chain-item-btn {
+            background: transparent;
+            border: none;
+            color: #888;
+            cursor: pointer;
+            padding: 0.25rem;
+            font-size: 0.9rem;
+        }
+
+        .chain-item-btn:hover {
+            color: #e0e0e0;
+        }
+
+        .chain-item-btn.delete:hover {
+            color: #e94560;
+        }
+
+        .chain-item-params {
+            padding: 0.75rem;
+            border-top: 1px solid #0f3460;
+            display: none;
+        }
+
+        .chain-item.expanded .chain-item-params {
+            display: block;
+        }
+
+        .param-row {
+            display: flex;
+            align-items: center;
+            margin-bottom: 0.5rem;
+            gap: 0.75rem;
+        }
+
+        .param-label {
+            color: #888;
+            font-size: 0.85rem;
+            min-width: 120px;
+        }
+
+        .param-input {
+            flex: 1;
+            background: #16213e;
+            border: 1px solid #0f3460;
+            border-radius: 4px;
+            padding: 0.4rem 0.6rem;
+            color: #e0e0e0;
+            font-size: 0.85rem;
+        }
+
+        .param-input:focus {
+            outline: none;
+            border-color: #4ecca3;
+        }
+
+        .param-checkbox {
+            width: 18px;
+            height: 18px;
+        }
+
+        /* Footer Actions */
+        .chain-footer {
+            margin-top: 1rem;
+            padding-top: 1rem;
+            border-top: 1px solid #0f3460;
+            display: flex;
+            gap: 0.5rem;
+            flex-wrap: wrap;
+        }
+
+        /* Config Panel */
+        .config-panel {
+            background: #1a1a2e;
+            border: 1px solid #0f3460;
+            border-radius: 6px;
+            padding: 1rem;
+        }
+
+        .config-panel h3 {
+            color: #4ecca3;
+            margin-bottom: 1rem;
+            font-size: 1rem;
+        }
+
+        .config-section {
+            margin-bottom: 1.5rem;
+        }
+
+        .config-section h4 {
+            color: #888;
+            font-size: 0.85rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .source-select {
+            width: 100%;
+            background: #16213e;
+            border: 1px solid #0f3460;
+            border-radius: 4px;
+            padding: 0.5rem;
+            color: #e0e0e0;
+            font-size: 0.9rem;
+        }
+
+        .source-select:focus {
+            outline: none;
+            border-color: #4ecca3;
+        }
+
+        /* Templates */
+        .template-list {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+
+        .template-item {
+            background: #16213e;
+            border: 1px solid #0f3460;
+            border-radius: 4px;
+            padding: 0.75rem;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .template-item:hover {
+            border-color: #4ecca3;
+        }
+
+        .template-name {
+            color: #e0e0e0;
+            font-weight: 500;
+            margin-bottom: 0.25rem;
+        }
+
+        .template-desc {
+            color: #888;
+            font-size: 0.8rem;
+        }
+
+        /* Validation Messages */
+        .validation-box {
+            margin-top: 1rem;
+            padding: 0.75rem;
+            border-radius: 4px;
+            font-size: 0.85rem;
+        }
+
+        .validation-box.success {
+            background: #1a2e1a;
+            border: 1px solid #4ecca3;
+            color: #4ecca3;
+        }
+
+        .validation-box.warning {
+            background: #2e2a1a;
+            border: 1px solid #f9a825;
+            color: #f9a825;
+        }
+
+        .validation-box.error {
+            background: #2e1a1a;
+            border: 1px solid #e94560;
+            color: #e94560;
+        }
+
+        .validation-list {
+            margin-top: 0.5rem;
+            padding-left: 1rem;
+        }
+
+        /* Buttons */
+        .btn {
+            padding: 0.5rem 1rem;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.85rem;
+            border: none;
+            transition: all 0.2s;
+        }
+
+        .btn-primary {
+            background: #4ecca3;
+            color: #16213e;
+            font-weight: 600;
+        }
+
+        .btn-primary:hover {
+            background: #3dbb92;
+        }
+
+        .btn-primary:disabled {
+            background: #2d5a4a;
+            cursor: not-allowed;
+        }
+
+        .btn-secondary {
+            background: #0f3460;
+            color: #e0e0e0;
+        }
+
+        .btn-secondary:hover {
+            background: #1a4070;
+        }
+
+        .btn-danger {
+            background: #2e1a1a;
+            color: #e94560;
+            border: 1px solid #e94560;
+        }
+
+        .btn-danger:hover {
+            background: #e94560;
+            color: #fff;
+        }
+
+        /* Responsive */
+        @media (max-width: 1200px) {
+            .builder-layout {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div>
+            <h1>Job Builder</h1>
+            <p>Create custom job chains for batch processing</p>
+        </div>
+        {% with active_page='job_builder' %}{% include '_nav.html' %}{% endwith %}
+    </header>
+
+    <div class="container">
+        <!-- Sub-navigation -->
+        <div class="sub-nav">
+            <a href="/useradmin/sources">All Sources</a>
+            <a href="/useradmin/sources/tools">Source Tools</a>
+            <a href="/useradmin/job-builder" class="active">Job Builder</a>
+        </div>
+
+        <div class="builder-layout">
+            <!-- Available Jobs -->
+            <div class="available-jobs">
+                <h3>Available Jobs</h3>
+                <div id="availableJobsList">
+                    <!-- Populated by JS -->
+                </div>
+            </div>
+
+            <!-- Chain Builder -->
+            <div class="chain-builder">
+                <div class="chain-header">
+                    <h3>Your Job Chain</h3>
+                    <div class="chain-actions">
+                        <button class="btn btn-secondary" onclick="clearChain()">Clear</button>
+                    </div>
+                </div>
+
+                <div id="chainList" class="chain-list"
+                     ondragover="handleDragOver(event)"
+                     ondrop="handleDrop(event)"
+                     ondragleave="handleDragLeave(event)">
+                    <div class="chain-empty">
+                        Drag jobs here or click + to add them to your chain
+                    </div>
+                </div>
+
+                <div class="chain-footer">
+                    <button class="btn btn-secondary" onclick="validateChain()">Validate</button>
+                    <button class="btn btn-primary" onclick="runChain()" id="runBtn" disabled>Run Chain</button>
+                    <button class="btn btn-secondary" onclick="saveChain()">Save Template</button>
+                </div>
+
+                <div id="validationBox"></div>
+            </div>
+
+            <!-- Config Panel -->
+            <div class="config-panel">
+                <h3>Configuration</h3>
+
+                <div class="config-section">
+                    <h4>Target Source</h4>
+                    <select id="sourceSelect" class="source-select" onchange="onSourceChange()">
+                        <option value="">-- Select a source --</option>
+                    </select>
+                </div>
+
+                <div class="config-section">
+                    <h4>Predefined Templates</h4>
+                    <div id="templateList" class="template-list">
+                        <!-- Populated by JS -->
+                    </div>
+                </div>
+
+                <div class="config-section">
+                    <h4>Saved Templates</h4>
+                    <div id="savedTemplates" class="template-list">
+                        <div class="template-item" style="color: #666;">
+                            No saved templates yet
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/admin/static/admin-common.js"></script>
+    <script>
+        // State
+        let jobSchemas = {};
+        let predefinedChains = {};
+        let chain = [];
+        let selectedSource = '';
+        let savedTemplates = [];
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', async () => {
+            await loadSchemas();
+            await loadSources();
+            loadSavedTemplates();
+            renderAvailableJobs();
+            renderTemplates();
+            renderChain();
+        });
+
+        // Load job schemas from API
+        async function loadSchemas() {
+            try {
+                const resp = await fetch('/useradmin/api/job-builder/schemas');
+                const data = await resp.json();
+                jobSchemas = data.jobs || {};
+                predefinedChains = data.predefined_chains || {};
+            } catch (e) {
+                console.error('Failed to load schemas:', e);
+                showToast('Failed to load job schemas', 'error');
+            }
+        }
+
+        // Load sources for dropdown
+        async function loadSources() {
+            try {
+                const resp = await fetch('/useradmin/api/local-sources');
+                const data = await resp.json();
+                const select = document.getElementById('sourceSelect');
+
+                (data.sources || []).forEach(src => {
+                    const opt = document.createElement('option');
+                    opt.value = src.source_id;
+                    opt.textContent = src.name || src.source_id;
+                    select.appendChild(opt);
+                });
+            } catch (e) {
+                console.error('Failed to load sources:', e);
+            }
+        }
+
+        // Load saved templates from localStorage
+        function loadSavedTemplates() {
+            try {
+                savedTemplates = JSON.parse(localStorage.getItem('jobBuilderTemplates') || '[]');
+            } catch (e) {
+                savedTemplates = [];
+            }
+        }
+
+        // Render available jobs by category
+        function renderAvailableJobs() {
+            const container = document.getElementById('availableJobsList');
+            container.innerHTML = '';
+
+            const categories = {};
+            Object.entries(jobSchemas).forEach(([type, schema]) => {
+                const cat = schema.category || 'other';
+                if (!categories[cat]) categories[cat] = [];
+                categories[cat].push({ type, ...schema });
+            });
+
+            const categoryOrder = ['content', 'indexing', 'maintenance', 'cloud'];
+            categoryOrder.forEach(cat => {
+                if (!categories[cat]) return;
+
+                const div = document.createElement('div');
+                div.className = 'job-category';
+                div.innerHTML = `<div class="category-label">${cat}</div>`;
+
+                categories[cat].forEach(job => {
+                    const item = document.createElement('div');
+                    item.className = 'available-job';
+                    item.draggable = true;
+                    item.dataset.jobType = job.type;
+                    item.innerHTML = `
+                        <span class="job-label">${job.label}</span>
+                        <button class="job-add-btn" onclick="addJobToChain('${job.type}')">+</button>
+                    `;
+                    item.addEventListener('dragstart', handleDragStart);
+                    item.addEventListener('dragend', handleDragEnd);
+                    item.title = job.description;
+                    div.appendChild(item);
+                });
+
+                container.appendChild(div);
+            });
+        }
+
+        // Render predefined templates
+        function renderTemplates() {
+            const container = document.getElementById('templateList');
+            container.innerHTML = '';
+
+            Object.entries(predefinedChains).forEach(([key, tmpl]) => {
+                const item = document.createElement('div');
+                item.className = 'template-item';
+                item.innerHTML = `
+                    <div class="template-name">${tmpl.name}</div>
+                    <div class="template-desc">${tmpl.description}</div>
+                `;
+                item.onclick = () => loadTemplate(key);
+                container.appendChild(item);
+            });
+
+            // Render saved templates
+            const savedContainer = document.getElementById('savedTemplates');
+            if (savedTemplates.length === 0) {
+                savedContainer.innerHTML = '<div class="template-item" style="color: #666;">No saved templates yet</div>';
+            } else {
+                savedContainer.innerHTML = '';
+                savedTemplates.forEach((tmpl, idx) => {
+                    const item = document.createElement('div');
+                    item.className = 'template-item';
+                    item.innerHTML = `
+                        <div class="template-name">${tmpl.name}</div>
+                        <div class="template-desc">${tmpl.phases.length} jobs</div>
+                    `;
+                    item.onclick = () => loadSavedTemplate(idx);
+                    savedContainer.appendChild(item);
+                });
+            }
+        }
+
+        // Load a predefined template
+        function loadTemplate(key) {
+            const tmpl = predefinedChains[key];
+            if (!tmpl) return;
+
+            chain = tmpl.phases.map((p, i) => ({
+                id: Date.now() + i,
+                job_type: p.job_type,
+                params: { ...p.params },
+                expanded: false
+            }));
+            renderChain();
+            validateChain();
+        }
+
+        // Load a saved template
+        function loadSavedTemplate(idx) {
+            const tmpl = savedTemplates[idx];
+            if (!tmpl) return;
+
+            chain = tmpl.phases.map((p, i) => ({
+                id: Date.now() + i,
+                job_type: p.job_type,
+                params: { ...p.params },
+                expanded: false
+            }));
+            renderChain();
+            validateChain();
+        }
+
+        // Add job to chain
+        function addJobToChain(jobType) {
+            const schema = jobSchemas[jobType];
+            if (!schema) return;
+
+            // Build default params
+            const params = {};
+            (schema.params || []).forEach(p => {
+                params[p.name] = p.default;
+            });
+
+            chain.push({
+                id: Date.now(),
+                job_type: jobType,
+                params,
+                expanded: false
+            });
+
+            renderChain();
+            validateChain();
+        }
+
+        // Render the chain
+        function renderChain() {
+            const container = document.getElementById('chainList');
+
+            if (chain.length === 0) {
+                container.innerHTML = '<div class="chain-empty">Drag jobs here or click + to add them to your chain</div>';
+                document.getElementById('runBtn').disabled = true;
+                return;
+            }
+
+            container.innerHTML = '';
+            chain.forEach((item, idx) => {
+                const schema = jobSchemas[item.job_type] || {};
+                const div = document.createElement('div');
+                div.className = 'chain-item' + (item.expanded ? ' expanded' : '');
+                div.draggable = true;
+                div.dataset.index = idx;
+
+                div.innerHTML = `
+                    <div class="chain-item-header">
+                        <div class="chain-item-left">
+                            <span class="chain-item-number">${idx + 1}</span>
+                            <span class="chain-item-name">${schema.label || item.job_type}</span>
+                        </div>
+                        <div class="chain-item-actions">
+                            <button class="chain-item-btn" onclick="toggleExpand(${idx})" title="Configure">...</button>
+                            <button class="chain-item-btn" onclick="moveUp(${idx})" title="Move up">^</button>
+                            <button class="chain-item-btn" onclick="moveDown(${idx})" title="Move down">v</button>
+                            <button class="chain-item-btn delete" onclick="removeFromChain(${idx})" title="Remove">x</button>
+                        </div>
+                    </div>
+                    <div class="chain-item-params">
+                        ${renderParams(item, schema)}
+                    </div>
+                `;
+
+                div.addEventListener('dragstart', handleChainDragStart);
+                div.addEventListener('dragend', handleChainDragEnd);
+                div.addEventListener('dragover', handleChainDragOver);
+                div.addEventListener('drop', handleChainDrop);
+
+                container.appendChild(div);
+            });
+        }
+
+        // Render parameter inputs
+        function renderParams(item, schema) {
+            if (!schema.params || schema.params.length === 0) {
+                return '<div style="color: #666;">No configurable parameters</div>';
+            }
+
+            return schema.params.map(p => {
+                const value = item.params[p.name] !== undefined ? item.params[p.name] : p.default;
+
+                if (p.type === 'bool') {
+                    return `
+                        <div class="param-row">
+                            <span class="param-label">${p.label}</span>
+                            <input type="checkbox" class="param-checkbox"
+                                   ${value ? 'checked' : ''}
+                                   onchange="updateParam(${item.id}, '${p.name}', this.checked)"
+                                   title="${p.description}">
+                        </div>
+                    `;
+                } else if (p.type === 'select') {
+                    return `
+                        <div class="param-row">
+                            <span class="param-label">${p.label}</span>
+                            <select class="param-input"
+                                    onchange="updateParam(${item.id}, '${p.name}', this.value)"
+                                    title="${p.description}">
+                                ${p.options.map(opt => `<option value="${opt}" ${value == opt ? 'selected' : ''}>${opt}</option>`).join('')}
+                            </select>
+                        </div>
+                    `;
+                } else {
+                    const inputType = p.type === 'int' || p.type === 'float' ? 'number' : 'text';
+                    return `
+                        <div class="param-row">
+                            <span class="param-label">${p.label}</span>
+                            <input type="${inputType}" class="param-input"
+                                   value="${value || ''}"
+                                   ${p.min_value !== null ? `min="${p.min_value}"` : ''}
+                                   ${p.max_value !== null ? `max="${p.max_value}"` : ''}
+                                   onchange="updateParam(${item.id}, '${p.name}', this.value)"
+                                   title="${p.description}">
+                        </div>
+                    `;
+                }
+            }).join('');
+        }
+
+        // Update a parameter value
+        function updateParam(id, name, value) {
+            const item = chain.find(c => c.id === id);
+            if (item) {
+                item.params[name] = value;
+            }
+        }
+
+        // Toggle expand/collapse
+        function toggleExpand(idx) {
+            chain[idx].expanded = !chain[idx].expanded;
+            renderChain();
+        }
+
+        // Move item up
+        function moveUp(idx) {
+            if (idx === 0) return;
+            [chain[idx - 1], chain[idx]] = [chain[idx], chain[idx - 1]];
+            renderChain();
+            validateChain();
+        }
+
+        // Move item down
+        function moveDown(idx) {
+            if (idx >= chain.length - 1) return;
+            [chain[idx], chain[idx + 1]] = [chain[idx + 1], chain[idx]];
+            renderChain();
+            validateChain();
+        }
+
+        // Remove from chain
+        function removeFromChain(idx) {
+            chain.splice(idx, 1);
+            renderChain();
+            validateChain();
+        }
+
+        // Clear chain
+        function clearChain() {
+            chain = [];
+            renderChain();
+            document.getElementById('validationBox').innerHTML = '';
+        }
+
+        // Drag and drop handlers for available jobs
+        let draggedJobType = null;
+
+        function handleDragStart(e) {
+            draggedJobType = e.target.dataset.jobType;
+            e.target.classList.add('dragging');
+        }
+
+        function handleDragEnd(e) {
+            draggedJobType = null;
+            e.target.classList.remove('dragging');
+        }
+
+        function handleDragOver(e) {
+            e.preventDefault();
+            e.currentTarget.classList.add('drag-over');
+        }
+
+        function handleDragLeave(e) {
+            e.currentTarget.classList.remove('drag-over');
+        }
+
+        function handleDrop(e) {
+            e.preventDefault();
+            e.currentTarget.classList.remove('drag-over');
+            if (draggedJobType) {
+                addJobToChain(draggedJobType);
+            }
+        }
+
+        // Drag and drop handlers for chain reordering
+        let draggedChainIndex = null;
+
+        function handleChainDragStart(e) {
+            draggedChainIndex = parseInt(e.currentTarget.dataset.index);
+            e.currentTarget.classList.add('dragging');
+        }
+
+        function handleChainDragEnd(e) {
+            draggedChainIndex = null;
+            e.currentTarget.classList.remove('dragging');
+        }
+
+        function handleChainDragOver(e) {
+            e.preventDefault();
+        }
+
+        function handleChainDrop(e) {
+            e.preventDefault();
+            const targetIndex = parseInt(e.currentTarget.dataset.index);
+            if (draggedChainIndex !== null && draggedChainIndex !== targetIndex) {
+                const item = chain.splice(draggedChainIndex, 1)[0];
+                chain.splice(targetIndex, 0, item);
+                renderChain();
+                validateChain();
+            }
+        }
+
+        // Source change handler
+        function onSourceChange() {
+            selectedSource = document.getElementById('sourceSelect').value;
+            validateChain();
+        }
+
+        // Validate chain
+        async function validateChain() {
+            const box = document.getElementById('validationBox');
+            const runBtn = document.getElementById('runBtn');
+
+            if (chain.length === 0) {
+                box.innerHTML = '';
+                runBtn.disabled = true;
+                return;
+            }
+
+            // Check if source is selected
+            if (!selectedSource) {
+                const needsSource = chain.some(c => {
+                    const schema = jobSchemas[c.job_type];
+                    return schema && schema.requires_source !== false;
+                });
+
+                if (needsSource) {
+                    box.innerHTML = '<div class="validation-box warning">Please select a target source</div>';
+                    runBtn.disabled = true;
+                    return;
+                }
+            }
+
+            // Call API to validate
+            try {
+                const jobTypes = chain.map(c => c.job_type);
+                const resp = await fetch('/useradmin/api/job-builder/validate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ job_types: jobTypes })
+                });
+                const result = await resp.json();
+
+                if (result.errors && result.errors.length > 0) {
+                    box.innerHTML = `
+                        <div class="validation-box error">
+                            Errors found:
+                            <ul class="validation-list">
+                                ${result.errors.map(e => `<li>${e}</li>`).join('')}
+                            </ul>
+                        </div>
+                    `;
+                    runBtn.disabled = true;
+                } else if (result.warnings && result.warnings.length > 0) {
+                    box.innerHTML = `
+                        <div class="validation-box warning">
+                            Warnings:
+                            <ul class="validation-list">
+                                ${result.warnings.map(w => `<li>${w}</li>`).join('')}
+                            </ul>
+                        </div>
+                    `;
+                    runBtn.disabled = false;
+                } else {
+                    box.innerHTML = '<div class="validation-box success">Chain is valid</div>';
+                    runBtn.disabled = false;
+                }
+            } catch (e) {
+                box.innerHTML = '<div class="validation-box error">Failed to validate chain</div>';
+                runBtn.disabled = true;
+            }
+        }
+
+        // Run the chain
+        async function runChain() {
+            if (chain.length === 0) return;
+
+            const runBtn = document.getElementById('runBtn');
+            runBtn.disabled = true;
+            runBtn.textContent = 'Starting...';
+
+            try {
+                const phases = chain.map(c => ({
+                    job_type: c.job_type,
+                    params: c.params
+                }));
+
+                const resp = await fetch('/useradmin/api/job-builder/run', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        source_id: selectedSource,
+                        phases: phases,
+                        resumable: true
+                    })
+                });
+
+                const result = await resp.json();
+
+                if (result.job_id) {
+                    showToast(`Job started: ${result.job_id}`, 'success');
+                    // Redirect to jobs page to monitor
+                    setTimeout(() => {
+                        window.location.href = '/useradmin/jobs';
+                    }, 1500);
+                } else {
+                    showToast(result.error || 'Failed to start job', 'error');
+                }
+            } catch (e) {
+                showToast('Failed to start job chain', 'error');
+            } finally {
+                runBtn.disabled = false;
+                runBtn.textContent = 'Run Chain';
+            }
+        }
+
+        // Save chain as template
+        function saveChain() {
+            if (chain.length === 0) {
+                showToast('Chain is empty', 'error');
+                return;
+            }
+
+            const name = prompt('Enter template name:');
+            if (!name) return;
+
+            const template = {
+                name: name,
+                phases: chain.map(c => ({
+                    job_type: c.job_type,
+                    params: { ...c.params }
+                }))
+            };
+
+            savedTemplates.push(template);
+            localStorage.setItem('jobBuilderTemplates', JSON.stringify(savedTemplates));
+            renderTemplates();
+            showToast('Template saved', 'success');
+        }
+
+        // Toast notification
+        function showToast(message, type) {
+            // Use existing toast if available, otherwise console
+            if (typeof window.showToast === 'function') {
+                window.showToast(message, type);
+            } else {
+                console.log(`[${type}] ${message}`);
+                alert(message);
+            }
+        }
+    </script>
+</body>
+</html>

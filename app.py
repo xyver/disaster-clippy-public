@@ -2317,11 +2317,17 @@ def format_articles_for_context(articles: List[dict]) -> str:
             DOC_TYPE_ACADEMIC: "Academic (research paper/study)"
         }.get(doc_type, "Article")
 
-        # Get appropriate URL for this context (local_url for offline, url for online)
-        # _get_display_url handles ZIM URLs, HTML backup local_urls, and online URLs
-        url = _get_display_url(article)
-        if url:
-            url_line = f"URL: {url}"
+        # For LLM context, always prefer the external URL so it generates correct links
+        # The articles panel uses _get_display_url which handles local URLs for offline browsing
+        external_url = metadata.get("url", "")
+        local_url = metadata.get("local_url", "")
+
+        # Show external URL to LLM (so it creates proper clickable links)
+        # Fall back to local_url if no external URL available
+        if external_url and external_url.startswith("http"):
+            url_line = f"URL: {external_url}"
+        elif local_url:
+            url_line = f"URL: {local_url}"
         else:
             url_line = "URL: (offline archive)"
 

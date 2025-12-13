@@ -953,7 +953,8 @@ class ZIMIndexer:
             if progress_callback:
                 progress_callback(0, 100, "Preparing to delete existing documents...")
             try:
-                store = VectorStore(dimension=self.dimension)
+                # Use read_only=True to skip loading embedding model - not needed for delete
+                store = VectorStore(dimension=self.dimension, read_only=True)
                 # Pass progress callback for delete progress
                 result = store.delete_by_source(self.source_id, progress_callback=progress_callback)
                 deleted_count = result.get("deleted_count", 0)
@@ -1481,7 +1482,7 @@ class HTMLBackupIndexer:
             raise FileNotFoundError(f"Backup folder not found: {backup_path}")
 
     def index(self, limit: int = 1000, progress_callback: Optional[Callable] = None,
-              skip_existing: bool = True) -> Dict:
+              skip_existing: bool = True, clear_existing: bool = False) -> Dict:
         """
         Index content from HTML backup into vector database.
 
@@ -1489,6 +1490,7 @@ class HTMLBackupIndexer:
             limit: Maximum number of pages to index
             progress_callback: Function(current, total, message) for progress updates
             skip_existing: Skip pages already in the database
+            clear_existing: Clear existing documents for this source before indexing (force reindex)
 
         Returns:
             Dict with success status, count, errors
@@ -1525,15 +1527,50 @@ class HTMLBackupIndexer:
 
         print(f"Found {len(pages)} pages to index")
 
-        # Get existing IDs if skipping
+        # Unified progress reporting: map phases to single 0-100% scale
+        # 0-5%: Delete existing (if force reindex)
+        # 5-60%: Processing HTML pages
+        # 60-100%: Adding to vector store (embeddings)
+        def report_delete_progress(current, total, message):
+            if progress_callback and total > 0:
+                # Map to 0-5% range
+                unified_progress = int((current / total) * 5)
+                progress_callback(unified_progress, 100, message)
+
+        def report_processing_progress(current, total, message):
+            if progress_callback and total > 0:
+                # Map to 5-60% range (55% of scale)
+                unified_progress = 5 + int((current / total) * 55)
+                progress_callback(unified_progress, 100, message)
+
+        def report_embedding_progress(current, total, message):
+            if progress_callback and total > 0:
+                # Map to 60-100% range (40% of scale)
+                unified_progress = 60 + int((current / total) * 40)
+                progress_callback(unified_progress, 100, message)
+
+        # Clear existing documents if requested (force reindex)
+        if clear_existing or not skip_existing:
+            print(f"[HTMLBackupIndexer] Force reindex - clearing existing documents for '{self.source_id}' ({self.dimension}-dim)")
+            report_delete_progress(0, 1, "Clearing existing documents...")
+            try:
+                # Use read_only=True to skip loading embedding model - not needed for delete
+                store = VectorStore(dimension=self.dimension, read_only=True)
+                result = store.delete_by_source(self.source_id)
+                deleted_count = result.get("deleted_count", 0) if isinstance(result, dict) else result
+                print(f"[HTMLBackupIndexer] Cleared {deleted_count} existing documents")
+            except Exception as e:
+                print(f"[HTMLBackupIndexer] Warning: Could not clear existing documents: {e}")
+            report_delete_progress(1, 1, "Cleared existing documents")
+
+        # Get existing IDs if skipping (only if not force reindex)
         existing_ids = set()
-        if skip_existing:
+        if skip_existing and not clear_existing:
             store = VectorStore(dimension=self.dimension, read_only=True)
             existing_ids = store.get_existing_ids()
             print(f"Found {len(existing_ids)} already indexed documents ({self.dimension}-dim)")
 
-        if progress_callback:
-            progress_callback(0, min(limit, len(pages)), "Loading pages...")
+        report_processing_progress(0, 1, "Loading pages...")
 
         indexed = 0
         skipped = 0
@@ -1593,8 +1630,9 @@ class HTMLBackupIndexer:
 
                 indexed += 1
 
-                if progress_callback and indexed % 10 == 0:
-                    progress_callback(indexed, min(limit, len(pages) - skipped),
+                if indexed % 10 == 0:
+                    total_to_process = min(limit, len(pages) - skipped)
+                    report_processing_progress(indexed, total_to_process,
                                     f"Processing: {title[:50]}...")
 
             except Exception as e:
@@ -1618,38 +1656,22 @@ class HTMLBackupIndexer:
                 "errors": errors
             }
 
-        # Add to vector store (incremental mode)
-        if progress_callback:
-            progress_callback(len(documents), len(documents), "Indexing documents...")
-
-        print(f"Adding documents to vector store (incremental mode, {self.dimension}-dim)...")
-        store = VectorStore(dimension=self.dimension)
-        result = store.add_documents_incremental(
-            documents,
-            source_id=self.source_id,
-            batch_size=100,
-            return_index_data=True,
-            progress_callback=progress_callback
-        )
-        count = result["count"]
-        skipped_existing = result.get("skipped", 0)
-        resumed = result.get("resumed", False)
-        index_data = result.get("index_data")
-
-        if resumed:
-            print(f"[HTMLBackupIndexer] Resumed: {skipped_existing} docs already indexed, {count} new")
-
-        # Get base_url from manifest
+        # Get base_url from _manifest.json BEFORE adding to ChromaDB
+        # _manifest.json contains source identity info including base_url
         base_url = ""
         try:
-            if self.manifest_path and self.manifest_path.exists():
-                with open(self.manifest_path, 'r', encoding='utf-8') as f:
+            source_manifest_path = self.output_folder / get_manifest_file()
+            if source_manifest_path.exists():
+                with open(source_manifest_path, 'r', encoding='utf-8') as f:
                     manifest = json.load(f)
                 base_url = manifest.get("base_url", "")
-        except Exception:
-            pass
+                if base_url:
+                    print(f"[HTMLBackupIndexer] Using base_url: {base_url}")
+        except Exception as e:
+            print(f"[HTMLBackupIndexer] Could not read base_url from manifest: {e}")
 
-        # Update document URLs with base_url for online use
+        # Update document URLs with base_url BEFORE adding to ChromaDB
+        # This ensures ChromaDB stores full URLs for online use
         if base_url:
             for doc in documents:
                 relative_url = doc.get("url", "")
@@ -1661,6 +1683,26 @@ class HTMLBackupIndexer:
                         doc["url"] = base_url + '/' + relative_url
                     else:
                         doc["url"] = base_url + relative_url
+
+        # Add to vector store (incremental mode)
+        report_embedding_progress(0, 1, "Starting embedding generation...")
+
+        print(f"Adding documents to vector store (incremental mode, {self.dimension}-dim)...")
+        store = VectorStore(dimension=self.dimension)
+        result = store.add_documents_incremental(
+            documents,
+            source_id=self.source_id,
+            batch_size=100,
+            return_index_data=True,
+            progress_callback=report_embedding_progress
+        )
+        count = result["count"]
+        skipped_existing = result.get("skipped", 0)
+        resumed = result.get("resumed", False)
+        index_data = result.get("index_data")
+
+        if resumed:
+            print(f"[HTMLBackupIndexer] Resumed: {skipped_existing} docs already indexed, {count} new")
 
         # Save all output files (v3 format)
         if count > 0:
@@ -1766,7 +1808,8 @@ class PDFIndexer:
         return []
 
     def index(self, limit: int = 1000, progress_callback: Optional[Callable] = None,
-              skip_existing: bool = True, chunk_size: int = 4000) -> Dict:
+              skip_existing: bool = True, chunk_size: int = 4000,
+              clear_existing: bool = False) -> Dict:
         """
         Index PDF content into vector database.
 
@@ -1775,6 +1818,7 @@ class PDFIndexer:
             progress_callback: Function(current, total, message)
             skip_existing: Skip PDFs already in database
             chunk_size: Characters per chunk for long PDFs
+            clear_existing: Clear existing documents for this source before indexing (force reindex)
 
         Returns:
             Dict with results
@@ -1793,8 +1837,20 @@ class PDFIndexer:
                 "indexed_count": 0
             }
 
+        # Clear existing documents if requested (force reindex)
+        if clear_existing or not skip_existing:
+            print(f"[PDFIndexer] Force reindex - clearing existing documents for '{self.source_id}' ({self.dimension}-dim)")
+            try:
+                # Use read_only=True to skip loading embedding model - not needed for delete
+                store = VectorStore(dimension=self.dimension, read_only=True)
+                result = store.delete_by_source(self.source_id)
+                deleted_count = result.get("deleted_count", 0) if isinstance(result, dict) else result
+                print(f"[PDFIndexer] Cleared {deleted_count} existing documents")
+            except Exception as e:
+                print(f"[PDFIndexer] Warning: Could not clear existing documents: {e}")
+
         existing_ids = set()
-        if skip_existing:
+        if skip_existing and not clear_existing:
             try:
                 store = VectorStore(dimension=self.dimension, read_only=True)
                 existing_ids = store.get_existing_ids()
@@ -1952,8 +2008,10 @@ def index_html_backup(backup_path: str, source_id: str, limit: int = 1000,
                       dimension: int = 1536) -> Dict:
     """Index an HTML backup folder."""
     indexer = HTMLBackupIndexer(backup_path, source_id, backup_folder=backup_folder, dimension=dimension)
+    # clear_existing=True when skip_existing=False (force reindex)
     return indexer.index(limit=limit, progress_callback=progress_callback,
-                        skip_existing=skip_existing)
+                        skip_existing=skip_existing,
+                        clear_existing=not skip_existing)
 
 
 def index_pdf_folder(pdf_path: str, source_id: str, limit: int = 1000,
@@ -1963,8 +2021,10 @@ def index_pdf_folder(pdf_path: str, source_id: str, limit: int = 1000,
                      dimension: int = 1536) -> Dict:
     """Index PDF files."""
     indexer = PDFIndexer(pdf_path, source_id, backup_folder=backup_folder, dimension=dimension)
+    # clear_existing=True when skip_existing=False (force reindex)
     return indexer.index(limit=limit, progress_callback=progress_callback,
-                        skip_existing=skip_existing)
+                        skip_existing=skip_existing,
+                        clear_existing=not skip_existing)
 
 
 if __name__ == "__main__":

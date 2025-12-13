@@ -548,6 +548,7 @@
         <div class="sub-nav">
             <a href="/useradmin/sources">All Sources</a>
             <a href="/useradmin/sources/tools" class="active">Source Tools</a>
+            <a href="/useradmin/job-builder">Job Builder</a>
         </div>
 
         <!-- Wizard Steps -->
@@ -1026,7 +1027,7 @@
                             <div class="tool-actions" style="gap: 0.5rem;">
                                 <button class="btn btn-primary" id="btnCreate1536" onclick="createIndex1536()">Create Embeddings</button>
                                 <button class="btn btn-secondary" id="btnIndexAll1536" onclick="indexAll1536()">Index All</button>
-                                <button class="btn btn-secondary" onclick="createIndex1536(true)">Force Re-index</button>
+                                <button class="btn btn-secondary" onclick="reindexSource(1536)">Force Re-index</button>
                             </div>
                         </div>
 
@@ -1053,7 +1054,7 @@
                             <div class="tool-actions" style="gap: 0.5rem;">
                                 <button class="btn btn-primary" id="btnCreateLocal" onclick="createLocalIndex()">Create Embeddings</button>
                                 <button class="btn btn-secondary" id="btnIndexAllLocal" onclick="indexAllLocal()">Index All</button>
-                                <button class="btn btn-secondary" onclick="createLocalIndex(true)">Force Re-index</button>
+                                <button class="btn btn-secondary" onclick="reindexSource(adminMode?.configured_model?.dimension || 768)">Force Re-index</button>
                             </div>
                         </div>
                         <!-- Legacy 768-dim section ID for backwards compatibility -->
@@ -3596,32 +3597,109 @@
             }
         }
 
+        // =============================================================================
+        // REINDEX FUNCTION (Combined: clear vectors + create fresh index)
+        // =============================================================================
+
+        async function reindexSource(dimension) {
+            if (!currentSource) {
+                showToast('No source selected', true);
+                return;
+            }
+
+            // Confirm with user since this deletes existing vectors
+            if (!confirm(`This will DELETE all existing ${dimension}-dim vectors for "${currentSource.source_id}" and create fresh embeddings.\n\nContinue?`)) {
+                return;
+            }
+
+            // Get limit from the appropriate input
+            let limit = 1000;
+            if (dimension === 1536) {
+                limit = parseInt(document.getElementById('indexLimit1536')?.value) || 1000;
+            } else {
+                limit = parseInt(document.getElementById('indexLimitLocal')?.value) || 1000;
+            }
+            const languageFilter = document.getElementById('metadataLanguageFilter')?.value || null;
+
+            const langInfo = languageFilter ? ` (language: ${languageFilter})` : '';
+            logOutput(`Reindexing ${currentSource.source_id} (${dimension}-dim): clearing vectors then creating fresh index (limit: ${limit})${langInfo}...`);
+
+            try {
+                const requestBody = {
+                    source_id: currentSource.source_id,
+                    limit: limit,
+                    dimension: dimension,
+                    force_reindex: true
+                };
+                if (languageFilter) {
+                    requestBody.language_filter = languageFilter;
+                }
+
+                const response = await fetch('/useradmin/api/reindex', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(requestBody)
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    if (data.status === 'submitted' || data.job_id) {
+                        logOutput(`Reindex job submitted: ${data.job_id}`, 'success');
+                        logOutput(`Reindex running in background (clear + index). Check job monitor.`, 'info');
+                        showToast(`Reindex job started for ${currentSource.source_id}`);
+                        // Use existing poll function with null btn (won't update button state)
+                        pollIndexJob(data.job_id, null, dimension);
+                    } else {
+                        logOutput(`Reindex complete`, 'success');
+                        showToast(`Reindex complete`);
+                        updateEmbeddingStatus();
+                    }
+                } else if (response.status === 409) {
+                    logOutput('A job is already running for this source', 'warning');
+                    showToast('Job already running', true);
+                } else {
+                    logOutput(`Error: ${data.detail || 'Reindex failed'}`, 'error');
+                    showToast(data.detail || 'Reindex failed', true);
+                }
+            } catch (e) {
+                logOutput(`Error: ${e.message}`, 'error');
+                showToast('Error: ' + e.message, true);
+            }
+        }
+
         async function pollIndexJob(jobId, btn, dimension) {
             try {
                 const response = await fetch(`/useradmin/api/jobs/${jobId}`);
                 const job = await response.json();
 
                 if (job.status === 'running' || job.status === 'pending') {
-                    btn.textContent = `${job.progress || 0}%`;
+                    if (btn) btn.textContent = `${job.progress || 0}%`;
                     setTimeout(() => pollIndexJob(jobId, btn, dimension), 2000);
                 } else if (job.status === 'completed') {
                     logOutput(`${dimension}-dim embeddings created successfully!`, 'success');
                     showToast(`${dimension}-dim embeddings ready`);
-                    btn.textContent = 'Complete!';
-                    btn.style.background = '#0f3460';
-                    btn.style.color = '#4ecca3';
-                    setTimeout(() => {
-                        btn.disabled = false;
-                        btn.textContent = 'Create Embeddings';
-                        btn.style.background = '';
-                        btn.style.color = '';
+                    if (btn) {
+                        btn.textContent = 'Complete!';
+                        btn.style.background = '#0f3460';
+                        btn.style.color = '#4ecca3';
+                        setTimeout(() => {
+                            btn.disabled = false;
+                            btn.textContent = 'Create Embeddings';
+                            btn.style.background = '';
+                            btn.style.color = '';
+                            updateEmbeddingStatus();
+                        }, 2000);
+                    } else {
                         updateEmbeddingStatus();
-                    }, 2000);
+                    }
                 } else {
                     logOutput(`${dimension}-dim index failed: ${job.error || 'Unknown error'}`, 'error');
                     showToast('Index creation failed', true);
-                    btn.disabled = false;
-                    btn.textContent = 'Create Embeddings';
+                    if (btn) {
+                        btn.disabled = false;
+                        btn.textContent = 'Create Embeddings';
+                    }
                 }
             } catch (e) {
                 setTimeout(() => pollIndexJob(jobId, btn, dimension), 3000);

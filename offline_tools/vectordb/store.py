@@ -117,6 +117,21 @@ class VectorStore:
 
     def _create_embedding_service(self):
         """Create the appropriate embedding service based on dimension"""
+        # Check for offline_only mode with 1536-dim (incompatible)
+        try:
+            from admin.local_config import get_local_config
+            offline_mode = get_local_config().get_offline_mode()
+            if offline_mode == "offline_only" and self.dimension == 1536:
+                raise ValueError(
+                    "[OFFLINE MODE ERROR] 1536-dim indexing requires OpenAI API, but offline_mode is 'offline_only'.\n"
+                    "Options:\n"
+                    "  1. Change offline_mode to 'hybrid' in Settings to use OpenAI for 1536-dim\n"
+                    "  2. Use 768-dim indexing instead (works with local models)\n"
+                    "1536-dim is for Pinecone/cloud sync. 768-dim works fully offline."
+                )
+        except ImportError:
+            pass
+
         # Dimension -> model mapping
         DIMENSION_MODELS = {
             384: "all-MiniLM-L6-v2",       # Fast, lightweight
@@ -390,7 +405,12 @@ class VectorStore:
             if not result["ids"]:
                 return False
 
-            embedding = result["embeddings"][0] if result["embeddings"] else None
+            # ChromaDB returns embeddings as numpy array - can't use truthiness check
+            embeddings = result.get("embeddings")
+            if embeddings is None or len(embeddings) == 0:
+                return False
+
+            embedding = embeddings[0]
             if embedding is None:
                 return False
 
@@ -630,8 +650,9 @@ class VectorStore:
 
         This method matches the PineconeStore interface for unified handling.
 
-        Optimization: First tries to read IDs from _vectors.json or _metadata.json
-        which is instant. Only falls back to ChromaDB scan if files not available.
+        Uses ChromaDB's filter-based delete - single operation that handles
+        finding and deleting all matching documents internally. Skips count
+        query for maximum speed (force reindex doesn't need exact count).
 
         Args:
             source_id: The source identifier to delete
@@ -641,46 +662,21 @@ class VectorStore:
             Dict with deletion stats: {deleted_count, batches}
         """
         try:
-            print(f"[VectorStore] Deleting documents for source: '{source_id}'")
+            print(f"[VectorStore] Deleting all documents for source: '{source_id}'")
 
-            # OPTIMIZATION: Try to get IDs from source files first (instant)
-            ids_to_delete = self._get_ids_from_source_files(source_id)
+            if progress_callback:
+                progress_callback(0, 1, f"Wiping {source_id} from vector store...")
 
-            # Fall back to ChromaDB scan if source files not available
-            if ids_to_delete is None:
-                print(f"[VectorStore] Source files not found, scanning ChromaDB (slow)...")
-                result = self.collection.get(
-                    where={"source": source_id},
-                    include=[]
-                )
-                ids_to_delete = result.get("ids", [])
+            # Single filter-based delete - ChromaDB handles finding + deleting internally
+            # Skip count query for speed - force reindex doesn't need exact count
+            self.collection.delete(where={"source": source_id})
 
-            total_to_delete = len(ids_to_delete)
-            print(f"[VectorStore] Found {total_to_delete} documents to delete")
+            if progress_callback:
+                progress_callback(1, 1, f"Wiped {source_id}")
 
-            if ids_to_delete:
-                # Delete in batches to prevent long blocking and show progress
-                BATCH_SIZE = 500
-                deleted = 0
-                batches = 0
+            print(f"[VectorStore] Wiped all documents for source '{source_id}'")
+            return {"deleted_count": -1, "batches": 1}  # -1 = unknown count, deletion done
 
-                for i in range(0, total_to_delete, BATCH_SIZE):
-                    batch_ids = ids_to_delete[i:i + BATCH_SIZE]
-                    self.collection.delete(ids=batch_ids)
-                    deleted += len(batch_ids)
-                    batches += 1
-
-                    if progress_callback:
-                        progress_callback(deleted, total_to_delete, f"Deleting old documents ({deleted}/{total_to_delete})...")
-                    else:
-                        print(f"[VectorStore] Deleted {deleted}/{total_to_delete} documents...")
-
-                print(f"[VectorStore] Deleted {total_to_delete} documents from source '{source_id}'")
-                return {"deleted_count": total_to_delete, "batches": batches}
-            else:
-                print(f"[VectorStore] No documents found for source '{source_id}'")
-
-            return {"deleted_count": 0, "batches": 0}
         except Exception as e:
             print(f"[VectorStore] Error deleting source {source_id}: {e}")
             import traceback

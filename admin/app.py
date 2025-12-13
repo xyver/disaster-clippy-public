@@ -112,6 +112,7 @@ from .routes.packs import router as packs_router
 from .routes.jobs import router as jobs_router
 from .routes.visualise import router as visualise_router
 from .routes.models import router as models_router
+from .routes.job_builder import router as job_builder_router
 
 # Create router with public mode check - blocks all routes when VECTOR_DB_MODE=pinecone
 router = APIRouter(
@@ -125,6 +126,7 @@ router.include_router(packs_router)
 router.include_router(jobs_router)
 router.include_router(visualise_router)
 router.include_router(models_router)
+router.include_router(job_builder_router)
 
 
 # =============================================================================
@@ -881,6 +883,13 @@ async def jobs_page(request: Request):
     """Jobs - background job manager"""
     config = get_local_config()
     return templates.TemplateResponse("jobs.html", get_template_context(request, config.config))
+
+
+@router.get("/job-builder", response_class=HTMLResponse)
+async def job_builder_page(request: Request):
+    """Job Builder - create custom job chains"""
+    config = get_local_config()
+    return templates.TemplateResponse("job_builder.html", get_template_context(request, config.config))
 
 
 @router.get("/cloud", response_class=HTMLResponse)

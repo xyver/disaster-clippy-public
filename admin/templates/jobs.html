@@ -53,6 +53,7 @@
         .tag-visualisation { background: #1a5c5c; color: #4ecdb4; }
         .tag-cloud_publish { background: #1a3a5c; color: #5cb8f6; }
         .tag-delete_source { background: #5c1a1a; color: #e94560; }
+        .tag-clear_vectors { background: #5c3a1a; color: #f0a060; }
         .job-source { color: #4ecca3; font-weight: 500; }
         .job-message { font-size: 0.8rem; color: #888; margin-top: 0.25rem; }
         .job-actions { display: flex; gap: 0.5rem; align-items: center; }
@@ -117,17 +118,34 @@
     <script>
         // Job type display names and descriptions
         const JOB_TYPES = {
-            'download': { label: 'Download', desc: 'Downloading source pack from cloud' },
+            // Single jobs
+            'install_source': { label: 'Install', desc: 'Downloading and installing source from cloud' },
             'upload': { label: 'Upload', desc: 'Uploading source to cloud storage' },
-            'index': { label: 'Index', desc: 'Creating vector embeddings for search' },
+            'index_online': { label: 'Index (Online)', desc: 'Creating 1536-dim vectors using OpenAI API' },
+            'index_offline': { label: 'Index (Offline)', desc: 'Creating vectors using local model' },
             'metadata': { label: 'Metadata', desc: 'Generating document metadata' },
-            'scan': { label: 'Scan', desc: 'Scanning backup files' },
-            'validate': { label: 'Validate', desc: 'Validating source for distribution' },
+            'scrape': { label: 'Scrape', desc: 'Scraping content from source' },
+            'suggest_tags': { label: 'Suggest Tags', desc: 'AI-powered tag suggestions' },
+            'delete_source': { label: 'Delete', desc: 'Removing source from system' },
+            'clear_vectors': { label: 'Clear Vectors', desc: 'Clearing ChromaDB entries' },
+            'zim_inspect': { label: 'ZIM Inspect', desc: 'Inspecting ZIM file contents' },
+            'zim_index': { label: 'ZIM Index', desc: 'Indexing ZIM file contents' },
             'pinecone_sync': { label: 'Pinecone', desc: 'Syncing vectors to Pinecone cloud' },
             'pinecone_sync_dry': { label: 'Pinecone (Dry)', desc: 'Checking what would sync to Pinecone' },
             'visualisation': { label: 'Visualize', desc: 'Generating 3D knowledge map' },
+            'model_download': { label: 'Model Download', desc: 'Downloading AI models' },
+            'language_download': { label: 'Language Download', desc: 'Downloading language packs' },
+            // Combined jobs
+            'reindex_online': { label: 'Reindex (Online)', desc: 'Clear + fresh 1536-dim index' },
+            'reindex_offline': { label: 'Reindex (Offline)', desc: 'Clear + fresh local index' },
             'cloud_publish': { label: 'Cloud Publish', desc: 'Syncing to Pinecone + regenerating visualization' },
-            'delete_source': { label: 'Delete', desc: 'Removing source from system' }
+            // Legacy (for backwards compatibility with job history)
+            'download': { label: 'Download', desc: 'Downloading source pack (legacy)' },
+            'index': { label: 'Index', desc: 'Creating vector embeddings (legacy)' },
+            'reindex': { label: 'Reindex', desc: 'Clear + create index (legacy)' },
+            'vectors_768': { label: 'Vectors 768', desc: 'Creating 768-dim pack vectors (legacy)' },
+            'scan': { label: 'Scan', desc: 'Scanning backup files (legacy)' },
+            'validate': { label: 'Validate', desc: 'Validating source (legacy)' }
         };
 
         // Special source IDs that should be displayed nicely

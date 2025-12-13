@@ -87,12 +87,20 @@ class EmbeddingService:
             self._init_local_with_fallback(requested_model)
         elif self.offline_mode == "offline_only":
             # Skip API entirely, go straight to local
+            # Only use requested model if it's a valid local model, otherwise use default
             default_local = "all-mpnet-base-v2"
-            self._init_local_with_fallback(model or env_model or default_local)
+            local_model = default_local
+            if requested_model and requested_model in self.LOCAL_MODEL_NAMES:
+                local_model = requested_model
+            self._init_local_with_fallback(local_model)
         elif self.mode == "local":
             # User explicitly wants local mode
+            # Only use requested model if it's a valid local model, otherwise use default
             default_local = "all-mpnet-base-v2"
-            self._init_local_with_fallback(model or env_model or default_local)
+            local_model = default_local
+            if requested_model and requested_model in self.LOCAL_MODEL_NAMES:
+                local_model = requested_model
+            self._init_local_with_fallback(local_model)
         else:
             # Try OpenAI first (online_only or hybrid mode)
             try:
@@ -318,24 +326,49 @@ class EmbeddingService:
 
     def get_status(self) -> dict:
         """Get current embedding service status"""
+        gpu_count = self._get_gpu_count()
+        gpu_info = self._get_gpu_info()
+
         return {
             "available": self.is_available(),
             "mode": self.mode,
             "model": self.model if hasattr(self, 'model') and self.model else None,
             "dimension": self.get_dimension() if self.is_available() else None,
             "offline_mode": self.offline_mode,
-            "notices": self.fallback_notices
+            "notices": self.fallback_notices,
+            "gpu_count": gpu_count,
+            "gpu_info": gpu_info,
+            "multi_gpu_available": gpu_count > 1
         }
 
-    def embed_batch(self, texts: List[str], batch_size: int = 50,
-                    progress_callback=None) -> Optional[List[List[float]]]:
+    def _get_gpu_info(self) -> list:
+        """Get detailed info about available GPUs"""
+        gpu_info = []
+        try:
+            import torch
+            if torch.cuda.is_available():
+                for i in range(torch.cuda.device_count()):
+                    props = torch.cuda.get_device_properties(i)
+                    gpu_info.append({
+                        "index": i,
+                        "name": props.name,
+                        "total_memory_gb": round(props.total_memory / (1024**3), 1),
+                        "compute_capability": f"{props.major}.{props.minor}"
+                    })
+        except Exception as e:
+            print(f"[EmbeddingService] Could not get GPU info: {e}")
+        return gpu_info
+
+    def embed_batch(self, texts: List[str], batch_size: int = 64,
+                    progress_callback=None, multi_gpu: bool = True) -> Optional[List[List[float]]]:
         """
         Generate embeddings for multiple texts efficiently.
 
         Args:
             texts: List of texts to embed
-            batch_size: Number of texts per API call
+            batch_size: Number of texts per batch (controls VRAM usage, 64 is safe for 6-8GB GPUs)
             progress_callback: Optional function(current, total, message) for progress
+            multi_gpu: If True and multiple GPUs available, use multi-process pool
 
         Returns:
             List of embedding vectors, or None if embeddings disabled
@@ -346,19 +379,35 @@ class EmbeddingService:
         total = len(texts)
 
         if self.mode == "local" and self._local_model:
-            # Local model - can process larger batches, no API costs
+            # Local model path
             MAX_CHARS = 50000
             truncated = [t[:MAX_CHARS] for t in texts]
-            if progress_callback:
-                progress_callback(0, total, "Computing embeddings (local model)...")
-            embeddings = self._local_model.encode(truncated, convert_to_numpy=True, show_progress_bar=True)
-            if progress_callback:
-                progress_callback(total, total, "Embeddings complete")
-            return [e.tolist() for e in embeddings]
+
+            # Check for multi-GPU
+            gpu_count = self._get_gpu_count()
+
+            if multi_gpu and gpu_count > 1 and total > 100:
+                # Use multi-process pool for multiple GPUs
+                return self._embed_multi_gpu(truncated, batch_size, progress_callback, gpu_count)
+            else:
+                # Single GPU path with explicit batch_size for VRAM control
+                if progress_callback:
+                    gpu_info = f"GPU x{gpu_count}" if gpu_count > 0 else "CPU"
+                    progress_callback(0, total, f"Computing embeddings ({gpu_info}, batch={batch_size})...")
+
+                embeddings = self._local_model.encode(
+                    truncated,
+                    batch_size=batch_size,
+                    convert_to_numpy=True,
+                    show_progress_bar=True
+                )
+
+                if progress_callback:
+                    progress_callback(total, total, "Embeddings complete")
+                return [e.tolist() for e in embeddings]
 
         # OpenAI API path
         all_embeddings = []
-        # Allow longer texts - chunking handles overflow
         MAX_CHARS = 32000
 
         for i in range(0, len(texts), batch_size):
@@ -392,6 +441,69 @@ class EmbeddingService:
 
         return all_embeddings
 
+    def _get_gpu_count(self) -> int:
+        """Detect number of available CUDA GPUs"""
+        try:
+            import torch
+            if torch.cuda.is_available():
+                return torch.cuda.device_count()
+        except ImportError:
+            pass
+        return 0
+
+    def _embed_multi_gpu(self, texts: List[str], batch_size: int,
+                         progress_callback, gpu_count: int) -> List[List[float]]:
+        """
+        Embed texts using multiple GPUs via sentence-transformers multi-process pool.
+
+        Each GPU runs a separate process with a copy of the model.
+        Texts are automatically distributed across GPUs.
+        """
+        total = len(texts)
+
+        if progress_callback:
+            progress_callback(0, total, f"Starting multi-GPU embedding ({gpu_count} GPUs)...")
+
+        try:
+            # Start multi-process pool (one process per GPU)
+            pool = self._local_model.start_multi_process_pool()
+
+            if progress_callback:
+                progress_callback(0, total, f"Encoding on {gpu_count} GPUs (batch={batch_size})...")
+
+            # Encode using all GPUs
+            embeddings = self._local_model.encode_multi_process(
+                texts,
+                pool,
+                batch_size=batch_size
+            )
+
+            # Stop the pool
+            self._local_model.stop_multi_process_pool(pool)
+
+            if progress_callback:
+                progress_callback(total, total, f"Multi-GPU embedding complete ({gpu_count} GPUs)")
+
+            return [e.tolist() for e in embeddings]
+
+        except Exception as e:
+            print(f"[EmbeddingService] Multi-GPU failed, falling back to single GPU: {e}")
+            # Fallback to single GPU
+            if progress_callback:
+                progress_callback(0, total, "Falling back to single GPU...")
+
+            embeddings = self._local_model.encode(
+                texts,
+                batch_size=batch_size,
+                convert_to_numpy=True,
+                show_progress_bar=True
+            )
+
+            if progress_callback:
+                progress_callback(total, total, "Embeddings complete (single GPU fallback)")
+
+            return [e.tolist() for e in embeddings]
+
     def get_dimension(self) -> int:
         """Get the embedding dimension for the current model"""
         if self.mode == "disabled":
@@ -406,9 +518,45 @@ class EmbeddingService:
 
 # Quick test
 if __name__ == "__main__":
+    import json
+
+    print("=" * 60)
+    print("EMBEDDING SERVICE TEST")
+    print("=" * 60)
+
     service = EmbeddingService()
 
+    # Show status with GPU info
+    status = service.get_status()
+    print(f"\nStatus:")
+    print(f"  Mode: {status['mode']}")
+    print(f"  Model: {status['model']}")
+    print(f"  Dimension: {status['dimension']}")
+    print(f"  GPU Count: {status['gpu_count']}")
+    print(f"  Multi-GPU Available: {status['multi_gpu_available']}")
+
+    if status['gpu_info']:
+        print(f"\nGPU Details:")
+        for gpu in status['gpu_info']:
+            print(f"  [{gpu['index']}] {gpu['name']} - {gpu['total_memory_gb']}GB VRAM")
+
     # Test single embedding
+    print(f"\nSingle embedding test:")
     embedding = service.embed_text("How to build a water filter")
-    print(f"Embedding dimension: {len(embedding)}")
-    print(f"First 5 values: {embedding[:5]}")
+    print(f"  Dimension: {len(embedding)}")
+    print(f"  First 5 values: {embedding[:5]}")
+
+    # Test batch embedding (small batch to verify multi-GPU path)
+    if status['gpu_count'] > 1:
+        print(f"\nMulti-GPU batch test (200 texts):")
+        test_texts = ["Test document " + str(i) for i in range(200)]
+        embeddings = service.embed_batch(test_texts, batch_size=64, multi_gpu=True)
+        print(f"  Embedded {len(embeddings)} texts")
+        print(f"  Each embedding dimension: {len(embeddings[0])}")
+    else:
+        print(f"\nSingle GPU batch test (50 texts):")
+        test_texts = ["Test document " + str(i) for i in range(50)]
+        embeddings = service.embed_batch(test_texts, batch_size=32, multi_gpu=False)
+        print(f"  Embedded {len(embeddings)} texts")
+
+    print("\n" + "=" * 60)

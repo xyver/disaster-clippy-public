@@ -69,17 +69,32 @@ def _find_file_in_source(source_path: Path, file_path: str) -> Optional[Path]:
     Find a file within the source folder.
 
     Checks:
-    1. pages/{file_path} - HTML content
-    2. assets/{file_path} - CSS, JS, images
-    3. {file_path} directly in source folder
+    1. pages/{file_path} - HTML content (with path as-is)
+    2. pages/{flattened_path} - HTML content with slashes converted to underscores
+    3. assets/{file_path} - CSS, JS, images
+    4. {file_path} directly in source folder
     """
     # Normalize path separators
-    file_path = file_path.replace('\\', '/')
+    file_path = file_path.replace('\\', '/').lstrip('/')
 
     # Check pages folder first (for HTML files)
     pages_path = source_path / "pages" / file_path
     if pages_path.exists() and pages_path.is_file():
         return pages_path
+
+    # Try flattened path (slashes to underscores) - used by improved scraper
+    # e.g., "GettingStarted/GettingStarted.htm" -> "GettingStarted_GettingStarted.htm.html"
+    flattened = file_path.replace('/', '_')
+
+    # Try flattened path with .html extension added
+    flattened_html = source_path / "pages" / f"{flattened}.html"
+    if flattened_html.exists() and flattened_html.is_file():
+        return flattened_html
+
+    # Try flattened path as-is (might already have .html)
+    flattened_path = source_path / "pages" / flattened
+    if flattened_path.exists() and flattened_path.is_file():
+        return flattened_path
 
     # Check assets folder (CSS, JS, images)
     assets_path = source_path / "assets" / file_path

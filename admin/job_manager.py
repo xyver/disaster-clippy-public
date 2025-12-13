@@ -91,6 +91,10 @@ class Checkpoint:
     indexed_doc_ids: List[str] = field(default_factory=list)
     batch_number: int = 0
 
+    # Combined job checkpoint data
+    phases_completed: List[int] = field(default_factory=list)  # List of completed phase indices
+    phase_results: List[Dict[str, Any]] = field(default_factory=list)  # Results from completed phases
+
     # Error tracking
     errors: List[Dict[str, str]] = field(default_factory=list)
 
@@ -114,6 +118,8 @@ class Checkpoint:
             documents_processed=data.get("documents_processed", 0),
             indexed_doc_ids=data.get("indexed_doc_ids", []),
             batch_number=data.get("batch_number", 0),
+            phases_completed=data.get("phases_completed", []),
+            phase_results=data.get("phase_results", []),
             errors=data.get("errors", [])
         )
 
@@ -749,7 +755,10 @@ class JobPhase:
 def run_combined_job(
     phases: List[JobPhase],
     progress_callback=None,
-    cancel_checker=None
+    cancel_checker=None,
+    source_id: str = None,
+    job_type: str = None,
+    resume: bool = False
 ) -> Dict[str, Any]:
     """
     Run multiple job phases as a single combined job.
@@ -757,10 +766,15 @@ def run_combined_job(
     Progress is mapped across all phases based on their weights.
     Results from all phases are aggregated.
 
+    Supports checkpointing for resume capability when source_id and job_type provided.
+
     Args:
         phases: List of JobPhase objects defining the phases to run
         progress_callback: Function(current, total, message) for overall progress
         cancel_checker: Function() returns True if job should cancel
+        source_id: Optional source ID for checkpoint support
+        job_type: Optional job type for checkpoint support
+        resume: If True and checkpoint exists, resume from last completed phase
 
     Returns:
         Dict with:
@@ -768,9 +782,26 @@ def run_combined_job(
             - phase_results: List of results from each phase
             - current_phase: Index of last completed phase (or where it failed)
             - message: Summary message
+            - resumed: True if job was resumed from checkpoint
+            - phases_skipped: Number of phases skipped due to resume
     """
     if not phases:
         return {"success": False, "error": "No phases provided"}
+
+    # Checkpoint support
+    use_checkpoints = source_id and job_type
+    checkpoint = None
+    phases_completed_indices = []
+    phase_results = []
+    resumed_from_checkpoint = False
+
+    if use_checkpoints and resume:
+        checkpoint = load_checkpoint(source_id, job_type)
+        if checkpoint and checkpoint.phases_completed:
+            phases_completed_indices = checkpoint.phases_completed
+            phase_results = checkpoint.phase_results or []
+            resumed_from_checkpoint = True
+            print(f"[combined_job] Resuming from checkpoint: {len(phases_completed_indices)} phases already complete")
 
     # Normalize weights to sum to 100
     total_weight = sum(p.weight for p in phases)
@@ -786,18 +817,48 @@ def run_combined_job(
     def is_cancelled():
         return cancel_checker() if cancel_checker else False
 
-    phase_results = []
+    def save_phase_checkpoint(completed_indices, results):
+        """Save checkpoint after each phase completes"""
+        if not use_checkpoints:
+            return
+        try:
+            cp = Checkpoint(
+                job_type=job_type,
+                source_id=source_id,
+                progress=int((len(completed_indices) / len(phases)) * 100),
+                phases_completed=completed_indices,
+                phase_results=results
+            )
+            save_checkpoint(cp)
+        except Exception as e:
+            print(f"[combined_job] Warning: Failed to save checkpoint: {e}")
+
+    # Calculate progress offset for skipped phases
     progress_offset = 0
+    for i, phase in enumerate(phases):
+        if i in phases_completed_indices:
+            progress_offset += (phase.weight / total_weight) * 100
+
+    if resumed_from_checkpoint:
+        update(int(progress_offset), 100, f"Resumed: {len(phases_completed_indices)} phases already complete")
 
     for i, phase in enumerate(phases):
+        # Skip already completed phases
+        if i in phases_completed_indices:
+            continue
+
         if is_cancelled():
+            # Save checkpoint before returning
+            save_phase_checkpoint(phases_completed_indices, phase_results)
             return {
                 "success": False,
                 "status": "cancelled",
                 "current_phase": i,
                 "phase_name": phase.name,
                 "phase_results": phase_results,
-                "message": f"Cancelled during: {phase.name}"
+                "message": f"Cancelled during: {phase.name}",
+                "resumed": resumed_from_checkpoint,
+                "phases_skipped": len(phases_completed_indices)
             }
 
         # Calculate this phase's progress range
@@ -834,24 +895,34 @@ def run_combined_job(
 
             # Check if phase failed
             if result_dict.get("status") == "cancelled":
+                save_phase_checkpoint(phases_completed_indices, phase_results)
                 return {
                     "success": False,
                     "status": "cancelled",
                     "current_phase": i,
                     "phase_name": phase.name,
                     "phase_results": phase_results,
-                    "message": f"Cancelled during: {phase.name}"
+                    "message": f"Cancelled during: {phase.name}",
+                    "resumed": resumed_from_checkpoint,
+                    "phases_skipped": len(phases_completed_indices)
                 }
 
             if result_dict.get("success") is False:
+                save_phase_checkpoint(phases_completed_indices, phase_results)
                 return {
                     "success": False,
                     "current_phase": i,
                     "phase_name": phase.name,
                     "phase_results": phase_results,
                     "error": result_dict.get("error", f"Phase '{phase.name}' failed"),
-                    "message": f"Failed at: {phase.name}"
+                    "message": f"Failed at: {phase.name}",
+                    "resumed": resumed_from_checkpoint,
+                    "phases_skipped": len(phases_completed_indices)
                 }
+
+            # Phase completed successfully - save checkpoint
+            phases_completed_indices.append(i)
+            save_phase_checkpoint(phases_completed_indices, phase_results)
 
         except Exception as e:
             phase_results.append({
@@ -859,18 +930,25 @@ def run_combined_job(
                 "index": i,
                 "error": str(e)
             })
+            save_phase_checkpoint(phases_completed_indices, phase_results)
             return {
                 "success": False,
                 "current_phase": i,
                 "phase_name": phase.name,
                 "phase_results": phase_results,
                 "error": str(e),
-                "message": f"Error in {phase.name}: {str(e)}"
+                "message": f"Error in {phase.name}: {str(e)}",
+                "resumed": resumed_from_checkpoint,
+                "phases_skipped": len(phases_completed_indices)
             }
 
         progress_offset += phase_progress_range
 
     update(100, 100, "All phases complete")
+
+    # All phases complete - delete checkpoint
+    if use_checkpoints:
+        delete_checkpoint(source_id, job_type)
 
     # Build summary from phase results
     summary_parts = []
@@ -882,11 +960,15 @@ def run_combined_job(
             summary_parts.append(f"{result.get('updated', 0)} updated")
         if "points" in result:
             summary_parts.append(f"{result.get('points', 0)} points")
+        if "indexed_count" in result:
+            summary_parts.append(f"{result.get('indexed_count', 0)} indexed")
 
     return {
         "success": True,
         "status": "success",
         "phases_completed": len(phases),
         "phase_results": phase_results,
-        "message": "Complete: " + ", ".join(summary_parts) if summary_parts else "All phases complete"
+        "message": "Complete: " + ", ".join(summary_parts) if summary_parts else "All phases complete",
+        "resumed": resumed_from_checkpoint,
+        "phases_skipped": len(checkpoint.phases_completed) if checkpoint and resumed_from_checkpoint else 0
     }
