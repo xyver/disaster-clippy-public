@@ -6,8 +6,8 @@
     <a href="/useradmin/visualise"{% if active_page == 'visualise' %} class="active"{% endif %}>Visualise</a>
     <a href="/useradmin/settings"{% if active_page == 'settings' %} class="active"{% endif %}>Settings</a>
     <a href="/useradmin/submissions"{% if active_page == 'submissions' %} class="active"{% endif %}>Submissions</a>
-    <a href="/useradmin/pinecone"{% if active_page == 'pinecone' %} class="active"{% endif %}>Pinecone</a>
+    {% if admin_mode == 'global' %}<a href="/useradmin/pinecone"{% if active_page == 'pinecone' %} class="active"{% endif %}>Pinecone</a>{% endif %}
     <a href="/">Chat</a>
     <span class="nav-divider"></span>
-    <span id="adminModeIndicator" class="mode-indicator" title="Mode from VECTOR_DB_MODE">Local</span>
+    <span id="adminModeIndicator" class="mode-indicator" title="Mode from VECTOR_DB_MODE">{{ admin_mode|capitalize if admin_mode else 'Local' }}</span>
 </nav>

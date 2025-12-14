@@ -167,12 +167,18 @@
     </div>
 
     <div class="container">
-        <!-- Global Cloud Connection Status -->
+        <!-- Cloud Connection Status - Simplified for Local, Full for Global -->
         <div class="section">
-            <h2>Global Cloud Connections</h2>
-            <p class="description">Connection status for cloud services (R2 storage and Pinecone vector database)</p>
+            <h2 id="connectionHeader">Cloud Connection</h2>
 
-            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+            <!-- Simple R2 status indicator for local mode -->
+            <div id="simpleCloudStatus" style="display: flex; align-items: center; gap: 0.75rem; margin-bottom: 1rem;">
+                <span id="r2Dot" class="status-indicator" style="width: 12px; height: 12px; border-radius: 50%; background: #888;"></span>
+                <span id="r2StatusText" style="color: #888;">Checking R2 connection...</span>
+            </div>
+
+            <!-- Full connection grid for global mode (hidden by default for local) -->
+            <div id="fullConnectionGrid" style="display: none; grid-template-columns: 1fr 1fr; gap: 1rem;">
                 <div class="status-card" id="cloudStatus">
                     <div style="font-size: 0.8rem; color: #888; margin-bottom: 0.5rem;">R2 Cloud Storage</div>
                     <div class="loading">Checking connection...</div>
@@ -208,6 +214,8 @@
         // Check cloud storage status
         async function checkCloudStatus() {
             const container = document.getElementById('cloudStatus');
+            const simpleDot = document.getElementById('r2Dot');
+            const simpleText = document.getElementById('r2StatusText');
 
             try {
                 const response = await fetch('/useradmin/api/cloud-storage-status');
@@ -215,6 +223,22 @@
 
                 cloudConnected = data.connected;
 
+                // Update simple status indicator (for local mode)
+                if (data.connected) {
+                    simpleDot.style.background = '#4ecca3';
+                    simpleText.textContent = 'R2 Connected';
+                    simpleText.style.color = '#4ecca3';
+                } else if (data.configured) {
+                    simpleDot.style.background = '#e94560';
+                    simpleText.textContent = 'R2 Disconnected';
+                    simpleText.style.color = '#e94560';
+                } else {
+                    simpleDot.style.background = '#f9a825';
+                    simpleText.textContent = 'R2 Not Configured';
+                    simpleText.style.color = '#f9a825';
+                }
+
+                // Update full status card (for global mode)
                 let statusHtml = '<div style="font-size: 0.8rem; color: #888; margin-bottom: 0.5rem;">R2 Cloud Storage</div>';
 
                 if (data.connected) {
@@ -264,6 +288,10 @@
                 container.innerHTML = statusHtml;
 
             } catch (e) {
+                simpleDot.style.background = '#e94560';
+                simpleText.textContent = 'R2 Error: ' + e.message;
+                simpleText.style.color = '#e94560';
+
                 container.innerHTML = `
                     <div style="font-size: 0.8rem; color: #888; margin-bottom: 0.5rem;">R2 Cloud Storage</div>
                     <div style="color: #e94560;">
@@ -643,32 +671,35 @@
         // Initialize - load uploaded sources first so we know which ones are already submitted
         checkAdminMode();
         checkCloudStatus();
-        checkPineconeStatus();
+        // Note: checkPineconeStatus() is called from updateAdminView() only for global admin
         loadUploadedSources().then(() => {
             loadSources();
         });
 
-        // Update page title and Pinecone visibility based on admin mode
+        // Update page title and view layout based on admin mode
         function updateAdminView() {
-            // Use backend admin mode (isGlobalAdmin from API) for actual permissions
-            // Test mode toggle is for UI preview only
-            const testMode = localStorage.getItem('testMode') || 'local';
-            const showAsAdmin = isGlobalAdmin || testMode === 'global';
-
             const title = document.getElementById('pageTitle');
             const subtitle = document.getElementById('pageSubtitle');
-            const pineconeLink = document.querySelector('a[href="/useradmin/pinecone"]');
+            const connectionHeader = document.getElementById('connectionHeader');
+            const simpleStatus = document.getElementById('simpleCloudStatus');
+            const fullGrid = document.getElementById('fullConnectionGrid');
 
             if (isGlobalAdmin) {
+                // Global admin: show full connection grid with both R2 and Pinecone
                 title.textContent = 'Cloud Storage (Global Admin)';
                 subtitle.textContent = 'Publish sources to production: R2 backups + master.json + Pinecone';
+                connectionHeader.textContent = 'Cloud Connections';
+                simpleStatus.style.display = 'none';
+                fullGrid.style.display = 'grid';
+                // Load Pinecone status only for global admin
+                checkPineconeStatus();
             } else {
-                title.textContent = 'Cloud Storage (Local)';
-                subtitle.textContent = 'Submit sources for review before global distribution';
-            }
-
-            if (pineconeLink) {
-                pineconeLink.style.opacity = showAsAdmin ? '1' : '0.5';
+                // Local admin: show simple R2 status dot only
+                title.textContent = 'Cloud Storage';
+                subtitle.textContent = 'Download source packs from the cloud';
+                connectionHeader.textContent = 'Cloud Connection';
+                simpleStatus.style.display = 'flex';
+                fullGrid.style.display = 'none';
             }
 
             // Re-render sources to update button text
