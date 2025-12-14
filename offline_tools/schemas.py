@@ -79,7 +79,7 @@ def get_backup_manifest_file() -> str:
 # HTML FILENAME UTILITIES
 # =============================================================================
 
-def html_filename_to_url(filename: str) -> str:
+def html_filename_to_url(filename: str, is_zim_source: bool = False) -> str:
     """
     Convert an HTML backup filename to a URL path.
 
@@ -91,16 +91,27 @@ def html_filename_to_url(filename: str) -> str:
         /Projects/Cooling/ACEvapCool.htm
         /Projects/Cooling/SolarAC
 
+    For ZIM sources, underscores are preserved as they are part of the article name:
+        Anatomical_terms_of_location.html -> Anatomical_terms_of_location
+
     Args:
         filename: The HTML filename (e.g., "Projects_Cooling_Page.htm.html")
+        is_zim_source: If True, preserve underscores (ZIM article names contain underscores)
 
     Returns:
-        URL path (e.g., "/Projects/Cooling/Page.htm")
+        URL path (e.g., "/Projects/Cooling/Page.htm" or "Anatomical_terms_of_location")
     """
     # Preserve .htm extension (scraper adds .html to all files including .htm)
     # Order matters: check .htm.html first, then .html
-    url_path = filename.replace(".htm.html", ".htm").replace(".html", "").replace("_", "/")
-    return f"/{url_path}"
+    url_path = filename.replace(".htm.html", ".htm").replace(".html", "")
+
+    if is_zim_source:
+        # ZIM sources: underscores are part of the article name, don't convert to slashes
+        return url_path
+    else:
+        # HTML scrapes: underscores represent path separators
+        url_path = url_path.replace("_", "/")
+        return f"/{url_path}"
 
 
 def html_filename_to_title(filename: str) -> str:
@@ -408,8 +419,17 @@ class SourceManifest:
     # License and attribution
     license: str = "Unknown"
     license_verified: bool = False
+    license_notes: str = ""  # Required if license is "Custom"
     attribution: str = ""
     base_url: str = ""
+
+    # Human verification flags
+    links_verified_offline: bool = False
+    links_verified_online: bool = False
+
+    # Language
+    language: str = ""  # ISO 639-1 code (e.g., "en", "es")
+    language_verified: bool = False
 
     # Tags for discovery
     tags: List[str] = field(default_factory=list)
@@ -449,8 +469,13 @@ class SourceManifest:
             "description": self.description,
             "license": self.license,
             "license_verified": self.license_verified,
+            "license_notes": self.license_notes,
             "attribution": self.attribution,
             "base_url": self.base_url,
+            "links_verified_offline": self.links_verified_offline,
+            "links_verified_online": self.links_verified_online,
+            "language": self.language,
+            "language_verified": self.language_verified,
             "tags": self.tags,
             "total_docs": self.total_docs,
             "total_chars": self.total_chars,
@@ -491,8 +516,13 @@ class SourceManifest:
             description=data.get("description", ""),
             license=data.get("license", "Unknown"),
             license_verified=data.get("license_verified", False),
+            license_notes=data.get("license_notes", ""),
             attribution=data.get("attribution", ""),
             base_url=data.get("base_url", ""),
+            links_verified_offline=data.get("links_verified_offline", False),
+            links_verified_online=data.get("links_verified_online", False),
+            language=data.get("language", ""),
+            language_verified=data.get("language_verified", False),
             tags=data.get("tags", []),
             total_docs=data.get("total_docs", 0),
             total_chars=data.get("total_chars", 0),

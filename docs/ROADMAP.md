@@ -19,7 +19,9 @@ Future plans and feature development priorities.
 **Admin Panel:**
 - FastAPI admin dashboard at /useradmin/
 - 5-step Source Tools wizard
-- Source validation with status boxes (Config, Backup, Metadata, Embeddings, License)
+- Source validation with 6 status boxes (Config, Backup, Metadata, 1536, 768, License)
+- Validation gates: can_submit (local admin) and can_publish (global admin)
+- Human verification flags (license_verified, links_verified_offline, links_verified_online)
 - Install/download cloud source packs
 - Auto-discovery of indexed sources
 - License compliance tracking
@@ -157,6 +159,73 @@ Better user experience for chat interactions.
 - ZIM article links: `target="_blank"` with zim-link class
 - External URLs: `target="_blank"` with `rel="noopener noreferrer"`
 - Markdown link parsing for AI responses
+
+---
+
+### Validation System
+
+Unified validation architecture with permission gates and caching.
+
+**Status:** COMPLETED (Dec 2025)
+
+**Implemented:**
+- Two permission gates: `can_submit` (local admin) and `can_publish` (global admin)
+- Two validation tiers: Light (<100ms) and Deep (5-30 sec for integrity checks)
+- Human verification flags: license_verified, links_verified_offline, links_verified_online
+- Validation caching in `_validation_status.json` with mtime-based invalidation
+- ALLOWED_LICENSES list (12 licenses including Custom with notes)
+- 6 status boxes in UI (Config, Backup, Metadata, 1536, 768, License)
+
+**Key Files:**
+- `offline_tools/validation.py` - Core validation module
+- `docs/validation.md` - Full specification
+
+---
+
+### Job Builder UI
+
+Visual job chain builder for custom combined jobs.
+
+**Status:** COMPLETED (Dec 2025)
+
+**Implemented:**
+- Visual UI at `/useradmin/job-builder`
+- Click to add jobs to chain
+- Drag to reorder
+- Parameter configuration per job
+- Chain validation (warns about ordering issues)
+- Checkpoint support for resumable chains
+- Save/load chain templates (localStorage)
+
+**Combined Job Framework:**
+- `JobPhase` dataclass for defining phases
+- `run_combined_job()` for executing chains
+- Predefined templates: generate_source, regenerate_source, reindex_online, reindex_offline, cloud_publish
+
+**Key Files:**
+- `admin/job_schemas.py` - Job parameter schemas
+- `admin/routes/job_builder.py` - API endpoints
+- `admin/templates/job_builder.html` - UI
+
+---
+
+### Connection State Management
+
+Smart connectivity detection with visual feedback.
+
+**Status:** COMPLETED (Dec 2025)
+
+**Implemented:**
+- 6 connection states: online, checking, unstable, disconnected, offline, recovering
+- Color-coded indicators (green, blue, yellow, red, gray)
+- Unified `/api/v1/connection-status` endpoint
+- Smart ping logic (5-min interval, reset on success, immediate on failure)
+- No pinging in offline_only mode
+- Consistent display across Dashboard, Settings, and Chat pages
+
+**Key Files:**
+- `admin/connection_manager.py` - State machine
+- `docs/ai-service.md` - Full documentation
 
 ---
 
@@ -333,30 +402,21 @@ python cli/ingest.py pdf create-collection <name> --license <type>
 
 Balance results across sources so large collections don't dominate.
 
-**Status:** Planning
+**Status:** ONGOING (Dec 2025) - Core implemented, tuning weights
 
 **Problem:** Large sources (e.g., 135 PDF chunks) dominate search results, drowning out smaller but potentially more relevant sources.
 
-**Solution:**
-1. Source-aware re-ranking with max results per source
-2. Title/exact match boosting
-3. Fetch more results, then diversify
+**Implemented:**
+- `ensure_source_diversity()` in app.py
+- Retrieves 15 candidates, applies max 2 per source, returns 5
+- Round-robin selection by score
+- Doc type prioritization (guides over articles)
 
-**Implementation:**
-```python
-def diversify_results(articles: List[dict], max_per_source: int = 2) -> List[dict]:
-    """Re-rank results to ensure diversity across sources."""
-    by_source = {}
-    diversified = []
-    for article in articles:
-        source = article.get("metadata", {}).get("source", "unknown")
-        if source not in by_source:
-            by_source[source] = 0
-        if by_source[source] < max_per_source:
-            diversified.append(article)
-            by_source[source] += 1
-    return diversified
-```
+**Still Exploring:**
+- Different weighting strategies
+- Title/exact match boosting
+- Query intent detection for dynamic weights
+- Per-source quality scores
 
 ---
 
@@ -418,20 +478,22 @@ Interactive 3D visualization of document embeddings for admin content curation.
 
 Integrate the existing HTML scraper into the admin dashboard for creating custom backups.
 
-**Status:** Backend ready, needs dashboard UI
+**Status:** IMPLEMENTED (Dec 2025)
 
-**What exists:**
-- `HTMLBackupScraper` class in [offline_tools/backup/html.py](offline_tools/backup/html.py) - downloads pages to `pages/` folder
-- `HTMLBackupIndexer` class in [offline_tools/indexer.py](offline_tools/indexer.py) - indexes HTML backups
-- `backup_manifest.json` format for URL-to-filename mapping
-- Metadata generation from HTML files
+**Implemented:**
+- `HTMLBackupScraper` class in [offline_tools/backup/html.py](offline_tools/backup/html.py)
+- `HTMLBackupIndexer` class in [offline_tools/indexer.py](offline_tools/indexer.py)
+- Integrated into Source Tools wizard (Step 1)
+- Configurable: page limit, max depth, delay, follow links, include assets
+- URL discovery: XML sitemap, sitemap index, HTML sitemap pages, link following
+- Breadth-first crawling for broad coverage
+- Resume support (checks backup_manifest.json for existing pages)
+- Progress tracking in Jobs page
 
-**What's missing:**
-- Dashboard UI to configure and run scrapes (currently CLI only)
+**Possible Enhancements:**
 - Language filtering at scrape time (filter pages before downloading)
 - License detection (scan for /license, /terms, Creative Commons badges)
 - Better metadata extraction from site `<meta>` tags
-- Progress tracking in Jobs page
 
 **URL handling:**
 - `local_url`: `/backup/{source_id}/{filename}` - served from backup folder
@@ -712,49 +774,32 @@ POST /api/jobs/{job_id}/chunks/{id}/heartbeat # Worker still alive
 
 Self-hosted backup system for users with their own hosting infrastructure.
 
-**Status:** Planning (placeholder in Settings page)
+**Status:** IMPLEMENTED (Dec 2025)
 
-**Problem:**
-- "Global" mode requires central Pinecone/R2 access
-- "Local" mode is single-machine only
-- Users with own servers/VPS want a middle ground
-- Want to sync between devices without using project's cloud
+**Implemented Features:**
+- Provider dropdown in Settings: Cloudflare R2, AWS S3, Backblaze B2, DigitalOcean Spaces, Custom S3-Compatible
+- Auto-fill endpoint URL based on provider selection
+- Credential storage in `local_settings.json` (gitignored)
+- "Test Connection" button validates before saving
+- Masked credentials in UI (only last 4 chars of access key shown)
 
-**Solution: Personal Cloud Mode**
-- User provides their own S3-compatible storage endpoint
-- User optionally provides their own vector DB endpoint
-- System syncs to user's infrastructure instead of project's cloud
+**Supported Providers:**
 
-**Settings Page Fields:**
-```
-Personal Cloud Backup
----------------------
-Storage Type: [S3-Compatible v]
-Endpoint URL: [https://my-minio.example.com]
-Bucket Name: [disaster-clippy]
-Access Key: [********]
-Secret Key: [********]
-[Test Connection] [Save]
-
-Optional: Vector Database
--------------------------
-Type: [Pinecone v]
-API Key: [********]
-Environment: [us-east-1]
-[Test Connection] [Save]
-```
-
-**Sync Behavior:**
-- Manual sync button (not automatic)
-- Uploads: _manifest.json, _metadata.json, _vectors.json, backups
-- Downloads: Pull sources from personal cloud to new device
-- Conflict resolution: Newer timestamp wins (with confirmation)
+| Provider | Endpoint Template | Typical Cost |
+|----------|------------------|--------------|
+| Cloudflare R2 | `https://ACCOUNT-ID.r2.cloudflarestorage.com` | $0.015/GB, no egress |
+| AWS S3 | `https://s3.amazonaws.com` | $0.023/GB + egress |
+| Backblaze B2 | `https://s3.us-west-002.backblazeb2.com` | $0.005/GB |
+| DigitalOcean Spaces | `https://nyc3.digitaloceanspaces.com` | $5/mo for 250GB |
+| Custom/MinIO | User-defined | Varies |
 
 **Use Cases:**
 - Family/community shared knowledge base
 - Prepper groups with dedicated server
 - Organizations with internal hosting requirements
 - Developers testing without affecting production cloud
+
+**See:** [docs/deployment.md](docs/deployment.md) for full configuration details
 
 ---
 
@@ -1243,11 +1288,18 @@ The chat maintains conversation history and article references for follow-up que
 | Document | Purpose |
 |----------|---------|
 | [README.md](README.md) | Quick start and project overview |
-| [DEVELOPER.md](DEVELOPER.md) | Technical details, offline architecture, CLI tools |
+| [DEVELOPER.md](DEVELOPER.md) | Setup guide and documentation index |
 | [SUMMARY.md](SUMMARY.md) | Executive summary (non-technical) |
 | [CONTEXT.md](CONTEXT.md) | Architecture and design decisions |
-| [docs/language-packs.md](docs/language-packs.md) | Offline translation system (Phase 1-3 roadmap) |
+| [docs/architecture.md](docs/architecture.md) | Modes, security, data flow, offline architecture |
+| [docs/source-tools.md](docs/source-tools.md) | SourceManager, indexers, scrapers, tags |
+| [docs/ai-service.md](docs/ai-service.md) | Search, chat, connection modes |
+| [docs/validation.md](docs/validation.md) | Permission gates, validation tiers |
+| [docs/jobs.md](docs/jobs.md) | Background jobs, checkpoints, job builder |
+| [docs/deployment.md](docs/deployment.md) | Deployment scenarios, cloud backup |
+| [docs/admin-guide.md](docs/admin-guide.md) | Admin panel, CLI tools, troubleshooting |
+| [docs/language-packs.md](docs/language-packs.md) | Offline translation system |
 
 ---
 
-*Last Updated: December 12, 2025*
+*Last Updated: December 13, 2025*

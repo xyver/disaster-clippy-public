@@ -86,8 +86,8 @@ JOB_SCHEMAS: Dict[str, JobSchema] = {
         endpoint="/api/generate-metadata",
         weight=20,
         params=[
-            JobParam("language_filter", "string", "Language Filter", default="",
-                     description="ISO code (en, es, fr) to filter ZIM articles"),
+            JobParam("language_filter", "language_code_select", "Language Filter", default="",
+                     description="Filter out articles not in this language (leave blank for all)"),
             JobParam("resume", "bool", "Resume", default=False,
                      description="Resume from checkpoint if available")
         ],
@@ -107,16 +107,12 @@ JOB_SCHEMAS: Dict[str, JobSchema] = {
         endpoint="/api/create-index",
         weight=40,
         params=[
-            JobParam("limit", "int", "Document Limit", default=1000,
-                     min_value=1, max_value=100000,
-                     description="Max documents to index (0 = unlimited)"),
             JobParam("force_reindex", "bool", "Force Reindex", default=False,
                      description="Reindex even if vectors exist"),
-            JobParam("language_filter", "string", "Language Filter", default="",
-                     description="ISO code to filter documents"),
             JobParam("resume", "bool", "Resume", default=False,
                      description="Resume from checkpoint if available"),
             # dimension is fixed at 1536 for online
+            # language_filter removed - use metadata filter instead
         ],
         should_run_after=["metadata", "clear_vectors"]
     ),
@@ -129,18 +125,14 @@ JOB_SCHEMAS: Dict[str, JobSchema] = {
         endpoint="/api/create-index",
         weight=40,
         params=[
-            JobParam("limit", "int", "Document Limit", default=1000,
-                     min_value=1, max_value=100000,
-                     description="Max documents to index (0 = unlimited)"),
             JobParam("force_reindex", "bool", "Force Reindex", default=False,
                      description="Reindex even if vectors exist"),
-            JobParam("language_filter", "string", "Language Filter", default="",
-                     description="ISO code to filter documents"),
             JobParam("resume", "bool", "Resume", default=False,
                      description="Resume from checkpoint if available"),
             JobParam("dimension", "select", "Dimension", default="768",
                      options=["384", "768", "1024"],
                      description="Embedding dimension (depends on local model)")
+            # language_filter removed - use metadata filter instead
         ],
         should_run_after=["metadata", "clear_vectors"]
     ),
@@ -194,24 +186,41 @@ JOB_SCHEMAS: Dict[str, JobSchema] = {
     # ZIM JOBS
     # -------------------------------------------------------------------------
 
-    "zim_inspect": JobSchema(
-        job_type="zim_inspect",
-        label="ZIM Inspect",
-        description="Analyze ZIM file contents and structure",
+    "zim_import": JobSchema(
+        job_type="zim_import",
+        label="ZIM Import",
+        description="Import ZIM file: analyze, extract pages, create manifest (combined inspect+extract)",
         category="content",
-        endpoint="/api/zim/inspect",
-        weight=10,
+        endpoint="/api/zim/import",
+        weight=40,
         requires_source=False,  # Uses zim_path instead
         params=[
-            JobParam("zim_path", "string", "ZIM Path", required=True,
-                     description="Path to ZIM file"),
-            JobParam("scan_limit", "int", "Scan Limit", default=5000,
-                     min_value=100, max_value=100000,
-                     description="Max articles to scan"),
-            JobParam("min_text_length", "int", "Min Text Length", default=50,
+            JobParam("zim_path", "zim_file_select", "ZIM File", required=True,
+                     description="Select a ZIM file from backup folder"),
+            JobParam("min_text_length", "int", "Min Text Length", default=100,
                      min_value=0, max_value=1000,
-                     description="Minimum text length to include")
-        ]
+                     description="Skip pages with less text than this (filters stubs)")
+        ],
+        should_run_before=["detect_base_url", "metadata", "index_online", "index_offline"]
+    ),
+
+    "detect_base_url": JobSchema(
+        job_type="detect_base_url",
+        label="Detect Base URL",
+        description="Sample URLs from source and auto-detect/set the base URL for links",
+        category="content",
+        endpoint="/api/detect-base-url",
+        weight=10,
+        requires_source=True,
+        params=[
+            JobParam("sample_count", "int", "Sample Count", default=10,
+                     min_value=3, max_value=50,
+                     description="Number of random articles to sample for URL detection"),
+            JobParam("auto_apply", "bool", "Auto Apply", default=True,
+                     description="Automatically update manifest if confident detection")
+        ],
+        should_run_after=["zim_import", "scrape", "metadata"],
+        should_run_before=["index_online", "index_offline"]
     ),
 
     # -------------------------------------------------------------------------
@@ -225,7 +234,10 @@ JOB_SCHEMAS: Dict[str, JobSchema] = {
         category="cloud",
         endpoint="/api/install-source",
         weight=50,
+        requires_source=False,  # Uses cloud_source_id instead of local source_id
         params=[
+            JobParam("cloud_source_id", "cloud_source_select", "Source to Install", required=True,
+                     description="Select a source from the cloud to download"),
             JobParam("include_backup", "bool", "Include Backup", default=False,
                      description="Also download HTML backup files"),
             JobParam("sync_mode", "select", "Sync Mode", default="update",
@@ -269,6 +281,29 @@ JOB_SCHEMAS: Dict[str, JobSchema] = {
         endpoint="/api/cloud/visualise",
         weight=20,
         params=[]
+    ),
+
+    # -------------------------------------------------------------------------
+    # LANGUAGE JOBS
+    # -------------------------------------------------------------------------
+
+    "translate_source": JobSchema(
+        job_type="translate_source",
+        label="Translate Source",
+        description="Pre-cache translations for all documents in a source",
+        category="maintenance",
+        endpoint="/api/translate-source",
+        weight=60,
+        params=[
+            JobParam("language", "language_select", "Target Language", required=True,
+                     description="Language to translate to (must have pack installed)"),
+            JobParam("batch_size", "int", "Batch Size", default=10,
+                     min_value=1, max_value=50,
+                     description="Documents to translate per batch"),
+            JobParam("skip_cached", "bool", "Skip Cached", default=True,
+                     description="Skip documents that already have cached translations")
+        ],
+        should_run_after=["metadata"]
     ),
 }
 
@@ -331,6 +366,97 @@ PREDEFINED_CHAINS: Dict[str, Dict[str, Any]] = {
         "phases": [
             {"job_type": "pinecone_sync", "weight": 80, "params": {}},
             {"job_type": "visualisation", "weight": 20, "params": {}},
+        ]
+    },
+
+    # -------------------------------------------------------------------------
+    # STAGE 1: Source Preparation (ends with human review of URLs)
+    # -------------------------------------------------------------------------
+
+    "source_prepare": {
+        "name": "Stage 1: Prepare Source",
+        "description": "Generate metadata and detect base URL - review URLs before indexing",
+        "resumable": True,
+        "phases": [
+            {"job_type": "metadata", "weight": 70, "params": {"resume": True}},
+            {"job_type": "detect_base_url", "weight": 30, "params": {"auto_apply": True}},
+        ]
+    },
+
+    "zim_prepare": {
+        "name": "Stage 1: ZIM Import + Prepare",
+        "description": "Import ZIM file, generate metadata, detect URLs - review before indexing",
+        "resumable": True,
+        "phases": [
+            {"job_type": "zim_import", "weight": 40, "params": {"min_text_length": 100}},
+            {"job_type": "metadata", "weight": 40, "params": {"resume": True}},
+            {"job_type": "detect_base_url", "weight": 20, "params": {"auto_apply": True}},
+        ]
+    },
+
+    # -------------------------------------------------------------------------
+    # STAGE 2: Indexing & Tagging (ends with human review of tags)
+    # -------------------------------------------------------------------------
+
+    "index_and_tag": {
+        "name": "Stage 2: Index + Tag",
+        "description": "Create both indexes and suggest tags - review tags before publishing",
+        "resumable": True,
+        "phases": [
+            {"job_type": "index_online", "weight": 35, "params": {"resume": True}},
+            {"job_type": "index_offline", "weight": 35, "params": {"resume": True}},
+            {"job_type": "suggest_tags", "weight": 30, "params": {}},
+        ]
+    },
+
+    "index_online_only": {
+        "name": "Stage 2: Index Online + Tag",
+        "description": "Create 1536-dim index and suggest tags (cloud-only sources)",
+        "resumable": True,
+        "phases": [
+            {"job_type": "index_online", "weight": 70, "params": {"resume": True}},
+            {"job_type": "suggest_tags", "weight": 30, "params": {}},
+        ]
+    },
+
+    "index_offline_only": {
+        "name": "Stage 2: Index Offline + Tag",
+        "description": "Create 768-dim index and suggest tags (offline-only sources)",
+        "resumable": True,
+        "phases": [
+            {"job_type": "index_offline", "weight": 70, "params": {"resume": True}},
+            {"job_type": "suggest_tags", "weight": 30, "params": {}},
+        ]
+    },
+
+    # -------------------------------------------------------------------------
+    # LEGACY: Full pipelines (kept for backwards compatibility)
+    # -------------------------------------------------------------------------
+
+    "new_source_full": {
+        "name": "[Legacy] Full Source Setup",
+        "description": "Complete pipeline without review breaks - use staged workflow instead",
+        "resumable": True,
+        "phases": [
+            {"job_type": "metadata", "weight": 15, "params": {"resume": True}},
+            {"job_type": "detect_base_url", "weight": 5, "params": {"auto_apply": True}},
+            {"job_type": "index_online", "weight": 30, "params": {"resume": True}},
+            {"job_type": "index_offline", "weight": 30, "params": {"resume": True}},
+            {"job_type": "suggest_tags", "weight": 20, "params": {}},
+        ]
+    },
+
+    "zim_full_import": {
+        "name": "[Legacy] ZIM Full Import",
+        "description": "Complete ZIM pipeline without review breaks - use staged workflow instead",
+        "resumable": True,
+        "phases": [
+            {"job_type": "zim_import", "weight": 20, "params": {"min_text_length": 100}},
+            {"job_type": "metadata", "weight": 15, "params": {"resume": True}},
+            {"job_type": "detect_base_url", "weight": 5, "params": {"auto_apply": True}},
+            {"job_type": "index_online", "weight": 25, "params": {"resume": True}},
+            {"job_type": "index_offline", "weight": 25, "params": {"resume": True}},
+            {"job_type": "suggest_tags", "weight": 10, "params": {}},
         ]
     },
 }

@@ -16,6 +16,7 @@ from offline_tools.schemas import (
     get_manifest_file, get_metadata_file, get_index_file,
     get_vectors_file, get_vectors_768_file, get_backup_manifest_file
 )
+from offline_tools.validation import SYSTEM_FOLDERS
 
 router = APIRouter(prefix="/api", tags=["Source Tools"])
 
@@ -29,9 +30,14 @@ class UpdateSourceConfigRequest(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
     license: Optional[str] = None
+    license_notes: Optional[str] = None  # Required if license is "Custom"
     base_url: Optional[str] = None
     tags: Optional[List[str]] = None
     license_verified: Optional[bool] = None
+    links_verified_offline: Optional[bool] = None
+    links_verified_online: Optional[bool] = None
+    language: Optional[str] = None  # ISO 639-1 code
+    language_verified: Optional[bool] = None
 
 
 class CreateSourceRequest(BaseModel):
@@ -161,284 +167,160 @@ async def get_local_sources():
     """
     Get ALL local sources with completeness status.
 
-    Source list comes from BOTH:
-    1. _master.json (to show orphaned entries that need cleanup)
-    2. Backup folder scan (to find new sources not yet in master)
+    Uses _master.json for fast loading of validation data.
+    Falls back to basic file checks for sources not yet validated.
 
-    File counts come from actual folders (so missing folders show 0).
-    This allows users to see and delete orphaned entries via the UI.
+    Source list comes from BOTH:
+    1. _master.json (validated sources with full status)
+    2. Backup folder scan (to find new sources not yet validated)
     """
     config = get_local_config()
     backup_folder = config.get_backup_folder()
 
-    # Primary discovery: combine _master.json and folder scan
-    sources_config = {}
-
-    if backup_folder:
-        backup_path = Path(backup_folder)
-
-        # 1. First load from _master.json to catch orphaned entries
-        master_file = backup_path / "_master.json"
-        if master_file.exists():
-            try:
-                with open(master_file, 'r', encoding='utf-8') as f:
-                    master_data = json.load(f)
-                for source_id, source_info in master_data.get("sources", {}).items():
-                    sources_config[source_id] = {
-                        "name": source_id,
-                        "description": "",
-                        "license": "Unknown",
-                        "base_url": "",
-                        "license_verified": False,
-                        "tags": source_info.get("topics", []),
-                        "from_master": True,  # Flag to identify orphaned entries
-                    }
-            except Exception:
-                pass
-
-        # 2. Then scan folders to supplement/override with actual data
-        if backup_path.exists():
-            for source_folder in backup_path.iterdir():
-                if source_folder.is_dir():
-                    source_id = source_folder.name
-
-                    # Check for manifest file - read once and store all needed fields
-                    manifest_file = source_folder / get_manifest_file()
-                    if manifest_file.exists():
-                        try:
-                            with open(manifest_file, 'r', encoding='utf-8') as f:
-                                source_data = json.load(f)
-                            sources_config[source_id] = {
-                                "name": source_data.get("name", source_id),
-                                "description": source_data.get("description", ""),
-                                "license": source_data.get("license", "Unknown"),
-                                "base_url": source_data.get("base_url", ""),
-                                "license_verified": source_data.get("license_verified", False),
-                                "tags": source_data.get("tags", []),
-                                "backup_type": source_data.get("backup_type", ""),  # Store to avoid re-reading
-                                "from_master": False,
-                            }
-                        except Exception:
-                            sources_config[source_id] = {"name": source_id, "tags": [], "from_master": False}
-
-                    # Check for pages folder or any content
-                    elif (source_folder / "pages").exists() or list(source_folder.glob("*.html")):
-                        sources_config[source_id] = {"name": source_id, "tags": [], "from_master": False}
-
-    if not sources_config:
+    if not backup_folder:
         return {"sources": [], "total": 0, "complete_count": 0}
 
-    # Check each source for completeness
+    backup_path = Path(backup_folder)
+    if not backup_path.exists():
+        return {"sources": [], "total": 0, "complete_count": 0}
+
+    # Load master.json for validated sources (fast path)
+    master_data = {"sources": {}}
+    master_file = backup_path / "_master.json"
+    if master_file.exists():
+        try:
+            with open(master_file, 'r', encoding='utf-8') as f:
+                master_data = json.load(f)
+        except Exception:
+            pass
+
+    validated_sources = master_data.get("sources", {})
+
+    # Scan folders to find all sources (including new ones not in master)
+    # Skip system folders (chroma_db, models, etc.)
+    all_source_ids = set(validated_sources.keys())
+    for source_folder in backup_path.iterdir():
+        if source_folder.is_dir() and not source_folder.name.startswith("_"):
+            if source_folder.name.lower() not in SYSTEM_FOLDERS:
+                all_source_ids.add(source_folder.name)
+
+    # Build source list from master.json (fast) + fallback for new sources
     local_sources = []
 
-    for source_id, config_data in sources_config.items():
-        # Check if folder exists (orphaned = in master.json but folder missing)
-        source_folder = Path(backup_folder) / source_id if backup_folder else None
-        folder_exists = source_folder and source_folder.exists() and source_folder.is_dir()
-        is_orphaned = config_data.get("from_master", False) and not folder_exists
+    for source_id in all_source_ids:
+        source_folder = backup_path / source_id
+        folder_exists = source_folder.exists() and source_folder.is_dir()
 
-        source_status = {
-            "source_id": source_id,
-            "name": config_data.get("name", source_id),
-            "description": config_data.get("description", ""),
-            "license": config_data.get("license", "Unknown"),
-            "license_verified": config_data.get("license_verified", False),
-            "base_url": config_data.get("base_url", ""),
-            "tags": config_data.get("tags", []),
-            "has_config": not is_orphaned,  # No config if orphaned
-            "has_metadata": False,
-            "has_backup": False,
-            "has_embeddings": False,
-            "has_vectors_768": False,  # 768-dim vectors for offline use
-            "has_vectors_1536": False,  # 1536-dim vectors for online use
-            "backup_type": None,
-            "backup_size_mb": 0,
-            "document_count": 0,
-            "is_complete": False,
-            "production_ready": False,
-            "missing": [],
-            "schema_version": 1,
-            "has_source_metadata": False,
-            "has_documents_file": False,
-            "has_embeddings_file": False,
-            "is_orphaned": is_orphaned,  # Flag for UI to show warning
-        }
+        # Check if in master (validated)
+        master_entry = validated_sources.get(source_id, {})
+        has_validation = master_entry.get("validated_at", "") != "" and not master_entry.get("needs_validation", True)
 
-        # Skip detailed checks for orphaned sources - they have no folder
-        if is_orphaned:
-            source_status["missing"] = ["folder deleted - use Delete to clean up"]
-            local_sources.append(source_status)
-            continue
-
-        # Check for metadata file - use fast count reader (don't load full documents dict)
-        metadata_path = Path(backup_folder) / source_id / get_metadata_file() if backup_folder else None
-
-        if metadata_path and metadata_path.exists():
-            source_status["has_metadata"] = True
-            # Fast read - only gets document_count from header, not full documents dict
-            meta_counts = read_json_count_only(metadata_path)
-            source_status["document_count"] = meta_counts.get("document_count", 0)
+        if has_validation:
+            # Use master.json data directly (fast path)
+            source_status = {
+                "source_id": source_id,
+                "name": master_entry.get("name", source_id),
+                "description": master_entry.get("description", ""),
+                "license": master_entry.get("license", "Unknown"),
+                "license_verified": master_entry.get("license_verified", False),
+                "license_notes": master_entry.get("license_notes", ""),
+                "license_in_allowlist": master_entry.get("license_in_allowlist", False),
+                "base_url": master_entry.get("base_url", ""),
+                "tags": master_entry.get("tags", []),
+                "has_config": master_entry.get("has_manifest", folder_exists),
+                "has_manifest": master_entry.get("has_manifest", False),
+                "has_metadata": master_entry.get("has_metadata", False),
+                "has_backup": master_entry.get("has_backup", False),
+                "has_embeddings": master_entry.get("has_vectors_1536", False) or master_entry.get("has_vectors_768", False),
+                "has_vectors_768": master_entry.get("has_vectors_768", False),
+                "has_vectors_1536": master_entry.get("has_vectors_1536", False),
+                "backup_type": master_entry.get("backup_type", ""),
+                "backup_size_mb": master_entry.get("backup_size_mb", 0),
+                "document_count": master_entry.get("document_count", 0),
+                "vector_count_1536": master_entry.get("vector_count_1536", 0),
+                "vector_count_768": master_entry.get("vector_count_768", 0),
+                "links_verified_offline": master_entry.get("links_verified_offline", False),
+                "links_verified_online": master_entry.get("links_verified_online", False),
+                "language": master_entry.get("language", ""),
+                "language_is_english": master_entry.get("language_is_english", False),
+                "language_verified": master_entry.get("language_verified", False),
+                "is_complete": master_entry.get("has_manifest", False) and master_entry.get("has_metadata", False) and master_entry.get("has_backup", False),
+                "can_submit": master_entry.get("can_submit", False),
+                "can_publish": master_entry.get("can_publish", False),
+                "production_ready": master_entry.get("can_publish", False),
+                "deep_validated": master_entry.get("deep_validated", False),
+                "validated_at": master_entry.get("validated_at", ""),
+                "needs_validation": False,
+                "is_orphaned": not folder_exists,
+                "missing": [],
+            }
         else:
-            source_status["missing"].append("metadata")
+            # Source not validated - do minimal file checks
+            if not folder_exists:
+                # Orphaned entry in master
+                source_status = {
+                    "source_id": source_id,
+                    "name": master_entry.get("name", source_id),
+                    "is_orphaned": True,
+                    "needs_validation": True,
+                    "missing": ["folder deleted - use Delete to clean up"],
+                    "is_complete": False,
+                    "can_submit": False,
+                    "can_publish": False,
+                }
+                local_sources.append(source_status)
+                continue
 
-        # For ZIM sources without metadata yet, get article count from ZIM header
-        if source_status["document_count"] == 0 and backup_folder:
-            source_folder = Path(backup_folder) / source_id
-            zim_files = list(source_folder.glob("*.zim")) if source_folder.exists() else []
-            if zim_files:
+            # Quick file existence checks only
+            manifest_exists = (source_folder / get_manifest_file()).exists()
+            metadata_exists = (source_folder / get_metadata_file()).exists()
+            vectors_1536_exists = (source_folder / get_vectors_file()).exists()
+            vectors_768_exists = (source_folder / get_vectors_768_file()).exists()
+
+            # Read basic info from manifest
+            manifest_data = {}
+            if manifest_exists:
                 try:
-                    from offline_tools.zim_utils import get_zim_metadata
-                    zim_meta = get_zim_metadata(str(zim_files[0]))
-                    if "error" not in zim_meta and zim_meta.get("article_count"):
-                        source_status["document_count"] = zim_meta["article_count"]
-                        source_status["document_count_source"] = "zim_header"  # Indicates this is from ZIM, not metadata
+                    with open(source_folder / get_manifest_file(), 'r', encoding='utf-8') as f:
+                        manifest_data = json.load(f)
                 except Exception:
                     pass
 
-        # Check for backup files using unified detection
-        from offline_tools.packager import detect_backup_status
-        backup_status = detect_backup_status(source_id, Path(backup_folder) if backup_folder else None)
-        source_status["has_backup"] = backup_status["has_backup"]
-        source_status["backup_type"] = backup_status["backup_type"]
-        source_status["backup_size_mb"] = backup_status["backup_size_mb"]
+            # Fast backup check
+            from offline_tools.packager import detect_backup_status
+            backup_status = detect_backup_status(source_id, backup_path)
 
-        # If no backup detected, use backup_type from manifest (already loaded in sources_config)
-        if not source_status["backup_type"]:
-            stored_backup_type = config_data.get("backup_type", "")
-            if stored_backup_type:
-                source_status["backup_type"] = stored_backup_type
-
-        if not backup_status["has_backup"]:
-            source_status["missing"].append("backup file")
-        elif backup_status["backup_size_mb"] < 0.1:
-            source_status["has_backup"] = False
-            source_status["missing"].append("backup file (empty)")
-
-        # Check for schema files
-        if backup_folder:
-            source_folder = Path(backup_folder) / source_id
-            manifest_file = source_folder / get_manifest_file()
-            metadata_file = source_folder / get_metadata_file()
-            vectors_file = source_folder / get_vectors_file()
-            vectors_768_file = source_folder / get_vectors_768_file()
-
-            source_status["has_manifest"] = manifest_file.exists()
-            source_status["has_metadata_file"] = metadata_file.exists()
-            source_status["has_vectors_file"] = vectors_file.exists()
-
-            # Check both vector dimensions
-            source_status["has_vectors_1536"] = vectors_file.exists()
-            source_status["has_vectors_768"] = vectors_768_file.exists()
-
-            # Determine schema version and embeddings status
-            has_any_vectors = source_status["has_vectors_1536"] or source_status["has_vectors_768"]
-            if source_status["has_manifest"] and source_status["has_metadata_file"] and has_any_vectors:
-                source_status["schema_version"] = 3
-                source_status["has_embeddings"] = True
-            else:
-                # Check index file as fallback
-                index_path = source_folder / get_index_file()
-                if index_path.exists():
-                    try:
-                        with open(index_path, 'r', encoding='utf-8') as f:
-                            index_data = json.load(f)
-                        if index_data.get("documents"):
-                            source_status["has_embeddings"] = True
-                    except Exception:
-                        pass
-
-            # Get counts for sync comparison: backup -> metadata -> index
-            backup_page_count = 0
-            metadata_doc_count = source_status.get("document_count", 0)
-            index_doc_count = 0
-
-            # Get backup page count from backup_manifest.json (HTML sources)
-            backup_manifest_path = source_folder / get_backup_manifest_file()
-            if backup_manifest_path.exists():
-                # Fast read - only get page count from header
-                backup_counts = read_json_count_only(backup_manifest_path)
-                backup_page_count = backup_counts.get("document_count", 0)
-                # Fallback: if no document_count in header, check file size
-                if backup_page_count == 0:
-                    try:
-                        # Small files - load to count pages dict
-                        if backup_manifest_path.stat().st_size < 50000:  # Under 50KB
-                            with open(backup_manifest_path, 'r', encoding='utf-8') as f:
-                                backup_manifest = json.load(f)
-                            backup_page_count = len(backup_manifest.get("pages", {}))
-                    except Exception:
-                        pass
-
-            # Get index document count from _index.json - use fast count reader
-            index_path = source_folder / get_index_file()
-            if index_path.exists():
-                index_counts = read_json_count_only(index_path)
-                index_doc_count = index_counts.get("document_count", 0)
-
-            # Store counts
-            source_status["backup_page_count"] = backup_page_count
-            source_status["metadata_doc_count"] = metadata_doc_count
-            source_status["index_doc_count"] = index_doc_count
-
-            # Determine if stages need refresh (only for HTML sources with backup)
-            if backup_page_count > 0:
-                # Metadata needs refresh if backup has more pages than metadata
-                source_status["needs_metadata_refresh"] = backup_page_count > metadata_doc_count
-                # Index needs refresh if metadata has more docs than index
-                source_status["needs_index_refresh"] = metadata_doc_count > index_doc_count
-            else:
-                source_status["needs_metadata_refresh"] = False
-                source_status["needs_index_refresh"] = False
-
-        if not source_status["has_embeddings"]:
-            source_status["missing"].append("embeddings (for offline search)")
-
-        # Fallback: try to get base_url from backup_manifest (legacy sources)
-        # Note: base_url from _manifest.json is already in config_data from initial scan
-        if not source_status["base_url"] and backup_folder:
-            source_folder = Path(backup_folder) / source_id
-            backup_manifest_file = source_folder / get_backup_manifest_file()
-            if not backup_manifest_file.exists():
-                backup_manifest_file = source_folder / "manifest.json"
-            if backup_manifest_file.exists():
-                try:
-                    # Only load small backup manifests
-                    if backup_manifest_file.stat().st_size < 50000:
-                        with open(backup_manifest_file, 'r', encoding='utf-8') as f:
-                            backup_manifest_data = json.load(f)
-                        if backup_manifest_data.get("base_url"):
-                            source_status["base_url"] = backup_manifest_data["base_url"]
-                except Exception:
-                    pass
-
-        # Check license
-        license_val = source_status["license"]
-        has_license = license_val and license_val.lower() not in ["unknown", ""]
-        if not has_license:
-            source_status["missing"].append("license")
-        if not source_status["license_verified"]:
-            source_status["missing"].append("verified license")
-
-        # Determine if complete (basic local use)
-        source_status["is_complete"] = (
-            source_status["has_config"] and
-            source_status["has_metadata"] and
-            source_status["has_backup"] and
-            source_status["backup_size_mb"] >= 0.1
-        )
-
-        # Determine if production ready (can be submitted to global repo)
-        source_status["production_ready"] = (
-            source_status["is_complete"] and
-            source_status["schema_version"] == 2 and
-            source_status["has_embeddings"] and
-            has_license
-        )
+            source_status = {
+                "source_id": source_id,
+                "name": manifest_data.get("name", master_entry.get("name", source_id)),
+                "description": manifest_data.get("description", ""),
+                "license": manifest_data.get("license", "Unknown"),
+                "license_verified": manifest_data.get("license_verified", False),
+                "base_url": manifest_data.get("base_url", ""),
+                "tags": manifest_data.get("tags", []),
+                "has_config": manifest_exists,
+                "has_manifest": manifest_exists,
+                "has_metadata": metadata_exists,
+                "has_backup": backup_status.get("has_backup", False),
+                "has_embeddings": vectors_1536_exists or vectors_768_exists,
+                "has_vectors_768": vectors_768_exists,
+                "has_vectors_1536": vectors_1536_exists,
+                "backup_type": backup_status.get("backup_type", ""),
+                "backup_size_mb": backup_status.get("backup_size_mb", 0),
+                "document_count": manifest_data.get("total_docs", 0),
+                "is_complete": manifest_exists and metadata_exists and backup_status.get("has_backup", False),
+                "can_submit": False,
+                "can_publish": False,
+                "production_ready": False,
+                "needs_validation": True,
+                "is_orphaned": False,
+                "missing": [],
+            }
 
         local_sources.append(source_status)
 
-    # Sort: complete first, then by name
-    local_sources.sort(key=lambda x: (not x["is_complete"], x["name"]))
+    # Sort: validated first, then complete, then by name
+    local_sources.sort(key=lambda x: (x.get("needs_validation", True), not x.get("is_complete", False), x.get("name", "")))
 
     return {
         "sources": local_sources,
@@ -482,12 +364,29 @@ async def update_source_config(request: UpdateSourceConfigRequest):
         source["description"] = request.description
     if request.license is not None:
         source["license"] = request.license
+    if request.license_notes is not None:
+        source["license_notes"] = request.license_notes
     if request.base_url is not None:
         source["base_url"] = request.base_url
     if request.tags is not None:
         source["tags"] = request.tags
     if request.license_verified is not None:
         source["license_verified"] = request.license_verified
+    if request.links_verified_offline is not None:
+        source["links_verified_offline"] = request.links_verified_offline
+    if request.links_verified_online is not None:
+        source["links_verified_online"] = request.links_verified_online
+    if request.language is not None:
+        source["language"] = request.language
+    if request.language_verified is not None:
+        source["language_verified"] = request.language_verified
+
+    # Invalidate validation cache when manifest changes
+    try:
+        from offline_tools.validation import invalidate_cache
+        invalidate_cache(str(manifest_file.parent))
+    except Exception:
+        pass
 
     # Save to _manifest.json
     try:
@@ -2256,13 +2155,6 @@ async def delete_source(request: DeleteSourceRequest):
 # ZIM FILE TOOLS
 # =============================================================================
 
-class ZIMInspectRequest(BaseModel):
-    """Request model for ZIM inspection"""
-    zim_path: str
-    scan_limit: int = 5000
-    min_text_length: int = 50
-
-
 class ZIMIndexRequest(BaseModel):
     """Request model for ZIM indexing - DEPRECATED: Use /create-index instead"""
     zim_path: str
@@ -2304,67 +2196,6 @@ async def list_zim_files():
     except Exception as e:
         import traceback
         return {"zim_files": [], "error": str(e), "traceback": traceback.format_exc()}
-
-
-@router.post("/zim/inspect")
-async def inspect_zim_file(request: ZIMInspectRequest):
-    """
-    Inspect a ZIM file and return detailed analysis.
-    Runs as a background job since large ZIM files can take several minutes.
-
-    Returns immediately with a job_id to poll for results.
-    """
-    from admin.job_manager import get_job_manager
-    from pathlib import Path as PathLib
-
-    # Validate ZIM file exists
-    zim_path = PathLib(request.zim_path)
-    if not zim_path.exists():
-        raise HTTPException(404, f"ZIM file not found: {request.zim_path}")
-
-    # Extract source_id from path for job tracking
-    source_id = zim_path.stem
-
-    def _run_zim_inspect(zim_path: str, scan_limit: int, min_text_length: int, progress_callback=None, cancel_checker=None):
-        """Background job function for ZIM inspection"""
-        from offline_tools.zim_utils import inspect_zim_file as do_inspect
-
-        result = do_inspect(
-            zim_path=zim_path,
-            scan_limit=scan_limit,
-            min_text_length=min_text_length,
-            progress_callback=progress_callback
-        )
-
-        if result.error:
-            return {"status": "error", "error": result.error}
-
-        return {
-            "status": "success",
-            **result.to_dict()
-        }
-
-    manager = get_job_manager()
-
-    try:
-        job_id = manager.submit(
-            "zim_inspect",
-            source_id,
-            _run_zim_inspect,
-            str(zim_path),
-            request.scan_limit,
-            request.min_text_length
-        )
-    except ValueError as e:
-        raise HTTPException(409, str(e))
-
-    return {
-        "status": "submitted",
-        "job_id": job_id,
-        "zim_path": str(zim_path),
-        "scan_limit": request.scan_limit,
-        "message": f"ZIM inspection started (scanning up to {request.scan_limit} articles)"
-    }
 
 
 @router.get("/zim/metadata/{source_id}")
@@ -2430,7 +2261,7 @@ async def get_zim_samples(source_id: str, count: int = 10):
     if not backup_folder:
         raise HTTPException(400, "No backup folder configured")
 
-    # Find the ZIM file
+    # Find the ZIM file - check source folder first, then manifest for zim_path
     source_folder = Path(backup_folder) / source_id
     zim_path = None
 
@@ -2439,8 +2270,44 @@ async def get_zim_samples(source_id: str, count: int = 10):
         if zim_files:
             zim_path = zim_files[0]
 
+    # If no ZIM in source folder, check manifest for stored zim_path
+    if not zim_path:
+        manifest_path = source_folder / "manifest.json"
+        if manifest_path.exists():
+            try:
+                import json
+                with open(manifest_path, "r", encoding="utf-8") as f:
+                    manifest = json.load(f)
+                stored_path = manifest.get("zim_path")
+                if stored_path:
+                    stored_zim = Path(stored_path)
+                    if stored_zim.exists():
+                        zim_path = stored_zim
+            except Exception:
+                pass
+
+    # If still no ZIM, try scanning pages folder as fallback
     if not zim_path or not zim_path.exists():
-        raise HTTPException(404, f"No ZIM file found for source: {source_id}")
+        pages_path = source_folder / "pages"
+        if pages_path.exists():
+            # Scan pages folder for HTML files as fallback
+            import random
+            html_files = list(pages_path.glob("*.html"))
+            if html_files:
+                sample_size = min(count, len(html_files))
+                sampled = random.sample(html_files, sample_size)
+                samples = []
+                for f in sampled:
+                    # Use filename stem as article name (underscores are part of the name)
+                    article_name = f.stem
+                    samples.append({
+                        "title": article_name.replace('_', ' '),  # Human-readable title
+                        "article_name": article_name,
+                        "zim_path": article_name
+                    })
+                return {"samples": samples, "source": "pages_folder", "total_files": len(html_files)}
+
+        raise HTTPException(404, f"No ZIM file or pages folder found for source: {source_id}")
 
     try:
         from zimply_core.zim_core import ZIMFile
@@ -2587,6 +2454,288 @@ async def list_cloud_sources():
         raise HTTPException(500, result["error"])
 
     return result
+
+
+@router.get("/available-cloud-sources")
+async def list_available_cloud_sources():
+    """
+    List cloud sources that are available to install (excludes already-installed sources).
+
+    Used by Job Builder's install_source dropdown to show only sources
+    that the user doesn't already have locally.
+    """
+    from offline_tools.source_manager import list_cloud_sources as _list_cloud_sources
+
+    # Get cloud sources
+    cloud_result = _list_cloud_sources()
+    if cloud_result.get("error"):
+        return {"sources": [], "error": cloud_result["error"]}
+
+    cloud_sources = cloud_result.get("sources", [])
+
+    # Get local sources
+    config = get_local_config()
+    backup_folder = config.get_backup_folder()
+    local_source_ids = set()
+
+    if backup_folder:
+        backup_path = Path(backup_folder)
+        if backup_path.exists():
+            for source_folder in backup_path.iterdir():
+                if source_folder.is_dir() and not source_folder.name.startswith("_"):
+                    if source_folder.name.lower() not in SYSTEM_FOLDERS:
+                        local_source_ids.add(source_folder.name.lower())
+
+    # Filter out already-installed sources
+    available_sources = []
+    for src in cloud_sources:
+        src_id = src.get("source_id", "").lower()
+        if src_id and src_id not in local_source_ids:
+            available_sources.append(src)
+
+    return {
+        "sources": available_sources,
+        "total_cloud": len(cloud_sources),
+        "already_installed": len(cloud_sources) - len(available_sources)
+    }
+
+
+@router.get("/available-zim-files")
+async def list_available_zim_files():
+    """
+    List ZIM files found in the backup folder.
+
+    Used by Job Builder's zim_import dropdown.
+    Scans both root level and source subfolders for any .zim files.
+    """
+    config = get_local_config()
+    backup_folder = config.get_backup_folder()
+
+    if not backup_folder:
+        return {"files": [], "error": "No backup folder configured"}
+
+    backup_path = Path(backup_folder)
+    if not backup_path.exists():
+        return {"files": [], "error": "Backup folder does not exist"}
+
+    zim_files = []
+
+    # Scan root level for .zim files
+    for item in backup_path.iterdir():
+        if item.is_file() and item.suffix.lower() == '.zim':
+            size_mb = item.stat().st_size / (1024 * 1024)
+            zim_files.append({
+                "path": str(item),
+                "name": item.name,
+                "size_mb": round(size_mb, 1)
+            })
+
+    # Also scan source folders for .zim files (skip system folders)
+    for source_folder in backup_path.iterdir():
+        if source_folder.is_dir() and not source_folder.name.startswith("_"):
+            if source_folder.name.lower() not in SYSTEM_FOLDERS:
+                for item in source_folder.glob("*.zim"):
+                    size_mb = item.stat().st_size / (1024 * 1024)
+                    zim_files.append({
+                        "path": str(item),
+                        "name": f"{source_folder.name}/{item.name}",
+                        "size_mb": round(size_mb, 1)
+                    })
+
+    # Sort by name
+    zim_files.sort(key=lambda x: x["name"])
+
+    return {"files": zim_files, "count": len(zim_files)}
+
+
+@router.get("/installed-languages")
+async def list_installed_languages():
+    """
+    List installed language packs for translation.
+
+    Used by Job Builder's translate_source dropdown.
+    """
+    try:
+        from offline_tools.language_registry import get_language_registry
+
+        registry = get_language_registry()
+        installed = registry.get_installed_packs()
+
+        # Format for dropdown options
+        languages = []
+        for lang_code in installed:
+            pack_info = registry.get_pack_info(lang_code)
+            if pack_info:
+                languages.append({
+                    "code": lang_code,
+                    "name": pack_info.get("name", lang_code),
+                    "native_name": pack_info.get("native_name", "")
+                })
+
+        return {"languages": languages}
+    except Exception as e:
+        return {"languages": [], "error": str(e)}
+
+
+# =============================================================================
+# TRANSLATION CACHING
+# =============================================================================
+
+class TranslateSourceRequest(BaseModel):
+    source_id: str
+    language: str
+    batch_size: int = 10
+    skip_cached: bool = True
+
+
+def _run_translate_source_job(source_id: str, language: str, batch_size: int = 10,
+                               skip_cached: bool = True, progress_callback=None,
+                               cancel_checker=None):
+    """
+    Background job to pre-cache translations for all documents in a source.
+    """
+    from offline_tools.translation import TranslationService, TranslationCache
+    from offline_tools.schemas import get_metadata_file
+
+    config = get_local_config()
+    backup_folder = config.get_backup_folder()
+
+    if not backup_folder:
+        return {"success": False, "error": "No backup folder configured"}
+
+    source_path = Path(backup_folder) / source_id
+    if not source_path.exists():
+        return {"success": False, "error": f"Source not found: {source_id}"}
+
+    # Load metadata to get document list
+    metadata_path = source_path / get_metadata_file()
+    if not metadata_path.exists():
+        return {"success": False, "error": f"No metadata found for source: {source_id}"}
+
+    try:
+        with open(metadata_path, 'r', encoding='utf-8') as f:
+            metadata = json.load(f)
+        documents = metadata.get("documents", {})
+    except Exception as e:
+        return {"success": False, "error": f"Failed to load metadata: {e}"}
+
+    if not documents:
+        return {"success": False, "error": "No documents found in source"}
+
+    # Initialize translation service
+    service = TranslationService(language)
+    if not service.is_available():
+        return {"success": False, "error": f"Language pack not installed: {language}"}
+
+    cache = TranslationCache()
+    doc_list = list(documents.items())
+    total_docs = len(doc_list)
+    translated_count = 0
+    skipped_count = 0
+    error_count = 0
+
+    if progress_callback:
+        progress_callback(0, f"Starting translation of {total_docs} documents to {language}")
+
+    # Process documents in batches
+    for batch_start in range(0, total_docs, batch_size):
+        # Check for cancellation
+        if cancel_checker and cancel_checker():
+            return {
+                "success": False,
+                "error": "Job cancelled",
+                "translated_count": translated_count,
+                "skipped_count": skipped_count
+            }
+
+        batch_end = min(batch_start + batch_size, total_docs)
+        batch = doc_list[batch_start:batch_end]
+
+        for doc_id, doc in batch:
+            article_id = f"{source_id}/{doc_id}"
+
+            # Check cache if skip_cached is True
+            if skip_cached:
+                cached = cache.get_article(article_id, language)
+                if cached:
+                    skipped_count += 1
+                    continue
+
+            # Get document content - try to load HTML from backup
+            content = doc.get("content", "")
+            if not content:
+                # Try to load from backup file
+                html_path = source_path / "pages" / f"{doc_id}.html"
+                if html_path.exists():
+                    try:
+                        with open(html_path, 'r', encoding='utf-8') as f:
+                            content = f.read()
+                    except Exception:
+                        pass
+
+            if not content:
+                skipped_count += 1
+                continue
+
+            try:
+                # Translate and cache
+                translated = service.translate_html(content, article_id)
+                if translated != content:  # Translation was performed
+                    translated_count += 1
+                else:
+                    skipped_count += 1
+            except Exception as e:
+                error_count += 1
+                print(f"[translate] Error translating {article_id}: {e}")
+
+        # Update progress
+        if progress_callback:
+            percent = int((batch_end / total_docs) * 100)
+            progress_callback(percent, f"Translated {translated_count}/{total_docs} documents")
+
+    return {
+        "success": True,
+        "source_id": source_id,
+        "language": language,
+        "total_documents": total_docs,
+        "translated_count": translated_count,
+        "skipped_count": skipped_count,
+        "error_count": error_count
+    }
+
+
+@router.post("/translate-source")
+async def translate_source(request: TranslateSourceRequest):
+    """
+    Pre-cache translations for all documents in a source.
+
+    Runs as a background job - can take a long time for large sources.
+    """
+    from admin.job_manager import get_job_manager
+
+    source_id = request.source_id.strip().lower()
+    manager = get_job_manager()
+
+    try:
+        job_id = manager.submit(
+            "translate_source",
+            source_id,
+            _run_translate_source_job,
+            source_id,
+            request.language,
+            request.batch_size,
+            request.skip_cached
+        )
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+
+    return {
+        "status": "submitted",
+        "job_id": job_id,
+        "source_id": source_id,
+        "language": request.language,
+        "message": f"Started translating '{source_id}' to {request.language}"
+    }
 
 
 class InstallSourceRequest(BaseModel):
