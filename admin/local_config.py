@@ -165,10 +165,12 @@ Here are some guides that can help:
 
     def get_backup_folder(self) -> str:
         """Get the unified backup folder path"""
-        # Try new unified path first, fall back to legacy zim_folder
+        # Try new unified path first, fall back to legacy zim_folder, then env var
         folder = self.config.get("backup_folder", "")
         if not folder:
             folder = self.config.get("backup_paths", {}).get("zim_folder", "")
+        if not folder:
+            folder = os.getenv("BACKUP_PATH", "")
         return folder
 
     def require_backup_folder(self) -> str:
