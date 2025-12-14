@@ -94,6 +94,7 @@ class Checkpoint:
     # Combined job checkpoint data
     phases_completed: List[int] = field(default_factory=list)  # List of completed phase indices
     phase_results: List[Dict[str, Any]] = field(default_factory=list)  # Results from completed phases
+    phase_definitions: List[Dict[str, Any]] = field(default_factory=list)  # [{job_type, params}, ...] for resume
 
     # Error tracking
     errors: List[Dict[str, str]] = field(default_factory=list)
@@ -120,6 +121,7 @@ class Checkpoint:
             batch_number=data.get("batch_number", 0),
             phases_completed=data.get("phases_completed", []),
             phase_results=data.get("phase_results", []),
+            phase_definitions=data.get("phase_definitions", []),
             errors=data.get("errors", [])
         )
 
@@ -758,7 +760,8 @@ def run_combined_job(
     cancel_checker=None,
     source_id: str = None,
     job_type: str = None,
-    resume: bool = False
+    resume: bool = False,
+    phase_definitions: List[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
     """
     Run multiple job phases as a single combined job.
@@ -775,6 +778,7 @@ def run_combined_job(
         source_id: Optional source ID for checkpoint support
         job_type: Optional job type for checkpoint support
         resume: If True and checkpoint exists, resume from last completed phase
+        phase_definitions: List of {job_type, params} dicts for checkpoint resume
 
     Returns:
         Dict with:
@@ -827,7 +831,8 @@ def run_combined_job(
                 source_id=source_id,
                 progress=int((len(completed_indices) / len(phases)) * 100),
                 phases_completed=completed_indices,
-                phase_results=results
+                phase_results=results,
+                phase_definitions=phase_definitions or []
             )
             save_checkpoint(cp)
         except Exception as e:

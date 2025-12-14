@@ -25,6 +25,7 @@ from offline_tools.packager import (
 
 # Schema file naming
 from offline_tools.schemas import get_manifest_file, get_metadata_file
+from offline_tools.validation import SYSTEM_FOLDERS
 
 
 # =============================================================================
@@ -139,7 +140,9 @@ async def get_admin_mode_status():
     Get current admin mode and available features.
     Frontend uses this to show/hide global-only UI elements.
     """
+    raw_mode = os.getenv("VECTOR_DB_MODE", "NOT_SET")
     mode = get_admin_mode()
+    print(f"[DEBUG admin-mode] VECTOR_DB_MODE raw='{raw_mode}', get_admin_mode()='{mode}'")
     return {
         "mode": mode,
         "is_global": mode == "global",
@@ -700,10 +703,13 @@ async def get_status():
             storage_bytes = header.get("total_size_bytes", 0)
 
         # Fallback: scan folders if _master.json not available or empty
+        # Skip system folders (chroma_db, models, etc.)
         if local_sources == 0 and backup_path.exists():
             from offline_tools.packager import read_json_header_only
             for source_folder in backup_path.iterdir():
                 if source_folder.is_dir() and not source_folder.name.startswith("_"):
+                    if source_folder.name.lower() in SYSTEM_FOLDERS:
+                        continue
                     manifest_file = source_folder / get_manifest_file()
                     if manifest_file.exists():
                         local_sources += 1

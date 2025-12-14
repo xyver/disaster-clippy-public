@@ -343,6 +343,30 @@
             font-size: 0.8rem;
         }
 
+        .template-delete-btn {
+            position: absolute;
+            top: 0.5rem;
+            right: 0.5rem;
+            background: transparent;
+            border: 1px solid #5c2030;
+            color: #e94560;
+            width: 20px;
+            height: 20px;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 0.7rem;
+            font-weight: bold;
+            line-height: 1;
+            padding: 0;
+            opacity: 0.6;
+            transition: all 0.2s;
+        }
+
+        .template-delete-btn:hover {
+            opacity: 1;
+            background: #5c2030;
+        }
+
         /* Validation Messages */
         .validation-box {
             margin-top: 1rem;
@@ -488,7 +512,19 @@
                     <h4>Target Source</h4>
                     <select id="sourceSelect" class="source-select" onchange="onSourceChange()">
                         <option value="">-- Select a source --</option>
+                        <option value="__new__">-- New Source (from job) --</option>
                     </select>
+                    <p id="newSourceHint" style="display: none; color: #f9a825; font-size: 0.8rem; margin-top: 0.5rem;">
+                        Chain must start with a creation job (ZIM Import, Install, Scrape)
+                    </p>
+                    <div id="newSourceNameSection" style="display: none; margin-top: 0.75rem;">
+                        <label for="newSourceName" style="font-size: 0.85rem; color: #aaa;">Source Name (optional)</label>
+                        <input type="text" id="newSourceName" placeholder="e.g. Wikipedia Top 100"
+                               style="width: 100%; padding: 0.5rem; margin-top: 0.25rem; background: #16213e; border: 1px solid #0f3460; border-radius: 4px; color: #fff;">
+                        <p style="font-size: 0.75rem; color: #666; margin-top: 0.25rem;">
+                            Leave blank to auto-derive from filename
+                        </p>
+                    </div>
                 </div>
 
                 <div class="config-section">
@@ -633,14 +669,29 @@
                 savedTemplates.forEach((tmpl, idx) => {
                     const item = document.createElement('div');
                     item.className = 'template-item';
+                    item.style.position = 'relative';
                     item.innerHTML = `
                         <div class="template-name">${tmpl.name}</div>
                         <div class="template-desc">${tmpl.phases.length} jobs</div>
+                        <button class="template-delete-btn" onclick="event.stopPropagation(); deleteSavedTemplate(${idx});" title="Delete template">X</button>
                     `;
                     item.onclick = () => loadSavedTemplate(idx);
                     savedContainer.appendChild(item);
                 });
             }
+        }
+
+        // Delete a saved template
+        function deleteSavedTemplate(idx) {
+            const tmpl = savedTemplates[idx];
+            if (!tmpl) return;
+
+            if (!confirm(`Delete template "${tmpl.name}"?`)) return;
+
+            savedTemplates.splice(idx, 1);
+            localStorage.setItem('jobBuilderTemplates', JSON.stringify(savedTemplates));
+            renderTemplates();
+            showToast('Template deleted', 'success');
         }
 
         // Load a predefined template
@@ -740,6 +791,53 @@
             });
         }
 
+        // Cache for dynamic dropdown options
+        let cloudSourcesCache = null;
+        let installedLanguagesCache = null;
+        let zimFilesCache = null;
+
+        // Load available cloud sources (for install_source job)
+        async function loadCloudSources() {
+            if (cloudSourcesCache !== null) return cloudSourcesCache;
+            try {
+                const resp = await fetch('/useradmin/api/available-cloud-sources');
+                const data = await resp.json();
+                cloudSourcesCache = data.sources || [];
+                return cloudSourcesCache;
+            } catch (e) {
+                console.error('Failed to load cloud sources:', e);
+                return [];
+            }
+        }
+
+        // Load installed languages (for translate_source job)
+        async function loadInstalledLanguages() {
+            if (installedLanguagesCache !== null) return installedLanguagesCache;
+            try {
+                const resp = await fetch('/useradmin/api/installed-languages');
+                const data = await resp.json();
+                installedLanguagesCache = data.languages || [];
+                return installedLanguagesCache;
+            } catch (e) {
+                console.error('Failed to load installed languages:', e);
+                return [];
+            }
+        }
+
+        // Load available ZIM files (for zim_import job)
+        async function loadZimFiles() {
+            if (zimFilesCache !== null) return zimFilesCache;
+            try {
+                const resp = await fetch('/useradmin/api/available-zim-files');
+                const data = await resp.json();
+                zimFilesCache = data.files || [];
+                return zimFilesCache;
+            } catch (e) {
+                console.error('Failed to load ZIM files:', e);
+                return [];
+            }
+        }
+
         // Render parameter inputs
         function renderParams(item, schema) {
             if (!schema.params || schema.params.length === 0) {
@@ -770,6 +868,85 @@
                             </select>
                         </div>
                     `;
+                } else if (p.type === 'cloud_source_select') {
+                    // Dynamic dropdown for cloud sources to install
+                    const selectId = `cloud-source-${item.id}`;
+                    // Load options asynchronously
+                    setTimeout(() => loadAndPopulateCloudSources(selectId, item.id, p.name, value), 0);
+                    return `
+                        <div class="param-row">
+                            <span class="param-label">${p.label}</span>
+                            <select class="param-input" id="${selectId}"
+                                    onchange="updateParam(${item.id}, '${p.name}', this.value)"
+                                    title="${p.description}">
+                                <option value="">Loading sources...</option>
+                            </select>
+                        </div>
+                    `;
+                } else if (p.type === 'language_select') {
+                    // Dynamic dropdown for installed languages
+                    const selectId = `lang-select-${item.id}`;
+                    // Load options asynchronously
+                    setTimeout(() => loadAndPopulateLanguages(selectId, item.id, p.name, value), 0);
+                    return `
+                        <div class="param-row">
+                            <span class="param-label">${p.label}</span>
+                            <select class="param-input" id="${selectId}"
+                                    onchange="updateParam(${item.id}, '${p.name}', this.value)"
+                                    title="${p.description}">
+                                <option value="">Loading languages...</option>
+                            </select>
+                        </div>
+                    `;
+                } else if (p.type === 'zim_file_select') {
+                    // Dynamic dropdown for ZIM files in backup folder
+                    const selectId = `zim-file-${item.id}`;
+                    // Load options asynchronously
+                    setTimeout(() => loadAndPopulateZimFiles(selectId, item.id, p.name, value), 0);
+                    return `
+                        <div class="param-row">
+                            <span class="param-label">${p.label}</span>
+                            <select class="param-input" id="${selectId}"
+                                    onchange="updateParam(${item.id}, '${p.name}', this.value)"
+                                    title="${p.description}">
+                                <option value="">Scanning for ZIM files...</option>
+                            </select>
+                        </div>
+                    `;
+                } else if (p.type === 'language_code_select') {
+                    // Static dropdown for ISO language codes (content filtering)
+                    const langCodes = [
+                        { code: '', name: '(All Languages)' },
+                        { code: 'en', name: 'English' },
+                        { code: 'es', name: 'Spanish' },
+                        { code: 'fr', name: 'French' },
+                        { code: 'de', name: 'German' },
+                        { code: 'pt', name: 'Portuguese' },
+                        { code: 'ru', name: 'Russian' },
+                        { code: 'zh', name: 'Chinese' },
+                        { code: 'ja', name: 'Japanese' },
+                        { code: 'ar', name: 'Arabic' },
+                        { code: 'hi', name: 'Hindi' },
+                        { code: 'ko', name: 'Korean' },
+                        { code: 'it', name: 'Italian' },
+                        { code: 'nl', name: 'Dutch' },
+                        { code: 'pl', name: 'Polish' },
+                        { code: 'tr', name: 'Turkish' },
+                        { code: 'vi', name: 'Vietnamese' },
+                        { code: 'th', name: 'Thai' },
+                        { code: 'uk', name: 'Ukrainian' },
+                        { code: 'id', name: 'Indonesian' }
+                    ];
+                    return `
+                        <div class="param-row">
+                            <span class="param-label">${p.label}</span>
+                            <select class="param-input"
+                                    onchange="updateParam(${item.id}, '${p.name}', this.value)"
+                                    title="${p.description}">
+                                ${langCodes.map(l => `<option value="${l.code}" ${value === l.code ? 'selected' : ''}>${l.name}</option>`).join('')}
+                            </select>
+                        </div>
+                    `;
                 } else {
                     const inputType = p.type === 'int' || p.type === 'float' ? 'number' : 'text';
                     return `
@@ -785,6 +962,86 @@
                     `;
                 }
             }).join('');
+        }
+
+        // Populate cloud sources dropdown after loading
+        async function loadAndPopulateCloudSources(selectId, itemId, paramName, currentValue) {
+            const sources = await loadCloudSources();
+            const select = document.getElementById(selectId);
+            if (!select) return;
+
+            if (sources.length === 0) {
+                select.innerHTML = '<option value="">No sources available</option>';
+                return;
+            }
+
+            let html = '<option value="">-- Select source to install --</option>';
+            sources.forEach(src => {
+                const srcId = src.source_id || src.id || '';
+                const name = src.name || srcId;
+                const selected = currentValue === srcId ? 'selected' : '';
+                html += `<option value="${srcId}" ${selected}>${name}</option>`;
+            });
+            select.innerHTML = html;
+
+            // Update param if a value was pre-selected
+            if (currentValue && sources.some(s => (s.source_id || s.id) === currentValue)) {
+                select.value = currentValue;
+            }
+        }
+
+        // Populate languages dropdown after loading
+        async function loadAndPopulateLanguages(selectId, itemId, paramName, currentValue) {
+            const languages = await loadInstalledLanguages();
+            const select = document.getElementById(selectId);
+            if (!select) return;
+
+            if (languages.length === 0) {
+                select.innerHTML = '<option value="">No language packs installed</option>';
+                return;
+            }
+
+            let html = '<option value="">-- Select target language --</option>';
+            languages.forEach(lang => {
+                const code = lang.code || '';
+                const name = lang.name || code;
+                const native = lang.native_name ? ` (${lang.native_name})` : '';
+                const selected = currentValue === code ? 'selected' : '';
+                html += `<option value="${code}" ${selected}>${name}${native}</option>`;
+            });
+            select.innerHTML = html;
+
+            // Update param if a value was pre-selected
+            if (currentValue && languages.some(l => l.code === currentValue)) {
+                select.value = currentValue;
+            }
+        }
+
+        // Populate ZIM files dropdown after loading
+        async function loadAndPopulateZimFiles(selectId, itemId, paramName, currentValue) {
+            const files = await loadZimFiles();
+            const select = document.getElementById(selectId);
+            if (!select) return;
+
+            if (files.length === 0) {
+                select.innerHTML = '<option value="">No ZIM files found in backup folder</option>';
+                return;
+            }
+
+            let html = '<option value="">-- Select ZIM file --</option>';
+            files.forEach(f => {
+                const path = f.path || '';
+                const name = f.name || path;
+                const size = f.size_mb ? ` (${f.size_mb} MB)` : '';
+                const selected = currentValue === path ? 'selected' : '';
+                html += `<option value="${path}" ${selected}>${name}${size}</option>`;
+            });
+            select.innerHTML = html;
+
+            // Update param if a value was pre-selected
+            if (currentValue && files.some(f => f.path === currentValue)) {
+                select.value = currentValue;
+            }
         }
 
         // Update a parameter value
@@ -889,9 +1146,24 @@
             }
         }
 
+        // Jobs that create/establish a source (must be first if "New Source" selected)
+        const CREATION_JOBS = ['zim_import', 'zim_extract', 'install_source', 'scrape', 'scrape_sitemap'];
+
         // Source change handler
         function onSourceChange() {
             selectedSource = document.getElementById('sourceSelect').value;
+
+            // Show/hide hint and name input for new source
+            const hint = document.getElementById('newSourceHint');
+            const nameSection = document.getElementById('newSourceNameSection');
+            if (selectedSource === '__new__') {
+                hint.style.display = 'block';
+                nameSection.style.display = 'block';
+            } else {
+                hint.style.display = 'none';
+                nameSection.style.display = 'none';
+            }
+
             validateChain();
         }
 
@@ -906,10 +1178,12 @@
                 return;
             }
 
-            // Check if source is selected
+            // Check if source is selected (except for jobs that have their own source param)
             if (!selectedSource) {
                 const needsSource = chain.some(c => {
                     const schema = jobSchemas[c.job_type];
+                    // install_source uses cloud_source_id param instead of main source
+                    if (c.job_type === 'install_source') return false;
                     return schema && schema.requires_source !== false;
                 });
 
@@ -920,13 +1194,71 @@
                 }
             }
 
-            // Call API to validate
+            // If "New Source" is selected, chain must start with a creation job
+            if (selectedSource === '__new__') {
+                if (chain.length === 0) {
+                    box.innerHTML = '<div class="validation-box warning">Add a creation job (ZIM Import, Install, Scrape) to establish the source</div>';
+                    runBtn.disabled = true;
+                    return;
+                }
+
+                const firstJob = chain[0].job_type;
+                if (!CREATION_JOBS.includes(firstJob)) {
+                    box.innerHTML = '<div class="validation-box error">First job must be a creation job (ZIM Import, Install, Scrape) when using "New Source"</div>';
+                    runBtn.disabled = true;
+                    return;
+                }
+            }
+
+            // Check if install_source jobs have a cloud source selected
+            const installSourceWithoutSelection = chain.find(c =>
+                c.job_type === 'install_source' && !c.params.cloud_source_id
+            );
+            if (installSourceWithoutSelection) {
+                box.innerHTML = '<div class="validation-box warning">Please select a cloud source to install</div>';
+                runBtn.disabled = true;
+                return;
+            }
+
+            // Check if translate_source jobs have a language selected
+            const translateWithoutLanguage = chain.find(c =>
+                c.job_type === 'translate_source' && !c.params.language
+            );
+            if (translateWithoutLanguage) {
+                box.innerHTML = '<div class="validation-box warning">Please select a target language for translation</div>';
+                runBtn.disabled = true;
+                return;
+            }
+
+            // Check if zim_import jobs have a ZIM file selected
+            const zimWithoutFile = chain.find(c =>
+                c.job_type === 'zim_import' && !c.params.zim_path
+            );
+            if (zimWithoutFile) {
+                box.innerHTML = '<div class="validation-box warning">Please select a ZIM file to import</div>';
+                runBtn.disabled = true;
+                return;
+            }
+
+            // Check for base_url warning: if chain has indexing, warn about needing base_url
+            const jobTypes = chain.map(c => c.job_type);
+            const hasIndexing = jobTypes.some(j => j.includes('index') && !j.includes('clear'));
+            const hasDetectBaseUrl = jobTypes.includes('detect_base_url');
+
+            let baseUrlWarning = '';
+            if (hasIndexing && !hasDetectBaseUrl) {
+                baseUrlWarning = '<li style="color: #e94560;">IMPORTANT: Make sure base_url is set before indexing. Add "Detect Base URL" or set manually in source editor.</li>';
+            }
+
+            // Call API to validate (pass source_id for state-aware validation)
             try {
-                const jobTypes = chain.map(c => c.job_type);
                 const resp = await fetch('/useradmin/api/job-builder/validate', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ job_types: jobTypes })
+                    body: JSON.stringify({
+                        job_types: jobTypes,
+                        source_id: selectedSource === '__new__' ? null : selectedSource
+                    })
                 });
                 const result = await resp.json();
 
@@ -940,12 +1272,14 @@
                         </div>
                     `;
                     runBtn.disabled = true;
-                } else if (result.warnings && result.warnings.length > 0) {
+                } else if (result.warnings && result.warnings.length > 0 || baseUrlWarning) {
+                    const warnings = result.warnings || [];
                     box.innerHTML = `
                         <div class="validation-box warning">
-                            Warnings:
+                            Notes:
                             <ul class="validation-list">
-                                ${result.warnings.map(w => `<li>${w}</li>`).join('')}
+                                ${baseUrlWarning}
+                                ${warnings.map(w => `<li>${w}</li>`).join('')}
                             </ul>
                         </div>
                     `;
@@ -974,11 +1308,17 @@
                     params: c.params
                 }));
 
+                // If "New Source" is selected, pass null - backend will get source from first job
+                const sourceToSend = selectedSource === '__new__' ? null : selectedSource;
+                const sourceName = selectedSource === '__new__' ? (document.getElementById('newSourceName').value.trim() || null) : null;
+
                 const resp = await fetch('/useradmin/api/job-builder/run', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        source_id: selectedSource,
+                        source_id: sourceToSend,
+                        source_from_job: selectedSource === '__new__',  // Flag to indicate source comes from job
+                        source_name: sourceName,  // Custom display name for new source
                         phases: phases,
                         resumable: true
                     })
@@ -1027,16 +1367,7 @@
             showToast('Template saved', 'success');
         }
 
-        // Toast notification
-        function showToast(message, type) {
-            // Use existing toast if available, otherwise console
-            if (typeof window.showToast === 'function') {
-                window.showToast(message, type);
-            } else {
-                console.log(`[${type}] ${message}`);
-                alert(message);
-            }
-        }
+        // showToast is provided by admin-common.js
     </script>
 </body>
 </html>

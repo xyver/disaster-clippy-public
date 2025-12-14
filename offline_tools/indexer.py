@@ -1498,20 +1498,23 @@ class HTMLBackupIndexer:
         errors = []
         documents = []
         pages = {}
+        is_zim_source = False
 
         # Load manifest or scan pages folder
         if self.manifest_path and self.manifest_path.exists():
             with open(self.manifest_path, 'r', encoding='utf-8') as f:
                 manifest = json.load(f)
             pages = manifest.get("pages", {})
+            # Check if this is a ZIM source (underscores should be preserved in URLs)
+            is_zim_source = manifest.get("created_from") == "zim_import"
 
         # Fallback: scan pages folder directly
         if not pages and self.pages_dir.exists():
             print(f"No pages in manifest, scanning {self.pages_dir}...")
             for html_file in self.pages_dir.glob("*.html"):
                 filename = html_file.name
-                # Use centralized filename conversion
-                url_path = html_filename_to_url(filename)
+                # Use centralized filename conversion (preserve underscores for ZIM sources)
+                url_path = html_filename_to_url(filename, is_zim_source=is_zim_source)
                 pages[url_path] = {
                     "filename": filename,
                     "title": html_filename_to_title(filename)

@@ -59,7 +59,8 @@ async function initServerMode() {
     try {
         const resp = await fetch('/useradmin/api/admin-mode');
         const data = await resp.json();
-        serverMode = data.mode || 'local';
+        // Handle both response formats (app.py returns mode, source_tools returns is_global_admin)
+        serverMode = data.mode || (data.is_global_admin ? 'global' : 'local');
         console.log('Admin mode (VECTOR_DB_MODE):', serverMode);
         updateModeUI();
     } catch (e) {

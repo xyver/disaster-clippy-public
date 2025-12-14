@@ -19,6 +19,7 @@ from offline_tools.schemas import (
     get_manifest_file, get_metadata_file, get_index_file,
     get_vectors_file, get_vectors_768_file, get_backup_manifest_file
 )
+from offline_tools.validation import SYSTEM_FOLDERS
 
 router = APIRouter()
 
@@ -141,94 +142,139 @@ async def get_sources_for_upload():
         return {"sources": [], "total": 0, "complete_count": 0}
 
     # Discover sources from backup folder - look for _manifest.json files
+    # Skip system folders (chroma_db, models, etc.) and underscore-prefixed folders
     sources_config = {}
     for source_folder in backup_path.iterdir():
-        if source_folder.is_dir():
-            source_id = source_folder.name
-            manifest_file = source_folder / get_manifest_file()
-            if manifest_file.exists():
-                try:
-                    with open(manifest_file, 'r', encoding='utf-8') as f:
-                        source_data = json.load(f)
-                    # Get modification time for sorting (most recent first)
-                    mtime = manifest_file.stat().st_mtime
-                    sources_config[source_id] = {
-                        "name": source_data.get("name", source_id),
-                        "description": source_data.get("description", ""),
-                        "license": source_data.get("license", "Unknown"),
-                        "base_url": source_data.get("base_url", ""),
-                        "license_verified": source_data.get("license_verified", False),
-                        "last_published": source_data.get("last_published"),
-                        "last_modified": mtime,
-                    }
-                except Exception:
-                    sources_config[source_id] = {"name": source_id, "last_modified": 0}
-            # Also include folders with backup content
-            elif (source_folder / "pages").exists() or list(source_folder.glob("*.html")):
-                # Use folder mtime as fallback
-                mtime = source_folder.stat().st_mtime
-                sources_config[source_id] = {"name": source_id, "last_modified": mtime}
+        if not source_folder.is_dir():
+            continue
+        if source_folder.name.startswith("_"):
+            continue
+        if source_folder.name.lower() in SYSTEM_FOLDERS:
+            continue
 
-    # Check each source for completeness
+        source_id = source_folder.name
+        manifest_file = source_folder / get_manifest_file()
+        if manifest_file.exists():
+            try:
+                with open(manifest_file, 'r', encoding='utf-8') as f:
+                    source_data = json.load(f)
+                # Get modification time for sorting (most recent first)
+                mtime = manifest_file.stat().st_mtime
+                sources_config[source_id] = {
+                    "name": source_data.get("name", source_id),
+                    "description": source_data.get("description", ""),
+                    "license": source_data.get("license", "Unknown"),
+                    "base_url": source_data.get("base_url", ""),
+                    "license_verified": source_data.get("license_verified", False),
+                    "last_published": source_data.get("last_published"),
+                    "last_modified": mtime,
+                }
+            except Exception:
+                sources_config[source_id] = {"name": source_id, "last_modified": 0}
+        # Also include folders with backup content
+        elif (source_folder / "pages").exists() or list(source_folder.glob("*.html")):
+            # Use folder mtime as fallback
+            mtime = source_folder.stat().st_mtime
+            sources_config[source_id] = {"name": source_id, "last_modified": mtime}
+
+    # Load master.json for validated sources (fast path)
+    from offline_tools.validation import get_master_validation
+    master_data = get_master_validation(backup_folder)
+    validated_sources = master_data.get("sources", {})
+
+    # Build source list from master.json + sources_config
     uploadable_sources = []
 
     for source_id, config_data in sources_config.items():
-        source_status = {
-            "source_id": source_id,
-            "name": config_data.get("name", source_id),
-            "license": config_data.get("license", "Unknown"),
-            "license_verified": config_data.get("license_verified", False),
-            "last_published": config_data.get("last_published"),
-            "last_modified": config_data.get("last_modified", 0),
-            "has_config": True,
-            "has_metadata": False,
-            "has_backup": False,
-            "backup_type": None,
-            "backup_path": None,
-            "backup_size_mb": 0,
-            "is_complete": False,
-            "missing": []
-        }
+        source_folder = Path(backup_folder) / source_id if backup_folder else None
+        folder_exists = source_folder and source_folder.exists()
 
-        # Check for metadata file - use fast header reading
-        if backup_folder:
-            metadata_path = Path(backup_folder) / source_id / get_metadata_file()
-            if metadata_path.exists():
-                source_status["has_metadata"] = True
-                # Fast read - only get document_count from header
-                from offline_tools.packager import read_json_header_only
-                meta_header = read_json_header_only(metadata_path)
-                source_status["document_count"] = meta_header.get("document_count", 0)
-            else:
-                source_status["missing"].append("metadata")
+        # Check if in master (validated)
+        master_entry = validated_sources.get(source_id, {})
+        has_validation = master_entry.get("validated_at", "") != "" and not master_entry.get("needs_validation", True)
 
-        # Check for backup files using unified detection
-        from offline_tools.packager import detect_backup_status
-        backup_status = detect_backup_status(source_id, Path(backup_folder) if backup_folder else None)
-        source_status["has_backup"] = backup_status["has_backup"]
-        source_status["backup_type"] = backup_status["backup_type"]
-        source_status["backup_path"] = backup_status["backup_path"]
-        source_status["backup_size_mb"] = backup_status["backup_size_mb"]
+        if has_validation:
+            # Use master.json data directly (fast path)
+            source_status = {
+                "source_id": source_id,
+                "name": master_entry.get("name", source_id),
+                "license": master_entry.get("license", "Unknown"),
+                "license_verified": master_entry.get("license_verified", False),
+                "license_notes": master_entry.get("license_notes", ""),
+                "license_in_allowlist": master_entry.get("license_in_allowlist", False),
+                "last_published": config_data.get("last_published"),
+                "last_modified": config_data.get("last_modified", 0),
+                "has_config": master_entry.get("has_manifest", False),
+                "has_metadata": master_entry.get("has_metadata", False),
+                "has_backup": master_entry.get("has_backup", False),
+                "backup_type": master_entry.get("backup_type", ""),
+                "backup_path": str(source_folder) if source_folder else None,
+                "backup_size_mb": master_entry.get("backup_size_mb", 0),
+                "document_count": master_entry.get("document_count", 0),
+                "has_vectors_1536": master_entry.get("has_vectors_1536", False),
+                "has_vectors_768": master_entry.get("has_vectors_768", False),
+                "links_verified_offline": master_entry.get("links_verified_offline", False),
+                "links_verified_online": master_entry.get("links_verified_online", False),
+                "language": master_entry.get("language", ""),
+                "language_is_english": master_entry.get("language_is_english", False),
+                "language_verified": master_entry.get("language_verified", False),
+                "is_complete": master_entry.get("has_manifest", False) and master_entry.get("has_metadata", False) and master_entry.get("has_backup", False),
+                "can_submit": master_entry.get("can_submit", False),
+                "can_publish": master_entry.get("can_publish", False),
+                "needs_validation": False,
+                "missing": []
+            }
+        else:
+            # Source not validated - do minimal file checks
+            if not folder_exists:
+                continue  # Skip orphaned entries
 
-        if not backup_status["has_backup"]:
-            source_status["missing"].append("backup file")
-        elif backup_status["backup_size_mb"] < 0.1:
-            # Backup exists but is essentially empty (less than 100KB)
-            source_status["has_backup"] = False
-            source_status["missing"].append("backup file (empty or incomplete)")
+            # Fast file existence checks
+            has_manifest = (source_folder / get_manifest_file()).exists()
+            has_metadata = (source_folder / get_metadata_file()).exists()
 
-        # Check license
-        if not source_status["license_verified"]:
-            source_status["missing"].append("verified license")
+            # Read manifest for basic info
+            manifest_data = {}
+            if has_manifest:
+                try:
+                    with open(source_folder / get_manifest_file(), 'r', encoding='utf-8') as f:
+                        manifest_data = json.load(f)
+                except Exception:
+                    pass
 
-        # Determine if complete (ready for upload)
-        source_status["is_complete"] = (
-            source_status["has_config"] and
-            source_status["has_metadata"] and
-            source_status["has_backup"] and
-            source_status["backup_size_mb"] >= 0.1 and  # Must have actual content
-            source_status["license_verified"]
-        )
+            # Fast backup check
+            from offline_tools.packager import detect_backup_status
+            backup_status = detect_backup_status(source_id, Path(backup_folder))
+
+            source_status = {
+                "source_id": source_id,
+                "name": manifest_data.get("name", config_data.get("name", source_id)),
+                "license": manifest_data.get("license", "Unknown"),
+                "license_verified": manifest_data.get("license_verified", False),
+                "license_notes": manifest_data.get("license_notes", ""),
+                "license_in_allowlist": manifest_data.get("license", "Unknown") in ["CC0", "CC-BY", "CC-BY-SA", "CC-BY-NC", "CC-BY-NC-SA", "Public Domain", "MIT", "Apache-2.0", "GPL", "GFDL", "ODbL", "Custom"],
+                "last_published": config_data.get("last_published"),
+                "last_modified": config_data.get("last_modified", 0),
+                "has_config": has_manifest,
+                "has_metadata": has_metadata,
+                "has_backup": backup_status.get("has_backup", False),
+                "backup_type": backup_status.get("backup_type", ""),
+                "backup_path": str(source_folder),
+                "backup_size_mb": backup_status.get("backup_size_mb", 0),
+                "document_count": manifest_data.get("total_docs", 0),
+                "has_vectors_1536": (source_folder / "_vectors.json").exists(),
+                "has_vectors_768": (source_folder / "_vectors_768.json").exists(),
+                "links_verified_offline": manifest_data.get("links_verified_offline", False),
+                "links_verified_online": manifest_data.get("links_verified_online", False),
+                "language": manifest_data.get("language", ""),
+                "language_is_english": manifest_data.get("language", "").lower() in ["en", "english", "eng"],
+                "language_verified": manifest_data.get("language_verified", False),
+                "is_complete": has_manifest and has_metadata and backup_status.get("has_backup", False),
+                "can_submit": False,
+                "can_publish": False,
+                "needs_validation": True,
+                "missing": []
+            }
 
         uploadable_sources.append(source_status)
 

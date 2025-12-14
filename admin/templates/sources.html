@@ -6,6 +6,7 @@
     <title>Sources - Disaster Clippy Admin</title>
     <link rel="icon" type="image/png" href="/static/paperclip.png">
     <link rel="stylesheet" href="/admin/static/{{ admin_css }}">
+    <link rel="stylesheet" href="/admin/static/source-card.css">
     <style>
         /* Page-specific styles */
         .tabs {
@@ -41,50 +42,12 @@
         }
         .sub-nav a:hover { background: #0f3460; }
         .sub-nav a.active { background: #0f3460; color: #e94560; }
+        /* Source grid uses class from source-card.css */
         .source-grid {
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
             gap: 1rem;
         }
-        .source-card {
-            background: #1a1a2e;
-            border: 1px solid #0f3460;
-            border-radius: 8px;
-            padding: 1rem;
-        }
-        .source-card h3 { color: #4ecca3; font-size: 1rem; margin-bottom: 0.5rem; }
-        .source-card .meta { font-size: 0.8rem; color: #888; }
-        .status-boxes {
-            display: flex;
-            gap: 0.25rem;
-            margin-top: 0.75rem;
-            flex-wrap: wrap;
-        }
-        .status-box {
-            font-size: 0.65rem;
-            padding: 0.2rem 0.4rem;
-            border-radius: 3px;
-            text-transform: uppercase;
-            font-weight: 500;
-        }
-        .status-box.ok { background: #4ecca320; color: #4ecca3; }
-        .status-box.missing { background: #e9456020; color: #e94560; }
-        .status-box.warning { background: #f9a82520; color: #f9a825; }
-        .source-card .actions {
-            margin-top: 0.75rem;
-            display: flex;
-            gap: 0.5rem;
-        }
-        .source-card .btn-small {
-            padding: 0.4rem 0.8rem;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 0.8rem;
-        }
-        .source-card .btn-install { background: #4ecca3; color: #1a1a2e; }
-        .source-card .btn-edit { background: #0f3460; color: #4ecca3; }
-        .source-card .btn-edit:hover { background: #1a1a3e; }
         .placeholder {
             text-align: center;
             padding: 3rem;
@@ -139,10 +102,11 @@
         }
         .model-card.installed { border-color: #4ecca3; }
         .model-card.active { border-color: #e94560; box-shadow: 0 0 10px rgba(233, 69, 96, 0.2); }
-        .model-card h3 { color: #4ecca3; font-size: 1rem; margin-bottom: 0.5rem; }
+        .model-card h3 { color: #4ecca3; font-size: 1rem; font-weight: 600; margin: 0 0 0.5rem 0; }
         .model-card .model-meta { font-size: 0.8rem; color: #888; margin-bottom: 0.5rem; }
         .model-card .model-meta span { display: inline-block; margin-right: 1rem; }
         .model-card .model-desc { font-size: 0.85rem; color: #aaa; margin-bottom: 0.75rem; }
+        .model-card .actions { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; margin-top: 0.75rem; }
         .model-card .model-badges {
             display: flex;
             gap: 0.25rem;
@@ -192,6 +156,44 @@
             background: #4ecca3;
             border-radius: 2px;
             transition: width 0.3s ease;
+        }
+
+        /* Unified button styles for Models and Languages tabs */
+        .btn-small {
+            padding: 0.4rem 0.8rem;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.8rem;
+            transition: background 0.2s, opacity 0.2s;
+        }
+        .btn-small:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        .btn-edit {
+            background: #0f3460;
+            color: #4ecca3;
+            border: 1px solid #0f3460;
+        }
+        .btn-edit:hover:not(:disabled) {
+            background: #1a4a7a;
+        }
+        .btn-install {
+            background: #0f3460;
+            color: #4ecca3;
+            border: 1px solid #0f3460;
+        }
+        .btn-install:hover:not(:disabled) {
+            background: #1a4a7a;
+        }
+        .btn-danger {
+            background: #5c2030;
+            color: #e94560;
+            border: 1px solid #5c2030;
+        }
+        .btn-danger:hover:not(:disabled) {
+            background: #7a2a40;
         }
     </style>
 </head>
@@ -484,71 +486,8 @@
         }
 
         function renderSourceCard(source) {
-            // Status badge
-            let statusBadge = '';
-            let statusColor = '#888';
-            if (source.status === 'installed') {
-                statusBadge = 'Installed';
-                statusColor = '#4ecca3';
-            } else if (source.status === 'available') {
-                statusBadge = 'Available';
-                statusColor = '#f9a825';
-            } else if (source.status === 'local_only') {
-                statusBadge = 'Local Only';
-                statusColor = '#888';
-            }
-
-            // Build status boxes for local sources
-            let statusBoxesHtml = '';
-            if (source.status !== 'available') {
-                const hasConfig = source.has_config !== false;
-                const hasBackup = source.has_backup !== false;
-                const hasMetadata = source.has_metadata === true;
-                const has1536 = source.has_vectors_1536 === true;
-                const has768 = source.has_vectors_768 === true;
-                const hasLicense = source.license && source.license !== 'Unknown';
-
-                statusBoxesHtml = `
-                    <div class="status-boxes">
-                        <span class="status-box ${hasConfig ? 'ok' : 'missing'}">Config</span>
-                        <span class="status-box ${hasBackup ? 'ok' : 'missing'}">Backup</span>
-                        <span class="status-box ${hasMetadata ? 'ok' : 'missing'}">Metadata</span>
-                        <span class="status-box ${has1536 ? 'ok' : 'warning'}">1536</span>
-                        <span class="status-box ${has768 ? 'ok' : 'warning'}">768</span>
-                        <span class="status-box ${hasLicense ? 'ok' : 'warning'}">License</span>
-                    </div>
-                `;
-            }
-
-            return `
-                <div class="source-card">
-                    <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 0.5rem;">
-                        <h3 style="margin: 0;">${escapeHtml(source.name || source.source_id)}</h3>
-                        <span style="font-size: 0.7rem; padding: 0.2rem 0.5rem; background: ${statusColor}20; color: ${statusColor}; border-radius: 3px;">${statusBadge}</span>
-                    </div>
-                    <div class="meta">
-                        <div>${(source.document_count || 0).toLocaleString()} documents</div>
-                        ${source.backup_type ? `<div>${source.backup_type} backup</div>` : ''}
-                        <div>${source.license && source.license !== 'Unknown' ? source.license : 'Unknown license'}</div>
-                    </div>
-                    ${statusBoxesHtml}
-                    <div class="actions">
-                        ${source.is_local ? `
-                            <button class="btn-small btn-edit" onclick="window.location.href='/useradmin/sources/tools?source=${source.source_id}&step=2'">
-                                Edit
-                            </button>
-                            ${source.is_cloud ? `<span style="color: #4ecca3; font-size: 0.7rem; margin-left: 0.5rem;">(from cloud)</span>` : ''}
-                        ` : source.is_cloud ? `
-                            <button class="btn-small btn-install" onclick="installSource('${source.source_id}', false)" title="Download vectors only for search">
-                                Index Only
-                            </button>
-                            <button class="btn-small btn-install" onclick="installSource('${source.source_id}', true)" style="background: #1a5f3c;" title="Download vectors + backup files for offline viewing">
-                                Full Install
-                            </button>
-                        ` : ''}
-                    </div>
-                </div>
-            `;
+            // Use unified SourceCard renderer
+            return SourceCard.render(source, { variant: 'sources' });
         }
 
         function escapeHtml(text) {
@@ -558,9 +497,9 @@
             return div.innerHTML;
         }
 
-        async function installSource(sourceId, includeBackup = false) {
+        async function installSource(sourceId, includeBackup = false, btn = null) {
             // Find the button and disable it
-            const btn = event.target;
+            btn = btn || event.target;
             const originalText = btn.textContent;
             btn.disabled = true;
             btn.textContent = 'Checking...';
@@ -1004,7 +943,7 @@
             if (isInstalled) {
                 if (!isActive) {
                     actions = `<button class="btn-small btn-edit" onclick="setActiveLanguage('${lang.code}')">Set Active</button>`;
-                    actions += `<button class="btn-small btn-edit" onclick="removeLanguage('${lang.code}')" style="margin-left: 0.5rem; background: #5c2030; border-color: #e94560;">Remove</button>`;
+                    actions += `<button class="btn-small btn-danger" onclick="removeLanguage('${lang.code}')" style="margin-left: 0.5rem;">Remove</button>`;
                 } else {
                     actions = `<span style="color: #4ecca3; font-size: 0.8rem;">Currently Active</span>`;
                     actions += `<button class="btn-small btn-edit" onclick="disableTranslation()" style="margin-left: 0.5rem;">Disable</button>`;
@@ -1205,14 +1144,14 @@
                     container.innerHTML = '<div class="placeholder">No language packs installed. <a href="#" onclick="document.querySelector(\'[data-filter=languages]\').click(); return false;" style="color: #4ecca3;">Install one</a></div>';
                 } else {
                     container.innerHTML = installed.map(lang => `
-                        <div class="source-card">
-                            <h3>${escapeHtml(lang.display_name)}</h3>
-                            <div class="meta">
-                                <div>${lang.native_name}</div>
-                                <div>${lang.size_mb} MB</div>
+                        <div class="source-card source-card--complete">
+                            <div class="source-card__header">
+                                <h3 class="source-card__name">${escapeHtml(lang.display_name)}</h3>
+                                <span class="source-card__badge source-card__badge--installed">Installed</span>
                             </div>
-                            <div class="status-boxes">
-                                <span class="status-box ok">Installed</span>
+                            <div class="source-card__meta">
+                                <span>${lang.native_name}</span>
+                                <span>${lang.size_mb} MB</span>
                             </div>
                         </div>
                     `).join('');
@@ -1236,15 +1175,14 @@
                     container.innerHTML = '<div class="placeholder">No models installed. <a href="#" onclick="document.querySelector(\'[data-filter=models]\').click(); return false;" style="color: #4ecca3;">Install one</a></div>';
                 } else {
                     container.innerHTML = installed.map(model => `
-                        <div class="source-card">
-                            <h3>${escapeHtml(model.display_name)}</h3>
-                            <div class="meta">
-                                <div>${model.type === 'embedding' ? 'Embedding' : 'LLM'}</div>
-                                <div>${model.size_mb} MB</div>
+                        <div class="source-card source-card--complete">
+                            <div class="source-card__header">
+                                <h3 class="source-card__name">${escapeHtml(model.display_name)}</h3>
+                                <span class="source-card__badge ${model.active ? 'source-card__badge--ready' : 'source-card__badge--installed'}">${model.active ? 'Active' : 'Installed'}</span>
                             </div>
-                            <div class="status-boxes">
-                                <span class="status-box ok">Installed</span>
-                                ${model.active ? '<span class="status-box" style="background: #e9456020; color: #e94560;">Active</span>' : ''}
+                            <div class="source-card__meta">
+                                <span>${model.type === 'embedding' ? 'Embedding' : 'LLM'}</span>
+                                <span>${model.size_mb} MB</span>
                             </div>
                         </div>
                     `).join('');
@@ -1271,7 +1209,30 @@
         selectTabFromHash();
         window.addEventListener('hashchange', selectTabFromHash);
     </script>
+    <script src="/admin/static/source-card.js"></script>
     <script src="/admin/static/admin-common.js"></script>
+
+    <script>
+        // Attach source card event handlers
+        function attachSourceCardHandlers() {
+            // Sources page handlers
+            SourceCard.attachHandlers(document.body, {
+                onEdit: function(sourceId) {
+                    window.location.href = '/useradmin/sources/tools?source=' + sourceId + '&step=2';
+                },
+                onInstall: function(sourceId, includeBackup, btn) {
+                    installSource(sourceId, includeBackup);
+                }
+            });
+        }
+
+        // Attach handlers after DOM is ready
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', attachSourceCardHandlers);
+        } else {
+            attachSourceCardHandlers();
+        }
+    </script>
 
     <!-- Sync Mode Modal -->
     <div id="syncModeModal" class="modal-overlay">

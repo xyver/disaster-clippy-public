@@ -128,17 +128,29 @@
             'suggest_tags': { label: 'Suggest Tags', desc: 'AI-powered tag suggestions' },
             'delete_source': { label: 'Delete', desc: 'Removing source from system' },
             'clear_vectors': { label: 'Clear Vectors', desc: 'Clearing ChromaDB entries' },
-            'zim_inspect': { label: 'ZIM Inspect', desc: 'Inspecting ZIM file contents' },
+            'zim_import': { label: 'ZIM Import', desc: 'Importing ZIM file (analyze + extract pages)' },
             'zim_index': { label: 'ZIM Index', desc: 'Indexing ZIM file contents' },
+            'detect_base_url': { label: 'Detect URL', desc: 'Auto-detecting base URL for links' },
             'pinecone_sync': { label: 'Pinecone', desc: 'Syncing vectors to Pinecone cloud' },
             'pinecone_sync_dry': { label: 'Pinecone (Dry)', desc: 'Checking what would sync to Pinecone' },
             'visualisation': { label: 'Visualize', desc: 'Generating 3D knowledge map' },
             'model_download': { label: 'Model Download', desc: 'Downloading AI models' },
             'language_download': { label: 'Language Download', desc: 'Downloading language packs' },
-            // Combined jobs
+            // Combined/chain jobs
+            'custom_chain': { label: 'Custom Chain', desc: 'Multi-step job chain from Job Builder' },
             'reindex_online': { label: 'Reindex (Online)', desc: 'Clear + fresh 1536-dim index' },
             'reindex_offline': { label: 'Reindex (Offline)', desc: 'Clear + fresh local index' },
             'cloud_publish': { label: 'Cloud Publish', desc: 'Syncing to Pinecone + regenerating visualization' },
+            'generate_source': { label: 'Generate Source', desc: 'Full source processing pipeline' },
+            // Stage-based workflows (human review between stages)
+            'source_prepare': { label: 'Stage 1: Prepare', desc: 'Metadata + URL detection - review before indexing' },
+            'zim_prepare': { label: 'Stage 1: ZIM Prepare', desc: 'ZIM import + metadata + URL detection' },
+            'index_and_tag': { label: 'Stage 2: Index + Tag', desc: 'Both indexes + tag suggestions - review before publish' },
+            'index_online_only': { label: 'Stage 2: Online Index', desc: '1536-dim index + tags (cloud only)' },
+            'index_offline_only': { label: 'Stage 2: Offline Index', desc: '768-dim index + tags (offline only)' },
+            // Legacy full pipelines
+            'new_source_full': { label: '[Legacy] Full Setup', desc: 'Complete pipeline without review breaks' },
+            'zim_full_import': { label: '[Legacy] ZIM Full', desc: 'Complete ZIM pipeline without review breaks' },
             // Legacy (for backwards compatibility with job history)
             'download': { label: 'Download', desc: 'Downloading source pack (legacy)' },
             'index': { label: 'Index', desc: 'Creating vector embeddings (legacy)' },
@@ -359,55 +371,83 @@
         async function resumeInterruptedJob(sourceId, jobType) {
             // Resume job directly via API - no page redirect needed
             // Note: source_id is passed in JSON body, so no URL encoding needed there
-            if (jobType === 'metadata') {
+
+            // Custom chains use the job-builder resume endpoint
+            const chainTypes = [
+                'custom_chain', 'generate_source', 'new_source_full', 'reindex_online', 'reindex_offline',
+                'cloud_publish', 'zim_full_import',
+                // Stage-based workflows
+                'source_prepare', 'zim_prepare', 'index_and_tag', 'index_online_only', 'index_offline_only'
+            ];
+            if (chainTypes.includes(jobType)) {
                 try {
-                    const response = await fetch('/useradmin/api/generate-metadata', {
+                    const response = await fetch('/useradmin/api/job-builder/resume', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            source_id: sourceId,
-                            resume: true
-                        })
+                        body: JSON.stringify({ source_id: sourceId, job_type: jobType })
                     });
 
                     if (response.ok) {
-                        const data = await response.json();
-                        // Immediately refresh to show the job in Active Jobs
                         loadJobs();
                         loadInterruptedJobs();
                     } else {
                         const err = await response.json();
-                        alert('Failed to resume: ' + (err.detail || err.error || 'Unknown error'));
+                        // If checkpoint has no phase definitions, show helpful message
+                        if (err.detail && err.detail.includes('no phase definitions')) {
+                            alert('This checkpoint was created before resume support was added.\n\nPlease discard and re-run the job from Job Builder.');
+                        } else {
+                            alert('Failed to resume: ' + (err.detail || err.error || 'Unknown error'));
+                        }
                     }
                 } catch (e) {
                     alert('Error resuming job: ' + e.message);
                 }
-            } else if (jobType === 'index') {
-                try {
-                    const response = await fetch('/useradmin/api/create-index', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            source_id: sourceId,
-                            limit: 50000,  // High limit to index all
-                            force_reindex: false,  // Continue where left off
-                            resume: true  // Resume from checkpoint
-                        })
-                    });
+                return;
+            }
 
-                    if (response.ok) {
-                        const data = await response.json();
-                        loadJobs();
-                        loadInterruptedJobs();
-                    } else {
-                        const err = await response.json();
-                        alert('Failed to resume: ' + (err.detail || err.error || 'Unknown error'));
-                    }
-                } catch (e) {
-                    alert('Error resuming job: ' + e.message);
+            // Map job types to their resume API endpoints and payloads
+            const resumeConfigs = {
+                'metadata': {
+                    endpoint: '/useradmin/api/generate-metadata',
+                    body: { source_id: sourceId, resume: true }
+                },
+                'index': {
+                    endpoint: '/useradmin/api/create-index',
+                    body: { source_id: sourceId, limit: 50000, force_reindex: false, resume: true }
+                },
+                'index_online': {
+                    endpoint: '/useradmin/api/create-index',
+                    body: { source_id: sourceId, limit: 50000, force_reindex: false, resume: true, dimension: 1536 }
+                },
+                'index_offline': {
+                    endpoint: '/useradmin/api/create-index',
+                    body: { source_id: sourceId, limit: 50000, force_reindex: false, resume: true, dimension: 768 }
                 }
-            } else {
-                alert('Unknown job type: ' + jobType);
+            };
+
+            const config = resumeConfigs[jobType];
+            if (!config) {
+                alert('Job type "' + jobType + '" does not support auto-resume.\n\nPlease discard this checkpoint and restart the job manually.');
+                return;
+            }
+
+            try {
+                const response = await fetch(config.endpoint, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(config.body)
+                });
+
+                if (response.ok) {
+                    // Immediately refresh to show the job in Active Jobs
+                    loadJobs();
+                    loadInterruptedJobs();
+                } else {
+                    const err = await response.json();
+                    alert('Failed to resume: ' + (err.detail || err.error || 'Unknown error'));
+                }
+            } catch (e) {
+                alert('Error resuming job: ' + e.message);
             }
         }
 

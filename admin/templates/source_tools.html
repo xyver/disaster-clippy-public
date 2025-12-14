@@ -728,6 +728,61 @@
                             Check this if you have confirmed the license is accurate
                         </p>
                     </div>
+                    <div class="form-group" id="licenseNotesGroup" style="display: none;">
+                        <label>License Notes (required for Custom license)</label>
+                        <textarea id="editLicenseNotes" rows="2" placeholder="Describe the custom license terms (min 20 characters)"></textarea>
+                    </div>
+
+                    <!-- Human Verification Section -->
+                    <div style="margin-top: 1.5rem; padding-top: 1rem; border-top: 1px solid #0f3460;">
+                        <h4 style="color: #4ecca3; margin-bottom: 0.75rem;">Human Verification</h4>
+                        <p style="font-size: 0.85rem; color: #888; margin-bottom: 1rem;">
+                            These checks require manual verification before submitting to the global repository.
+                        </p>
+
+                        <div class="form-group">
+                            <label>
+                                <input type="checkbox" id="editLinksOffline"> Offline Links Verified
+                            </label>
+                            <p style="font-size: 0.8rem; color: #888; margin-top: 0.25rem;">
+                                I have tested that internal links in the backup work correctly
+                            </p>
+                        </div>
+                        <div class="form-group">
+                            <label>
+                                <input type="checkbox" id="editLinksOnline"> Online Links Verified
+                            </label>
+                            <p style="font-size: 0.8rem; color: #888; margin-top: 0.25rem;">
+                                I have verified that external URLs are valid and accessible
+                            </p>
+                        </div>
+                        <div class="form-group">
+                            <label>Language</label>
+                            <select id="editLanguage">
+                                <option value="">-- Select --</option>
+                                <option value="en">English</option>
+                                <option value="es">Spanish</option>
+                                <option value="fr">French</option>
+                                <option value="de">German</option>
+                                <option value="pt">Portuguese</option>
+                                <option value="zh">Chinese</option>
+                                <option value="ja">Japanese</option>
+                                <option value="other">Other</option>
+                            </select>
+                            <p style="font-size: 0.8rem; color: #888; margin-top: 0.25rem;">
+                                Global repository requires English sources only
+                            </p>
+                        </div>
+                        <div class="form-group">
+                            <label>
+                                <input type="checkbox" id="editLanguageVerified"> Language Verified
+                            </label>
+                            <p style="font-size: 0.8rem; color: #888; margin-top: 0.25rem;">
+                                I confirm the content is in the selected language
+                            </p>
+                        </div>
+                    </div>
+
                     <div class="tool-actions">
                         <button class="btn btn-primary" onclick="saveSourceConfig()">Save Configuration</button>
                         <button class="btn btn-secondary" onclick="autoDetect()">Auto-Detect</button>
@@ -1761,8 +1816,8 @@
                 resetAllSections();
                 updateWizardUI();
                 // Hide document count when no source selected
-                document.getElementById('documentCountDisplay').style.display = 'none';
-                document.getElementById('btnIndexAll').style.display = 'none';
+                const docCountEl = document.getElementById('documentCountDisplay');
+                if (docCountEl) docCountEl.style.display = 'none';
                 // Hide selected source info
                 selectedInfoDiv.style.display = 'none';
                 return;
@@ -1786,8 +1841,8 @@
                             </button>
                         </div>
                     `;
-                    document.getElementById('documentCountDisplay').style.display = 'none';
-                    document.getElementById('btnIndexAll').style.display = 'none';
+                    const orphanDocCountEl = document.getElementById('documentCountDisplay');
+                    if (orphanDocCountEl) orphanDocCountEl.style.display = 'none';
                     // Hide other sections for orphaned sources
                     document.getElementById('sourceInfo').innerHTML = '';
                     logOutput(`WARNING: ${currentSource.source_id} is orphaned - folder deleted but database entries remain`, 'error');
@@ -1834,8 +1889,8 @@
                 if (docCount > 0) {
                     updateDocumentCount(docCount);
                 } else {
-                    document.getElementById('documentCountDisplay').style.display = 'none';
-                    document.getElementById('btnIndexAll').style.display = 'none';
+                    const noDocCountEl = document.getElementById('documentCountDisplay');
+                    if (noDocCountEl) noDocCountEl.style.display = 'none';
                 }
 
                 logOutput(`Loaded source: ${currentSource.name || currentSource.source_id}`);
@@ -1937,6 +1992,16 @@
             document.getElementById('editBaseUrl').value = s.base_url || '';
             document.getElementById('editLicenseVerified').checked = s.license_verified || false;
 
+            // New validation fields
+            document.getElementById('editLicenseNotes').value = s.license_notes || '';
+            document.getElementById('editLinksOffline').checked = s.links_verified_offline || false;
+            document.getElementById('editLinksOnline').checked = s.links_verified_online || false;
+            document.getElementById('editLanguage').value = s.language || '';
+            document.getElementById('editLanguageVerified').checked = s.language_verified || false;
+
+            // Show/hide license notes based on license type
+            updateLicenseNotesVisibility();
+
             // Populate rename form (admin only)
             document.getElementById('renameCurrentId').value = s.source_id || '';
             document.getElementById('renameNewId').value = '';
@@ -1947,6 +2012,19 @@
                 document.getElementById('urlPreview').innerHTML = 'Existing base URL loaded. Test or update as needed.';
             }
         }
+
+        function updateLicenseNotesVisibility() {
+            const licenseSelect = document.getElementById('editLicense');
+            const notesGroup = document.getElementById('licenseNotesGroup');
+            if (licenseSelect.value === 'Custom') {
+                notesGroup.style.display = 'block';
+            } else {
+                notesGroup.style.display = 'none';
+            }
+        }
+
+        // Add event listener for license dropdown
+        document.getElementById('editLicense').addEventListener('change', updateLicenseNotesVisibility);
 
         // Track tags in the two sections
         let chosenTags = new Set();
@@ -2110,7 +2188,12 @@
                 name: document.getElementById('editName').value,
                 description: document.getElementById('editDescription').value,
                 license: document.getElementById('editLicense').value,
-                license_verified: document.getElementById('editLicenseVerified').checked
+                license_verified: document.getElementById('editLicenseVerified').checked,
+                license_notes: document.getElementById('editLicenseNotes').value,
+                links_verified_offline: document.getElementById('editLinksOffline').checked,
+                links_verified_online: document.getElementById('editLinksOnline').checked,
+                language: document.getElementById('editLanguage').value,
+                language_verified: document.getElementById('editLanguageVerified').checked
             };
             // Note: base_url is now configured in Step 3
 

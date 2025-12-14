@@ -1,0 +1,327 @@
+/**
+ * Source Card - Unified styling for source cards across admin pages
+ *
+ * Used by: sources.html, cloud_upload.html, packs.html
+ *
+ * Variants:
+ *   .source-card              - Base card
+ *   .source-card--complete    - Green border (all requirements met)
+ *   .source-card--incomplete  - Orange border (missing requirements)
+ *   .source-card--available   - Default border (cloud source, not installed)
+ */
+
+/* =============================================================================
+   CARD CONTAINER
+   ============================================================================= */
+
+.source-card {
+    background: #1a1a2e;
+    border: 1px solid #0f3460;
+    border-radius: 8px;
+    padding: 1rem;
+    transition: border-color 0.2s;
+}
+
+.source-card--complete {
+    border-color: #4ecca3;
+}
+
+.source-card--incomplete {
+    border-color: #f9a825;
+    opacity: 0.9;
+}
+
+.source-card--available {
+    border-color: #0f3460;
+}
+
+.source-card:hover {
+    border-color: #4ecca3;
+}
+
+/* =============================================================================
+   CARD HEADER
+   ============================================================================= */
+
+.source-card__header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 0.5rem;
+    gap: 0.5rem;
+}
+
+.source-card__name {
+    font-size: 1rem;
+    font-weight: 600;
+    color: #4ecca3;
+    margin: 0;
+    word-break: break-word;
+}
+
+/* =============================================================================
+   STATUS BADGE (top-right corner)
+   ============================================================================= */
+
+.source-card__badge {
+    font-size: 0.7rem;
+    padding: 0.2rem 0.5rem;
+    border-radius: 3px;
+    text-transform: uppercase;
+    font-weight: 600;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+.source-card__badge--installed {
+    background: #4ecca320;
+    color: #4ecca3;
+}
+
+.source-card__badge--available {
+    background: #f9a82520;
+    color: #f9a825;
+}
+
+.source-card__badge--local {
+    background: #88888820;
+    color: #888;
+}
+
+.source-card__badge--ready {
+    background: #4ecca3;
+    color: #1a1a2e;
+}
+
+.source-card__badge--incomplete {
+    background: #f9a825;
+    color: #1a1a2e;
+}
+
+/* =============================================================================
+   METADATA ROW
+   ============================================================================= */
+
+.source-card__meta {
+    font-size: 0.8rem;
+    color: #888;
+    margin-bottom: 0.5rem;
+}
+
+.source-card__meta > div,
+.source-card__meta > span {
+    display: inline-block;
+    margin-right: 1rem;
+}
+
+.source-card__meta--highlight {
+    color: #4ecca3;
+}
+
+/* =============================================================================
+   STATUS BOXES (validation indicators)
+   ============================================================================= */
+
+.source-card__status-boxes {
+    display: flex;
+    gap: 0.25rem;
+    margin-top: 0.75rem;
+    flex-wrap: wrap;
+}
+
+.source-card__status-box {
+    font-size: 0.65rem;
+    padding: 0.2rem 0.4rem;
+    border-radius: 3px;
+    text-transform: uppercase;
+    font-weight: 500;
+}
+
+.source-card__status-box--ok {
+    background: #4ecca320;
+    color: #4ecca3;
+}
+
+.source-card__status-box--missing {
+    background: #e9456020;
+    color: #e94560;
+}
+
+.source-card__status-box--warning {
+    background: #f9a82520;
+    color: #f9a825;
+}
+
+/* =============================================================================
+   CHECKLIST (alternative to status boxes for cloud page)
+   ============================================================================= */
+
+.source-card__checklist {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-bottom: 0.75rem;
+}
+
+.source-card__check-item {
+    font-size: 0.8rem;
+    padding: 0.2rem 0.5rem;
+    border-radius: 4px;
+    background: #0f3460;
+}
+
+.source-card__check-item--has {
+    color: #4ecca3;
+}
+
+.source-card__check-item--missing {
+    color: #e94560;
+}
+
+/* =============================================================================
+   MISSING ITEMS WARNING
+   ============================================================================= */
+
+.source-card__missing {
+    font-size: 0.8rem;
+    color: #f9a825;
+    margin-bottom: 0.75rem;
+}
+
+/* =============================================================================
+   ACTION BUTTONS
+   ============================================================================= */
+
+.source-card__actions {
+    margin-top: 0.75rem;
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    align-items: center;
+}
+
+/* Small buttons for card actions */
+.source-card__btn {
+    padding: 0.4rem 0.8rem;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.8rem;
+    transition: background 0.2s, opacity 0.2s;
+}
+
+.source-card__btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.source-card__btn--primary {
+    background: #4ecca3;
+    color: #1a1a2e;
+}
+
+.source-card__btn--primary:hover:not(:disabled) {
+    background: #3db892;
+}
+
+.source-card__btn--secondary {
+    background: #0f3460;
+    color: #4ecca3;
+}
+
+.source-card__btn--secondary:hover:not(:disabled) {
+    background: #1a4a7a;
+}
+
+.source-card__btn--install {
+    background: #4ecca3;
+    color: #1a1a2e;
+}
+
+.source-card__btn--install-full {
+    background: #1a5f3c;
+    color: #fff;
+}
+
+.source-card__btn--edit {
+    background: #0f3460;
+    color: #4ecca3;
+}
+
+.source-card__btn--edit:hover:not(:disabled) {
+    background: #1a1a3e;
+}
+
+.source-card__btn--uploaded {
+    background: #2e4a2e;
+    color: #4ecca3;
+    cursor: default;
+}
+
+/* Helper text next to buttons */
+.source-card__helper-text {
+    font-size: 0.7rem;
+    color: #888;
+    margin-left: 0.5rem;
+}
+
+.source-card__helper-text--success {
+    color: #4ecca3;
+}
+
+/* =============================================================================
+   GRID LAYOUT FOR CARDS
+   ============================================================================= */
+
+.source-card-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 1rem;
+}
+
+/* Single column variant for cloud page */
+.source-card-grid--single {
+    grid-template-columns: 1fr;
+}
+
+/* =============================================================================
+   PROGRESS BAR (for downloads/uploads)
+   ============================================================================= */
+
+.source-card__progress {
+    height: 4px;
+    background: #0f3460;
+    border-radius: 2px;
+    margin-top: 0.5rem;
+    overflow: hidden;
+    display: none;
+}
+
+.source-card__progress.active {
+    display: block;
+}
+
+.source-card__progress-fill {
+    height: 100%;
+    background: #4ecca3;
+    border-radius: 2px;
+    transition: width 0.3s ease;
+    width: 0%;
+}
+
+/* =============================================================================
+   PLACEHOLDER/EMPTY STATE
+   ============================================================================= */
+
+.source-card-placeholder {
+    text-align: center;
+    padding: 3rem;
+    color: #666;
+    font-style: italic;
+}
+
+.source-card-loading {
+    text-align: center;
+    padding: 2rem;
+    color: #888;
+}

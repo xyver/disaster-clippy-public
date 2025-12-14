@@ -4,6 +4,8 @@
 
 Disaster Clippy helps you find actionable information from trusted sources - educational guides, DIY projects, government reports, and research papers. Ask questions in plain language and get recommendations with source attribution.
 
+**Fully offline-capable** - runs on a Raspberry Pi with no internet required.
+
 ---
 
 ## What Can I Ask?
@@ -13,7 +15,7 @@ Disaster Clippy helps you find actionable information from trusted sources - edu
 - "Show me guides on food preservation"
 - "How do I prepare for a wildfire?"
 
-The system searches 800+ documents from trusted sources and provides answers with links to the original content.
+The system searches thousands of documents from trusted sources and provides answers with links to the original content.
 
 ---
 
@@ -42,7 +44,18 @@ python app.py
 # Visit http://localhost:8000
 ```
 
-### Option 3: Use the API
+### Option 3: Run Fully Offline
+
+```bash
+# Use local embeddings (no API key needed)
+EMBEDDING_MODE=local python app.py
+
+# Install Ollama for offline AI responses
+curl -fsSL https://ollama.com/install.sh | sh
+ollama pull llama3.2:3b
+```
+
+### Option 4: Use the API
 
 Embed Disaster Clippy on your website:
 
@@ -52,21 +65,18 @@ curl -X POST "https://disaster-clippy.up.railway.app/api/v1/chat" \
   -d '{"message": "How do I filter water?"}'
 ```
 
-See the [API documentation](#api-endpoints) below.
-
 ---
 
 ## Content Sources
 
-| Source | Documents | Topics |
-|--------|-----------|--------|
-| Appropedia | 150 | Appropriate technology, water, sanitation, shelter |
-| BuildItSolar | 337 | DIY solar projects, heating, cooling |
-| SolarCooking Wiki | 176 | Solar cooking, food safety |
-| PDF Guides | 61+ | Pandemic preparedness, emergency management |
-| Bitcoin Docs | 100 | Cryptocurrency reference |
-
-**Total: 824+ documents from verified, openly-licensed sources**
+| Source | Topics |
+|--------|--------|
+| Appropedia | Appropriate technology, water, sanitation, shelter |
+| BuildItSolar | DIY solar projects, heating, cooling |
+| SolarCooking Wiki | Solar cooking, food safety |
+| WikiHow | How-to guides across topics |
+| PDF Collections | Pandemic preparedness, emergency management |
+| Wikipedia (ZIM) | Medical, technology, and other topic archives |
 
 All content is Creative Commons or Public Domain with full attribution.
 
@@ -78,26 +88,30 @@ All content is Creative Commons or Public Domain with full attribution.
 
 - **Natural language search** - Ask questions like you would ask a person
 - **Source attribution** - Every answer links to the original source
-- **Document types** - Results tagged as Guide, Article, Research, or Product
-- **Multi-turn conversation** - Follow-up questions keep context and enhance further research
+- **Source filtering** - Search specific sources or all at once
+- **Multi-turn conversation** - Follow-up questions keep context
+- **Offline browsing** - View ZIM archives and HTML backups without internet
 
 ### For Local Admins
 
-- **Admin Panel** - Full source management at /useradmin/
+- **Admin Panel** - Full source management at `/useradmin/`
 - **5-Step Source Tools** - Wizard for creating and editing sources
-- **Status Boxes** - Visual validation (Config, Backup, Metadata, Embeddings, License)
-- **Job Management** - Background jobs with checkpoint/resume for long operations
-- **Web Scrapers** - MediaWiki, Fandom, static sites, PDF extraction
+- **6 Status Boxes** - Visual validation (Config, Backup, Metadata, 1536, 768, License)
+- **Validation Gates** - `can_submit` and `can_publish` permission system
+- **Job System** - Background jobs with checkpoint/resume for long operations
+- **Job Builder** - Visual UI for creating custom job chains
+- **Web Scrapers** - MediaWiki, static sites, with link following
+- **ZIM Support** - Index and browse Wikipedia, WikiHow, and other ZIM archives
+- **Language Packs** - Download translation models for non-English users
 - **CLI Tools** - Command-line tools for indexing, scraping, sync
-- **Offline Support** - Run without internet using local ChromaDB + ZIM files
-- **ZIM Browsing** - Offline viewing of Wikipedia and other ZIM archives
 
-### For Organizations
+### For Offline Deployment
 
-- **External API** - Embed the chat on your own website
-- **Custom databases** - Create your own vector database from selected sources
-- **Cloud Storage** - Cloudflare R2 integration for backup distribution
-- **Mode Switching** - Local admin vs Global admin features
+- **Dual Embedding** - 1536-dim (cloud) + 768-dim (local) vectors
+- **Local LLM** - Ollama integration for offline AI responses
+- **ZIM Browsing** - Offline viewing of Wikipedia and other archives
+- **Personal Cloud** - Sync to your own S3-compatible storage
+- **RPi5 Ready** - Runs on Raspberry Pi 5 with 8GB RAM
 
 ---
 
@@ -109,24 +123,11 @@ disaster-clippy/
 |-- local_settings.json       # User configuration
 |
 |-- cli/                      # Command-line tools
-|   |-- local.py              # Local admin CLI
-|   |-- ingest.py             # Scraping and ingestion CLI
-|   |-- sync.py               # Vector DB sync CLI
-|
 |-- admin/                    # Admin panel (/useradmin/)
-|   |-- app.py                # FastAPI routes
-|   |-- routes/               # API route modules
-|   |-- templates/            # Admin UI templates
-|
 |-- offline_tools/            # Core business logic
-|   |-- indexer.py            # HTML/ZIM/PDF indexing
-|   |-- source_manager.py     # Source CRUD operations
-|   |-- scraper/              # Web scrapers
-|   |-- vectordb/             # Vector database (ChromaDB/Pinecone)
-|   |-- cloud/                # Cloudflare R2 client
-|
 |-- templates/                # Main app templates
 |-- static/                   # Main app static files
+|-- docs/                     # Detailed documentation
 ```
 
 ---
@@ -145,14 +146,16 @@ disaster-clippy/
 {"response": "Here are several approaches...", "session_id": "abc123"}
 ```
 
+**POST /api/v1/chat/stream** - Server-sent events for streaming responses
+
 ### Other Endpoints
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/` | GET | Chat interface (web page) |
+| `/` | GET | Chat interface |
 | `/health` | GET | Health check |
-| `/stats` | GET | System statistics |
-| `/api/v1/embed` | GET | Get embed code for websites |
+| `/api/v1/connection-status` | GET | Connection state |
+| `/sources` | GET | List available sources |
 
 ---
 
@@ -160,23 +163,35 @@ disaster-clippy/
 
 | Document | Purpose |
 |----------|---------|
-| [README.md](README.md) | This file - getting started and overview |
-| [DEVELOPER.md](DEVELOPER.md) | Technical setup, CLI tools, security architecture |
-| [SUMMARY.md](SUMMARY.md) | Executive summary (non-technical overview) |
-| [CONTEXT.md](CONTEXT.md) | Architecture and design decisions (AI onboarding) |
-| [ROADMAP.md](ROADMAP.md) | Future plans, testing checklist, version targets |
+| **Getting Started** | |
+| [README.md](README.md) | This file - overview and quick start |
+| [DEVELOPER.md](DEVELOPER.md) | Setup guide and documentation index |
+| **Architecture** | |
+| [docs/architecture.md](docs/architecture.md) | Modes, security, data flow, offline design |
+| [docs/ai-service.md](docs/ai-service.md) | Search, chat, connection modes |
+| **Working with Sources** | |
+| [docs/source-tools.md](docs/source-tools.md) | SourceManager, indexers, scrapers |
+| [docs/validation.md](docs/validation.md) | Permission gates, validation tiers |
+| [docs/jobs.md](docs/jobs.md) | Background jobs, checkpoints |
+| **Operations** | |
+| [docs/deployment.md](docs/deployment.md) | Deployment scenarios, cloud backup |
+| [docs/admin-guide.md](docs/admin-guide.md) | Admin panel, CLI, troubleshooting |
+| [docs/language-packs.md](docs/language-packs.md) | Offline translation system |
+| **Planning** | |
+| [ROADMAP.md](ROADMAP.md) | Future plans and version targets |
+| [CONTEXT.md](CONTEXT.md) | Architecture decisions (AI onboarding) |
+| [SUMMARY.md](SUMMARY.md) | Executive summary (non-technical) |
 
 ---
 
 ## Tech Stack
 
 - **Backend**: Python, FastAPI
-- **AI**: OpenAI GPT-4o-mini or Claude (configurable)
+- **AI**: OpenAI GPT-4o-mini, Claude, or local Ollama
 - **Embeddings**: OpenAI API or local sentence-transformers
 - **Vector Database**: ChromaDB (local) or Pinecone (cloud)
-- **Admin UI**: FastAPI + Jinja2 templates
-- **Scrapers**: MediaWiki API, BeautifulSoup, PyMuPDF
-- **Cloud Storage**: Cloudflare R2
+- **Translation**: MarianMT models for offline translation
+- **Cloud Storage**: Cloudflare R2 (S3-compatible)
 
 ---
 
@@ -194,9 +209,9 @@ See [DEVELOPER.md](DEVELOPER.md) for development setup.
 
 Key areas:
 - Add new content scrapers
-- Improve search quality
-- Build location-aware features
-- Test and documentation
+- Improve search result diversity and weighting
+- Test language pack translations
+- Documentation and testing
 
 ---
 

@@ -18,6 +18,7 @@ from .schemas import (
     get_vectors_file, get_backup_manifest_file, CURRENT_SCHEMA_VERSION,
     html_filename_to_url
 )
+from .validation import SYSTEM_FOLDERS
 
 
 # =============================================================================
@@ -163,6 +164,44 @@ def read_json_header_only(file_path: Path) -> dict:
 # BACKUP DETECTION - Unified logic for detecting backup type and status
 # =============================================================================
 
+def _estimate_folder_size_fast(folder: Path, sample_limit: int = 20) -> float:
+    """
+    Fast folder size estimation by sampling files.
+
+    Instead of traversing all files (which can be very slow for large backups),
+    this samples the first N files and estimates total size.
+
+    Returns size in MB.
+    """
+    total_size = 0
+    file_count = 0
+
+    # Check pages/ subfolder first (most common for HTML backups)
+    pages_folder = folder / "pages"
+    if pages_folder.exists():
+        # Sample files from pages folder
+        for f in pages_folder.iterdir():
+            if file_count >= sample_limit:
+                break
+            if f.is_file():
+                total_size += f.stat().st_size
+                file_count += 1
+            elif f.is_dir():
+                # Sample one file from each subdirectory
+                for sub_f in list(f.iterdir())[:1]:
+                    if sub_f.is_file():
+                        total_size += sub_f.stat().st_size
+                        file_count += 1
+
+    # Also check top-level files (metadata, vectors, etc.)
+    for f in folder.iterdir():
+        if f.is_file():
+            total_size += f.stat().st_size
+
+    # Return actual sampled size (good enough for display)
+    return round(total_size / (1024 * 1024), 2)
+
+
 def detect_backup_status(source_id: str, backup_folder: Optional[Path] = None) -> Dict[str, Any]:
     """
     Detect backup type and status for a source.
@@ -212,27 +251,28 @@ def detect_backup_status(source_id: str, backup_folder: Optional[Path] = None) -
         result["has_backup"] = True
         result["backup_type"] = "zim"
         result["backup_path"] = str(zim_path)
-        # Calculate FULL folder size for accurate package size
+        # Just use ZIM file size (fast) - don't traverse folder
         try:
-            total_size = sum(f.stat().st_size for f in source_folder.rglob('*') if f.is_file())
-            result["backup_size_mb"] = round(total_size / (1024*1024), 2)
-        except Exception:
-            # Fallback to just ZIM size
             result["backup_size_mb"] = round(zim_path.stat().st_size / (1024*1024), 2)
+        except Exception:
+            pass
         return result
 
-    # Check HTML folder
-    html_files = list(source_folder.glob("*.html")) + list(source_folder.glob("**/*.html"))
+    # Check HTML folder - use fast existence check, not full traversal
     pages_folder = source_folder / "pages"
-    if html_files or pages_folder.exists():
+    has_pages = pages_folder.exists() and pages_folder.is_dir()
+    # Only check top-level HTML files (fast)
+    has_html = bool(list(source_folder.glob("*.html"))[:1])
+
+    if has_pages or has_html:
         result["has_backup"] = True
         result["backup_type"] = "html"
         result["backup_path"] = str(source_folder)
+        # Fast size estimate: sample first few files instead of full traversal
         try:
-            total_size = sum(f.stat().st_size for f in source_folder.rglob('*') if f.is_file())
-            result["backup_size_mb"] = round(total_size / (1024*1024), 2)
+            result["backup_size_mb"] = _estimate_folder_size_fast(source_folder)
         except Exception:
-            pass
+            result["backup_size_mb"] = 1.0  # Default to 1MB if can't calculate
         return result
 
     # Check PDF collection (_collection.json is the definitive marker)
@@ -241,9 +281,10 @@ def detect_backup_status(source_id: str, backup_folder: Optional[Path] = None) -
         result["has_backup"] = True
         result["backup_type"] = "pdf"
         result["backup_path"] = str(source_folder)
+        # Fast size: just sum PDF files in top level
         try:
-            total_size = sum(f.stat().st_size for f in source_folder.rglob('*') if f.is_file())
-            result["backup_size_mb"] = round(total_size / (1024*1024), 2)
+            pdf_size = sum(f.stat().st_size for f in source_folder.glob("*.pdf"))
+            result["backup_size_mb"] = round(pdf_size / (1024*1024), 2)
         except Exception:
             pass
         return result
@@ -538,6 +579,7 @@ def generate_metadata_from_html(
     source_folder = html_path.parent if html_path.name == "pages" else html_path
     manifest_path = source_folder / get_backup_manifest_file()
     url_mapping = {}  # filename -> url path
+    is_zim_source = False  # ZIM sources preserve underscores in URLs
 
     if manifest_path.exists():
         try:
@@ -551,6 +593,16 @@ def generate_metadata_from_html(
             print(f"Loaded {len(url_mapping)} URL mappings from backup manifest")
         except Exception as e:
             print(f"Warning: Could not load backup manifest: {e}")
+
+    # Check main manifest.json for ZIM source detection
+    main_manifest_path = source_folder / "manifest.json"
+    if main_manifest_path.exists():
+        try:
+            with open(main_manifest_path, 'r', encoding='utf-8') as f:
+                main_manifest = json.load(f)
+            is_zim_source = main_manifest.get("created_from") == "zim_import"
+        except Exception:
+            pass
 
     documents = {}
     total_chars = 0
@@ -589,7 +641,8 @@ def generate_metadata_from_html(
                 url = url_mapping[filename]
             else:
                 # Fallback: use centralized filename conversion
-                url = html_filename_to_url(filename)
+                # ZIM sources preserve underscores, HTML scrapes convert to slashes
+                url = html_filename_to_url(filename, is_zim_source=is_zim_source)
 
             # Build local_url for offline serving
             local_url = f"/backup/{source_id}/{filename}"
@@ -742,11 +795,14 @@ def sync_master_metadata() -> Dict[str, Any]:
     updated = 0
 
     # Scan all directories in backup folder
+    # Skip system folders (chroma_db, models, etc.), dot-prefixed, and underscore-prefixed
     for item in backup_dir.iterdir():
         if not item.is_dir():
             continue
         if item.name.startswith("_") or item.name.startswith("."):
             continue  # Skip special dirs like _master.json folder (if any)
+        if item.name.lower() in SYSTEM_FOLDERS:
+            continue  # Skip system folders
 
         source_id = item.name
         source_dir = item
@@ -839,7 +895,7 @@ def sync_master_metadata() -> Dict[str, Any]:
         "removed": removed,
         "updated": updated,
         "total": len(new_sources),
-        "total_documents": master["total_documents"]
+        "total_documents": new_master["total_documents"]
     }
 
 

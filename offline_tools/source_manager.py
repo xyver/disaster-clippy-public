@@ -113,6 +113,19 @@ class ValidationResult:
     has_vectors_768: bool = False  # _vectors_768.json (offline/local use)
     has_vectors_1536: bool = False  # _vectors.json (online/global use)
 
+    # New validation fields (unified validation module)
+    license_notes: str = ""  # Required if license is "Custom"
+    license_in_allowlist: bool = False
+    links_verified_offline: bool = False
+    links_verified_online: bool = False
+    language: str = ""  # ISO 639-1 code
+    language_is_english: bool = False
+    language_verified: bool = False
+
+    # New permission gates
+    can_submit: bool = False  # Local admin gate
+    can_publish: bool = False  # Global admin gate
+
     # Actionable issues with fix hints
     actionable_issues: List[ValidationIssue] = None
 
@@ -971,6 +984,17 @@ class SourceManager:
         pages = {}
         errors = []
 
+        # Check if this is a ZIM source (underscores should be preserved in URLs)
+        is_zim_source = False
+        manifest_path = source_path / "manifest.json"
+        if manifest_path.exists():
+            try:
+                with open(manifest_path, 'r', encoding='utf-8') as f:
+                    existing_manifest = json.load(f)
+                is_zim_source = existing_manifest.get("created_from") == "zim_import"
+            except Exception:
+                pass
+
         for i, html_file in enumerate(html_files):
             try:
                 filename = html_file.name
@@ -987,7 +1011,8 @@ class SourceManager:
                     pass  # Use filename-based title
 
                 # Reconstruct URL from filename using centralized function
-                url = html_filename_to_url(filename)
+                # ZIM sources preserve underscores, HTML scrapes convert to slashes
+                url = html_filename_to_url(filename, is_zim_source=is_zim_source)
 
                 # Get file size
                 file_size = html_file.stat().st_size
@@ -2274,6 +2299,31 @@ class SourceManager:
         # Current schema version (v3 uses underscore-prefixed files)
         result.schema_version = 3
 
+        # Load new validation fields from manifest
+        result.license_notes = source_config.get("license_notes", "")
+        result.links_verified_offline = source_config.get("links_verified_offline", False)
+        result.links_verified_online = source_config.get("links_verified_online", False)
+        result.language = source_config.get("language", "")
+        result.language_verified = source_config.get("language_verified", False)
+
+        # Check language is English
+        result.language_is_english = result.language.lower() in ["en", "english", "eng"] if result.language else False
+
+        # Check license against allowlist
+        try:
+            from offline_tools.validation import ALLOWED_LICENSES, MIN_LICENSE_NOTES_LENGTH
+            license_str = result.detected_license or source_config.get("license", "Unknown")
+            result.license_in_allowlist = False
+            for allowed in ALLOWED_LICENSES:
+                if license_str.lower() == allowed.lower():
+                    if allowed == "Custom":
+                        result.license_in_allowlist = len(result.license_notes.strip()) >= MIN_LICENSE_NOTES_LENGTH
+                    else:
+                        result.license_in_allowlist = True
+                    break
+        except ImportError:
+            result.license_in_allowlist = result.has_license
+
         # Determine if production ready (all critical checks pass)
         # Light validation: manifest + (metadata or index) + any vectors + license
         # Full production validation (validate_for_production) adds dual-dimension requirement
@@ -2283,6 +2333,30 @@ class SourceManager:
             (result.has_metadata_file or result.has_index_file) and
             result.has_vectors_file and
             result.has_license
+        )
+
+        # Compute new permission gates
+        has_at_least_one_index = result.has_vectors_1536 or result.has_vectors_768
+
+        # can_submit: Local admin gate - requires at least one vector dimension
+        result.can_submit = (
+            result.has_manifest and
+            (result.has_metadata_file or result.has_index_file) and
+            result.has_backup and
+            has_at_least_one_index and
+            result.license_in_allowlist and
+            result.license_verified and
+            result.links_verified_offline and
+            result.links_verified_online and
+            result.language_is_english
+        )
+
+        # can_publish: Global admin gate - requires both dimensions + deep validation
+        result.can_publish = (
+            result.can_submit and
+            result.has_vectors_768 and
+            result.has_vectors_1536 and
+            result.language_verified
         )
 
         # Note: For full production publishing, validate_for_production() adds

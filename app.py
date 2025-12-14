@@ -3,9 +3,21 @@ Disaster Clippy - Conversational DIY/Humanitarian Knowledge Search
 FastAPI backend with LangChain integration
 """
 
+# Load environment FIRST before any other imports
+# This ensures VECTOR_DB_MODE is available to all modules
 import os
-import json
 from pathlib import Path
+from dotenv import load_dotenv
+
+# Load .env from the same directory as this file (not cwd)
+_env_path = Path(__file__).parent / ".env"
+load_dotenv(_env_path)
+
+# Debug: verify env loaded correctly
+_mode = os.getenv("VECTOR_DB_MODE", "NOT_SET")
+print(f"[STARTUP] .env path: {_env_path}, exists: {_env_path.exists()}, VECTOR_DB_MODE={_mode}")
+
+import json
 from typing import List, Optional
 from datetime import datetime
 from collections import Counter
@@ -16,7 +28,6 @@ from fastapi.responses import JSONResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
-from dotenv import load_dotenv
 
 # Rate limiting for API endpoints
 from slowapi import Limiter
@@ -53,9 +64,6 @@ from admin.backup_server import router as backup_router
 from admin.ai_service import get_ai_service, SearchMethod, ResponseMethod
 from admin.connection_manager import get_connection_manager, sync_mode_from_config, ConnectionState
 from admin.local_config import get_local_config
-
-# Load environment
-load_dotenv()
 
 # Admin API key for protected operations
 ADMIN_API_KEY = os.getenv("ADMIN_API_KEY", "")
@@ -138,7 +146,8 @@ app.include_router(backup_router)
 
 @app.on_event("startup")
 async def startup_event():
-    """Sync master metadata on app startup"""
+    """Sync master metadata and validation data on app startup"""
+    # Sync source metadata (_master.json in packager format)
     try:
         from offline_tools.packager import sync_master_metadata
         result = sync_master_metadata()
@@ -147,6 +156,20 @@ async def startup_event():
         print(f"Sources: {result.get('total', 0)} sources, {result.get('total_documents', 0)} documents")
     except Exception as e:
         print(f"Warning: Could not sync master metadata: {e}")
+
+    # Rebuild validation master from per-source validation files
+    # This aggregates _validation_status.json from each source into _master.json
+    try:
+        from offline_tools.validation import rebuild_master_from_sources
+        from admin.local_config import get_local_config
+
+        backup_folder = get_local_config().get_backup_folder()
+        if backup_folder:
+            validation_result = rebuild_master_from_sources(backup_folder)
+            source_count = len(validation_result.get("sources", {}))
+            print(f"Validation master: {source_count} sources loaded")
+    except Exception as e:
+        print(f"Warning: Could not rebuild validation master: {e}")
 
 
 # Lazy initialization for faster startup
