@@ -16,7 +16,7 @@ from offline_tools.schemas import (
     get_manifest_file, get_metadata_file, get_index_file,
     get_vectors_file, get_vectors_768_file, get_backup_manifest_file
 )
-from offline_tools.validation import SYSTEM_FOLDERS
+from offline_tools.validation import SYSTEM_FOLDERS, _check_license_allowlist
 
 router = APIRouter(prefix="/api", tags=["Source Tools"])
 
@@ -216,17 +216,44 @@ async def get_local_sources():
         has_validation = master_entry.get("validated_at", "") != "" and not master_entry.get("needs_validation", True)
 
         if has_validation:
-            # Use master.json data directly (fast path)
+            # Use master.json for validation results, but read manifest for user-editable fields
+            # This ensures recently-saved config changes appear immediately without re-validation
+            manifest_data = {}
+            manifest_file = source_folder / get_manifest_file()
+            if manifest_file.exists():
+                try:
+                    with open(manifest_file, 'r', encoding='utf-8') as f:
+                        manifest_data = json.load(f)
+                except Exception:
+                    pass
+
             source_status = {
                 "source_id": source_id,
-                "name": master_entry.get("name", source_id),
-                "description": master_entry.get("description", ""),
-                "license": master_entry.get("license", "Unknown"),
-                "license_verified": master_entry.get("license_verified", False),
-                "license_notes": master_entry.get("license_notes", ""),
-                "license_in_allowlist": master_entry.get("license_in_allowlist", False),
-                "base_url": master_entry.get("base_url", ""),
-                "tags": master_entry.get("tags", []),
+                # User-editable fields from manifest (source of truth)
+                "name": manifest_data.get("name", master_entry.get("name", source_id)),
+                "description": manifest_data.get("description", master_entry.get("description", "")),
+                "license": manifest_data.get("license", master_entry.get("license", "Unknown")),
+                "license_verified": manifest_data.get("license_verified", master_entry.get("license_verified", False)),
+                "license_notes": manifest_data.get("license_notes", master_entry.get("license_notes", "")),
+                "base_url": manifest_data.get("base_url", master_entry.get("base_url", "")),
+                "tags": manifest_data.get("tags", master_entry.get("tags", [])),
+                "links_verified_offline": manifest_data.get("links_verified_offline", master_entry.get("links_verified_offline", False)),
+                "links_verified_online": manifest_data.get("links_verified_online", master_entry.get("links_verified_online", False)),
+                "language": manifest_data.get("language", master_entry.get("language", "")),
+                "language_verified": manifest_data.get("language_verified", master_entry.get("language_verified", False)),
+                # Compute language_is_english from local manifest or master cache
+                # Only True if language is actually English (not just verified)
+                "language_is_english": (
+                    manifest_data.get("language", "").lower() in ("en", "english", "eng") or
+                    master_entry.get("language_is_english", False)
+                ),
+                # Compute license_in_allowlist locally or use cached value
+                "license_in_allowlist": (
+                    _check_license_allowlist(
+                        manifest_data.get("license", ""),
+                        manifest_data.get("license_notes", "")
+                    ) or master_entry.get("license_in_allowlist", False)
+                ),
                 "has_config": master_entry.get("has_manifest", folder_exists),
                 "has_manifest": master_entry.get("has_manifest", False),
                 "has_metadata": master_entry.get("has_metadata", False),
@@ -239,11 +266,6 @@ async def get_local_sources():
                 "document_count": master_entry.get("document_count", 0),
                 "vector_count_1536": master_entry.get("vector_count_1536", 0),
                 "vector_count_768": master_entry.get("vector_count_768", 0),
-                "links_verified_offline": master_entry.get("links_verified_offline", False),
-                "links_verified_online": master_entry.get("links_verified_online", False),
-                "language": master_entry.get("language", ""),
-                "language_is_english": master_entry.get("language_is_english", False),
-                "language_verified": master_entry.get("language_verified", False),
                 "is_complete": master_entry.get("has_manifest", False) and master_entry.get("has_metadata", False) and master_entry.get("has_backup", False),
                 "can_submit": master_entry.get("can_submit", False),
                 "can_publish": master_entry.get("can_publish", False),
@@ -296,6 +318,7 @@ async def get_local_sources():
                 "description": manifest_data.get("description", ""),
                 "license": manifest_data.get("license", "Unknown"),
                 "license_verified": manifest_data.get("license_verified", False),
+                "license_notes": manifest_data.get("license_notes", ""),
                 "base_url": manifest_data.get("base_url", ""),
                 "tags": manifest_data.get("tags", []),
                 "has_config": manifest_exists,
@@ -308,6 +331,16 @@ async def get_local_sources():
                 "backup_type": backup_status.get("backup_type", ""),
                 "backup_size_mb": backup_status.get("backup_size_mb", 0),
                 "document_count": manifest_data.get("total_docs", 0),
+                "links_verified_offline": manifest_data.get("links_verified_offline", False),
+                "links_verified_online": manifest_data.get("links_verified_online", False),
+                "language": manifest_data.get("language", ""),
+                "language_verified": manifest_data.get("language_verified", False),
+                # Only True if language is actually English (not just verified)
+                "language_is_english": manifest_data.get("language", "").lower() in ("en", "english", "eng"),
+                "license_in_allowlist": _check_license_allowlist(
+                    manifest_data.get("license", ""),
+                    manifest_data.get("license_notes", "")
+                ),
                 "is_complete": manifest_exists and metadata_exists and backup_status.get("has_backup", False),
                 "can_submit": False,
                 "can_publish": False,
@@ -1700,8 +1733,23 @@ async def get_all_suggested_tags(source_id: str):
 
         manager = SourceManager()
 
-        # Use optimized combined function (single pass through documents)
-        result = manager.suggest_all_tags_combined(source_id)
+        # Check for cached results first (from previous job run)
+        cached = manager.get_cached_tag_suggestions(source_id)
+        if cached:
+            return {
+                "status": "success",
+                "source_id": source_id,
+                "tags": cached.get("tags", []),
+                "total_count": len(cached.get("tags", [])),
+                "topic_count": cached.get("topic_count", 0),
+                "novel_count": cached.get("novel_count", 0),
+                "documents_scanned": cached.get("documents_scanned", 0),
+                "from_cache": True,
+                "cached_at": cached.get("cached_at")
+            }
+
+        # No cache - run fresh scan and cache results
+        result = manager.suggest_all_tags_combined(source_id, save_to_manifest=True)
 
         if not result.get("success"):
             raise HTTPException(500, result.get("error", "Tag suggestion failed"))
@@ -1713,7 +1761,8 @@ async def get_all_suggested_tags(source_id: str):
             "total_count": len(result.get("tags", [])),
             "topic_count": result.get("topic_count", 0),
             "novel_count": result.get("novel_count", 0),
-            "documents_scanned": result.get("documents_scanned", 0)
+            "documents_scanned": result.get("documents_scanned", 0),
+            "from_cache": False
         }
 
     except HTTPException:
@@ -1755,8 +1804,8 @@ async def suggest_tags_job(request: dict):
         if cancel_checker and cancel_checker():
             return {"status": "cancelled", "error": "Job cancelled by user"}
 
-        # Run the combined tag suggestion with progress tracking
-        result = manager.suggest_all_tags_combined(source_id, progress_callback=progress_callback)
+        # Run the combined tag suggestion with progress tracking and cache to manifest
+        result = manager.suggest_all_tags_combined(source_id, progress_callback=progress_callback, save_to_manifest=True)
 
         if progress_callback:
             progress_callback(100, 100, "Tag analysis complete")
@@ -2272,7 +2321,9 @@ async def get_zim_samples(source_id: str, count: int = 10):
 
     # If no ZIM in source folder, check manifest for stored zim_path
     if not zim_path:
-        manifest_path = source_folder / "manifest.json"
+        manifest_path = source_folder / "_manifest.json"  # v3 schema
+        if not manifest_path.exists():
+            manifest_path = source_folder / "manifest.json"  # legacy fallback
         if manifest_path.exists():
             try:
                 import json
@@ -2397,19 +2448,17 @@ async def index_zim_file(request: ZIMIndexRequest):
         raise HTTPException(404, f"ZIM file not found: {request.zim_path}")
 
     def _run_zim_index(zim_path: str, source_id: str, limit: int, progress_callback=None, cancel_checker=None):
-        """Background job function for ZIM indexing"""
-        from offline_tools.indexer import ZIMIndexer
-
-        config = get_local_config()
-        backup_folder = config.get_backup_folder()
-
-        indexer = ZIMIndexer(
-            zim_path=zim_path,
-            source_id=source_id,
-            backup_folder=backup_folder
-        )
-
-        return indexer.index(limit=limit, progress_callback=progress_callback)
+        """
+        DEPRECATED: Direct ZIM indexing is no longer supported (Dec 2024).
+        ZIM files must be extracted via ZIM import job first.
+        """
+        return {
+            "success": False,
+            "error": "Direct ZIM indexing is no longer supported. "
+                     "Use the ZIM import job first to extract HTML pages, "
+                     "then run 'Generate Metadata' and 'Index' jobs on the extracted source.",
+            "indexed_count": 0
+        }
 
     manager = get_job_manager()
 
@@ -2937,16 +2986,18 @@ async def test_source_links(source_id: str, test_base_url: Optional[str] = None)
     if not source_path.exists():
         raise HTTPException(status_code=404, detail=f"Source '{source_id}' not found")
 
-    # Load manifest for base_url
+    # Load manifest for base_url and source type detection
     manifest_path = source_path / get_manifest_file()
     stored_base_url = ""
     source_type = "unknown"
+    is_zim_source = False
     if manifest_path.exists():
         try:
             with open(manifest_path, 'r', encoding='utf-8') as f:
                 manifest = json.load(f)
             stored_base_url = manifest.get("base_url", "")
             source_type = manifest.get("source_type", "unknown")
+            is_zim_source = manifest.get("created_from") == "zim_import"
         except Exception:
             pass
 
@@ -3021,23 +3072,41 @@ async def test_source_links(source_id: str, test_base_url: Optional[str] = None)
 
         # Construct the online URL using base_url + relative path
         # For HTML sources, stored_url is already a relative path like /Projects/Cooling/Page
-        # For ZIM sources, we may need to use article_name
+        # For ZIM sources, we need to preserve underscores in article names
+        # For WARC-style ZIMs (multi-domain web archives), stored_url is already a full URL
 
-        # Detect HTML source by local_url prefix (more reliable than source_type)
-        is_html_source = local_url.startswith("/backup/") or source_type == "html"
+        # Check if stored_url is already a full URL (WARC-style ZIMs like ready_gov)
+        if stored_url and (stored_url.startswith("http://") or stored_url.startswith("https://")):
+            # stored_url is already complete - use it directly
+            constructed_url = stored_url
+        elif base_url:
+            if is_zim_source:
+                # ZIM sources: extract filename from local_url and preserve underscores
+                # local_url is like /backup/source_id/Article_Name.html or /zim/source_id/Article_Name
+                filename = ""
+                if local_url:
+                    # Get the last path segment (the filename)
+                    filename = local_url.rstrip("/").split("/")[-1]
+                    # Remove .html extension for URL
+                    if filename.endswith(".html"):
+                        filename = filename[:-5]
+                    elif filename.endswith(".htm"):
+                        filename = filename[:-4]
 
-        if base_url:
-            # Use stored_url for HTML (already has correct path structure)
-            # Use article_name for ZIM (may need path extraction)
-            if is_html_source and stored_url:
-                # stored_url is like /Projects/Cooling/Page - combine with base_url
-                rel_path = stored_url.lstrip("/")
-                constructed_url = base_url.rstrip("/") + "/" + rel_path
-            elif article_name:
-                # ZIM-style: use just the article name
-                constructed_url = base_url.rstrip("/") + "/" + article_name
+                if filename:
+                    # Keep underscores - they're part of the Wikipedia article name
+                    constructed_url = base_url.rstrip("/") + "/" + filename
+                else:
+                    constructed_url = stored_url
             else:
-                constructed_url = stored_url
+                # HTML sources: stored_url already has correct path structure with slashes
+                if stored_url:
+                    rel_path = stored_url.lstrip("/")
+                    constructed_url = base_url.rstrip("/") + "/" + rel_path
+                elif article_name:
+                    constructed_url = base_url.rstrip("/") + "/" + article_name
+                else:
+                    constructed_url = stored_url
         else:
             constructed_url = stored_url
 

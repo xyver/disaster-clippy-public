@@ -91,22 +91,45 @@ def html_filename_to_url(filename: str, is_zim_source: bool = False) -> str:
         /Projects/Cooling/ACEvapCool.htm
         /Projects/Cooling/SolarAC
 
-    For ZIM sources, underscores are preserved as they are part of the article name:
+    For ZIM sources, there are two formats:
+
+    1. Wikipedia-style ZIMs: underscores are part of the article name
         Anatomical_terms_of_location.html -> Anatomical_terms_of_location
+
+    2. WARC-style ZIMs (web archives): filenames contain full domain
+        www.ready.gov_alerts.html -> https://www.ready.gov/alerts
+        www.fema.gov_locations.html -> https://www.fema.gov/locations
 
     Args:
         filename: The HTML filename (e.g., "Projects_Cooling_Page.htm.html")
-        is_zim_source: If True, preserve underscores (ZIM article names contain underscores)
+        is_zim_source: If True, check for WARC or Wikipedia-style ZIM format
 
     Returns:
-        URL path (e.g., "/Projects/Cooling/Page.htm" or "Anatomical_terms_of_location")
+        URL path or full URL for WARC-style sources
     """
     # Preserve .htm extension (scraper adds .html to all files including .htm)
     # Order matters: check .htm.html first, then .html
     url_path = filename.replace(".htm.html", ".htm").replace(".html", "")
 
     if is_zim_source:
-        # ZIM sources: underscores are part of the article name, don't convert to slashes
+        # Check for WARC-style ZIM (filename starts with domain like www.domain.com_)
+        # These have a dot before the first underscore (domain pattern)
+        first_underscore = url_path.find('_')
+        if first_underscore > 0:
+            prefix = url_path[:first_underscore]
+            # Check if prefix looks like a domain (contains at least one dot)
+            if '.' in prefix and not prefix.startswith('.'):
+                # WARC-style: extract domain and path
+                domain = prefix
+                path_part = url_path[first_underscore + 1:] if first_underscore < len(url_path) - 1 else ''
+                # Convert remaining underscores in path to slashes
+                path = path_part.replace('_', '/')
+                # Handle empty path (homepage)
+                if not path:
+                    return f"https://{domain}/"
+                return f"https://{domain}/{path}"
+
+        # Wikipedia-style ZIM: underscores are part of the article name
         return url_path
     else:
         # HTML scrapes: underscores represent path separators

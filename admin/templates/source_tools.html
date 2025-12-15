@@ -80,6 +80,26 @@
             font-size: 0.9rem;
         }
 
+        .wizard-step .step-status {
+            display: block;
+            font-size: 0.65rem;
+            margin-top: 0.35rem;
+            line-height: 1.3;
+            opacity: 0.85;
+        }
+
+        .wizard-step .step-status .status-ok {
+            color: #4ecca3;
+        }
+
+        .wizard-step .step-status .status-warn {
+            color: #f9a825;
+        }
+
+        .wizard-step .step-status .status-none {
+            color: #666;
+        }
+
         /* Step Content */
         .step-content {
             display: none;
@@ -555,23 +575,28 @@
         <div class="wizard-steps">
             <div class="wizard-step active" data-step="1" onclick="goToStep(1)">
                 <span class="step-number">Step 1</span>
-                <span class="step-title">Add Source</span>
+                <span class="step-title">Create Source</span>
+                <span class="step-status" id="stepStatus1"></span>
             </div>
             <div class="wizard-step" data-step="2" onclick="goToStep(2)">
                 <span class="step-number">Step 2</span>
-                <span class="step-title">Configure</span>
+                <span class="step-title">Metadata</span>
+                <span class="step-status" id="stepStatus2"></span>
             </div>
             <div class="wizard-step" data-step="3" onclick="goToStep(3)">
                 <span class="step-number">Step 3</span>
-                <span class="step-title">Index</span>
+                <span class="step-title">URL Check</span>
+                <span class="step-status" id="stepStatus3"></span>
             </div>
             <div class="wizard-step" data-step="4" onclick="goToStep(4)">
                 <span class="step-number">Step 4</span>
-                <span class="step-title">Review</span>
+                <span class="step-title">Index</span>
+                <span class="step-status" id="stepStatus4"></span>
             </div>
             <div class="wizard-step" data-step="5" onclick="goToStep(5)">
                 <span class="step-number">Step 5</span>
                 <span class="step-title">Validate</span>
+                <span class="step-status" id="stepStatus5"></span>
             </div>
         </div>
 
@@ -672,19 +697,95 @@
                         <button class="btn btn-secondary" onclick="cancelNewSource()">Cancel</button>
                     </div>
                 </div>
+
+                <!-- Scrape Website Section (for scrape source type) -->
+                <div class="tool-section" id="scrapeSection" style="margin-top: 1.5rem; padding-top: 1.5rem; border-top: 1px solid #0f3460; display: none;">
+                    <h3>Scrape Website</h3>
+                    <p>Download pages from the website to create an offline backup. Uses sitemap.xml to discover pages.</p>
+
+                    <!-- Check Sitemap -->
+                    <div style="margin-bottom: 1rem; padding: 1rem; background: #0f3460; border-radius: 6px;">
+                        <div style="display: flex; align-items: center; gap: 1rem; margin-bottom: 0.5rem;">
+                            <button class="btn btn-primary" id="btnCheckSitemap" onclick="checkSitemap()">Check Sitemap</button>
+                            <span id="sitemapStatus" style="color: #888;"></span>
+                        </div>
+                        <div id="sitemapInfo" style="display: none; margin-top: 1rem;">
+                            <div style="display: grid; grid-template-columns: auto 1fr; gap: 0.5rem 1rem; font-size: 0.9rem;">
+                                <span style="color: #888;">Pages found:</span>
+                                <span id="sitemapPageCount" style="color: #4ecca3; font-weight: 600;">-</span>
+                                <span style="color: #888;">Sitemap type:</span>
+                                <span id="sitemapType" style="color: #fff;">-</span>
+                            </div>
+                            <div id="sitemapSamples" style="margin-top: 0.75rem; font-size: 0.85rem; color: #888;">
+                                <div style="margin-bottom: 0.25rem;">Sample URLs:</div>
+                                <div id="sitemapSampleList" style="max-height: 100px; overflow-y: auto; padding-left: 1rem;"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="form-row" style="margin-bottom: 1rem;">
+                        <div class="form-group">
+                            <label>Page Limit</label>
+                            <input type="number" id="scrapePageLimit" value="100" min="1" max="5000" style="width: 100px;">
+                            <span id="pageLimitHint" style="color: #888; font-size: 0.8rem; margin-left: 0.5rem;"></span>
+                        </div>
+                        <div class="form-group">
+                            <label>Max Depth</label>
+                            <input type="number" id="scrapeMaxDepth" value="3" min="0" max="10" style="width: 80px;">
+                            <span style="color: #888; font-size: 0.8rem; margin-left: 0.5rem;">0 = initial pages only</span>
+                        </div>
+                        <div class="form-group">
+                            <label>Delay (sec)</label>
+                            <input type="number" id="scrapeRequestDelay" value="0.5" min="0" max="10" step="0.1" style="width: 80px;">
+                            <span style="color: #888; font-size: 0.8rem; margin-left: 0.5rem;">between requests</span>
+                        </div>
+                    </div>
+                    <div class="form-row" style="margin-bottom: 1rem;">
+                        <div class="form-group">
+                            <label style="display: flex; align-items: center; gap: 0.5rem;">
+                                <input type="checkbox" id="scrapeFollowLinks" checked>
+                                Follow links (discover more pages)
+                            </label>
+                        </div>
+                        <div class="form-group">
+                            <label style="display: flex; align-items: center; gap: 0.5rem;">
+                                <input type="checkbox" id="scrapeIncludeAssets">
+                                Include images/CSS (slower)
+                            </label>
+                        </div>
+                    </div>
+                    <div class="tool-actions">
+                        <button class="btn btn-primary" id="btnStartScrape" onclick="startScrape()">Start Scrape</button>
+                    </div>
+                    <div id="scrapeProgress" style="display: none; margin-top: 1rem;">
+                        <div style="background: #0f3460; border-radius: 4px; overflow: hidden; height: 20px;">
+                            <div id="scrapeProgressBar" style="background: #4ecca3; height: 100%; width: 0%; transition: width 0.3s;"></div>
+                        </div>
+                        <div id="scrapeProgressText" style="margin-top: 0.5rem; color: #888; font-size: 0.9rem;"></div>
+                    </div>
+                </div>
+
+                <!-- Scan Backup Section (for HTML sources) -->
+                <div class="tool-section" id="scanBackupSection" style="margin-top: 1.5rem; padding-top: 1.5rem; border-top: 1px solid #0f3460; display: none;">
+                    <h3>Scan Backup (HTML sources)</h3>
+                    <p>Scan the backup folder and create a manifest of all files. Required for HTML sources before generating metadata.</p>
+                    <div class="tool-actions">
+                        <button class="btn btn-secondary" id="btnScanBackup" onclick="scanBackup()">Scan Backup</button>
+                    </div>
+                </div>
             </div>
 
             <div class="step-navigation">
                 <div></div>
-                <button class="btn btn-primary" onclick="nextStep()" id="step1Next" disabled>Next: Configure</button>
+                <button class="btn btn-primary" onclick="nextStep()" id="step1Next" disabled>Next: Metadata</button>
             </div>
         </div>
 
-        <!-- Step 2: Configure -->
+        <!-- Step 2: Metadata -->
         <div class="step-content" data-step="2">
             <div class="section">
-                <h2>Source Configuration</h2>
-                <p class="description">Set the display name, license, and description for your source</p>
+                <h2>Source Metadata</h2>
+                <p class="description">Set the display name, license, description, and generate document metadata</p>
 
                 <div id="noSourceSelected2" class="empty-state">
                     Please select or create a source in Step 1 first.
@@ -733,29 +834,9 @@
                         <textarea id="editLicenseNotes" rows="2" placeholder="Describe the custom license terms (min 20 characters)"></textarea>
                     </div>
 
-                    <!-- Human Verification Section -->
+                    <!-- Language Section -->
                     <div style="margin-top: 1.5rem; padding-top: 1rem; border-top: 1px solid #0f3460;">
-                        <h4 style="color: #4ecca3; margin-bottom: 0.75rem;">Human Verification</h4>
-                        <p style="font-size: 0.85rem; color: #888; margin-bottom: 1rem;">
-                            These checks require manual verification before submitting to the global repository.
-                        </p>
-
-                        <div class="form-group">
-                            <label>
-                                <input type="checkbox" id="editLinksOffline"> Offline Links Verified
-                            </label>
-                            <p style="font-size: 0.8rem; color: #888; margin-top: 0.25rem;">
-                                I have tested that internal links in the backup work correctly
-                            </p>
-                        </div>
-                        <div class="form-group">
-                            <label>
-                                <input type="checkbox" id="editLinksOnline"> Online Links Verified
-                            </label>
-                            <p style="font-size: 0.8rem; color: #888; margin-top: 0.25rem;">
-                                I have verified that external URLs are valid and accessible
-                            </p>
-                        </div>
+                        <h4 style="color: #4ecca3; margin-bottom: 0.75rem;">Source Language</h4>
                         <div class="form-group">
                             <label>Language</label>
                             <select id="editLanguage">
@@ -812,119 +893,9 @@
                         </div>
                     </div>
 
-                    <!-- Scrape Website Section (HTML sources with URL) -->
-                    <div class="tool-section" id="scrapeSection" style="margin-top: 1.5rem; padding-top: 1.5rem; border-top: 1px solid #0f3460; display: none;">
-                        <h3>Scrape Website</h3>
-                        <p>Download pages from the website to create an offline backup. Uses sitemap.xml to discover pages.</p>
-
-                        <!-- Check Sitemap -->
-                        <div style="margin-bottom: 1rem; padding: 1rem; background: #0f3460; border-radius: 6px;">
-                            <div style="display: flex; align-items: center; gap: 1rem; margin-bottom: 0.5rem;">
-                                <button class="btn btn-primary" id="btnCheckSitemap" onclick="checkSitemap()">Check Sitemap</button>
-                                <span id="sitemapStatus" style="color: #888;"></span>
-                            </div>
-                            <div id="sitemapInfo" style="display: none; margin-top: 1rem;">
-                                <div style="display: grid; grid-template-columns: auto 1fr; gap: 0.5rem 1rem; font-size: 0.9rem;">
-                                    <span style="color: #888;">Pages found:</span>
-                                    <span id="sitemapPageCount" style="color: #4ecca3; font-weight: 600;">-</span>
-                                    <span style="color: #888;">Sitemap type:</span>
-                                    <span id="sitemapType" style="color: #fff;">-</span>
-                                </div>
-                                <div id="sitemapSamples" style="margin-top: 0.75rem; font-size: 0.85rem; color: #888;">
-                                    <div style="margin-bottom: 0.25rem;">Sample URLs:</div>
-                                    <div id="sitemapSampleList" style="max-height: 100px; overflow-y: auto; padding-left: 1rem;"></div>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div class="form-row" style="margin-bottom: 1rem;">
-                            <div class="form-group">
-                                <label>Page Limit</label>
-                                <input type="number" id="scrapePageLimit" value="100" min="1" max="5000" style="width: 100px;">
-                                <span id="pageLimitHint" style="color: #888; font-size: 0.8rem; margin-left: 0.5rem;"></span>
-                            </div>
-                            <div class="form-group">
-                                <label>Max Depth</label>
-                                <input type="number" id="scrapeMaxDepth" value="3" min="0" max="10" style="width: 80px;">
-                                <span style="color: #888; font-size: 0.8rem; margin-left: 0.5rem;">0 = initial pages only</span>
-                            </div>
-                            <div class="form-group">
-                                <label>Delay (sec)</label>
-                                <input type="number" id="scrapeRequestDelay" value="0.5" min="0" max="10" step="0.1" style="width: 80px;">
-                                <span style="color: #888; font-size: 0.8rem; margin-left: 0.5rem;">between requests</span>
-                            </div>
-                        </div>
-                        <div class="form-row" style="margin-bottom: 1rem;">
-                            <div class="form-group">
-                                <label style="display: flex; align-items: center; gap: 0.5rem;">
-                                    <input type="checkbox" id="scrapeFollowLinks" checked>
-                                    Follow links (discover more pages)
-                                </label>
-                            </div>
-                            <div class="form-group">
-                                <label style="display: flex; align-items: center; gap: 0.5rem;">
-                                    <input type="checkbox" id="scrapeIncludeAssets">
-                                    Include images/CSS (slower)
-                                </label>
-                            </div>
-                        </div>
-                        <div class="tool-actions">
-                            <button class="btn btn-primary" id="btnStartScrape" onclick="startScrape()">Start Scrape</button>
-                        </div>
-                        <div id="scrapeProgress" style="display: none; margin-top: 1rem;">
-                            <div style="background: #0f3460; border-radius: 4px; overflow: hidden; height: 20px;">
-                                <div id="scrapeProgressBar" style="background: #4ecca3; height: 100%; width: 0%; transition: width 0.3s;"></div>
-                            </div>
-                            <div id="scrapeProgressText" style="margin-top: 0.5rem; color: #888; font-size: 0.9rem;"></div>
-                        </div>
-                    </div>
-
-                    <!-- Scan Backup Section (HTML sources) -->
-                    <div class="tool-section" id="scanBackupSection" style="margin-top: 1.5rem; padding-top: 1.5rem; border-top: 1px solid #0f3460;">
-                        <h3>Scan Backup (HTML sources)</h3>
-                        <p>Scan the backup folder and create a manifest of all files. Required for HTML sources before generating metadata.</p>
-                        <div class="tool-actions">
-                            <button class="btn btn-secondary" id="btnScanBackup" onclick="scanBackup()">Scan Backup</button>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <div class="step-navigation">
-                <button class="btn btn-secondary" onclick="prevStep()">Back</button>
-                <button class="btn btn-primary" onclick="nextStep()">Next: Index</button>
-            </div>
-        </div>
-
-        <!-- Step 3: Index -->
-        <div class="step-content" data-step="3">
-            <div class="section">
-                <h2>Indexing Tools</h2>
-                <p class="description">Generate metadata and index for offline search</p>
-
-                <div id="noSourceSelected3" class="empty-state">
-                    Please select or create a source in Step 1 first.
-                </div>
-
-                <div id="indexTools" style="display: none;">
-                    <!-- Source Indicator Banner -->
-                    <div id="indexSourceBanner" class="source-banner" style="background: #0f3460; border: 1px solid #4ecca3; border-radius: 6px; padding: 1rem; margin-bottom: 1.5rem; display: flex; align-items: center; gap: 1rem;">
-                        <div style="flex: 1;">
-                            <div style="color: #888; font-size: 0.75rem; text-transform: uppercase; margin-bottom: 0.25rem;">Working on source:</div>
-                            <div style="color: #4ecca3; font-size: 1.1rem; font-weight: 600;" id="indexSourceName">-</div>
-                        </div>
-                        <div style="text-align: right;">
-                            <div style="color: #888; font-size: 0.75rem;">Type</div>
-                            <div style="color: #e94560; font-weight: 500;" id="indexSourceType">-</div>
-                        </div>
-                        <div style="text-align: right;">
-                            <div style="color: #888; font-size: 0.75rem;">Documents</div>
-                            <div style="color: #fff; font-weight: 500;" id="indexSourceDocs">-</div>
-                        </div>
-                    </div>
-
+                    <!-- Generate Metadata Section -->
                     <div class="tool-section" id="sectionGenerateMetadata">
-                        <h3>1. Generate Metadata</h3>
+                        <h3>Generate Metadata</h3>
                         <p>Extract document titles, content, and create the metadata file. For ZIM files, you can filter by language.</p>
 
                         <div style="display: flex; gap: 1rem; align-items: flex-end; margin-bottom: 1rem; flex-wrap: wrap;">
@@ -984,7 +955,7 @@
                                 </select>
                             </div>
                             <p style="font-size: 0.8rem; color: #888; margin: 0; flex: 1 1 200px;">
-                                Filter multi-language ZIM files to English-only (or other language). Applies to both metadata and index creation below.
+                                Filter multi-language ZIM files to English-only (or other language). Applies to both metadata and index creation.
                             </p>
                         </div>
 
@@ -992,9 +963,44 @@
                             <button class="btn btn-primary" id="btnGenerateMetadata" onclick="generateMetadata()">Generate Metadata</button>
                         </div>
                     </div>
+                </div>
+            </div>
+
+            <div class="step-navigation">
+                <button class="btn btn-secondary" onclick="prevStep()">Back</button>
+                <button class="btn btn-primary" onclick="nextStep()">Next: URL Check</button>
+            </div>
+        </div>
+
+        <!-- Step 3: URL Check -->
+        <div class="step-content" data-step="3">
+            <div class="section">
+                <h2>URL Check</h2>
+                <p class="description">Configure base URL and verify links work correctly online and offline</p>
+
+                <div id="noSourceSelected3" class="empty-state">
+                    Please select or create a source in Step 1 first.
+                </div>
+
+                <div id="indexTools" style="display: none;">
+                    <!-- Source Indicator Banner -->
+                    <div id="indexSourceBanner" class="source-banner" style="background: #0f3460; border: 1px solid #4ecca3; border-radius: 6px; padding: 1rem; margin-bottom: 1.5rem; display: flex; align-items: center; gap: 1rem;">
+                        <div style="flex: 1;">
+                            <div style="color: #888; font-size: 0.75rem; text-transform: uppercase; margin-bottom: 0.25rem;">Working on source:</div>
+                            <div style="color: #4ecca3; font-size: 1.1rem; font-weight: 600;" id="indexSourceName">-</div>
+                        </div>
+                        <div style="text-align: right;">
+                            <div style="color: #888; font-size: 0.75rem;">Type</div>
+                            <div style="color: #e94560; font-weight: 500;" id="indexSourceType">-</div>
+                        </div>
+                        <div style="text-align: right;">
+                            <div style="color: #888; font-size: 0.75rem;">Documents</div>
+                            <div style="color: #fff; font-weight: 500;" id="indexSourceDocs">-</div>
+                        </div>
+                    </div>
 
                     <div class="tool-section" id="sectionBaseUrl">
-                        <h3>2. Configure Base URL (Optional)</h3>
+                        <h3>1. Configure Base URL</h3>
                         <p>For ZIM sources, detect the correct base URL by comparing sample articles with their actual online URLs.</p>
 
                         <div class="tool-actions" style="margin-bottom: 1rem;">
@@ -1055,8 +1061,100 @@
                         </div>
                     </div>
 
+                    <!-- Link Verification Section -->
+                    <div class="tool-section" id="sectionLinkVerification">
+                        <h3>2. Link Verification</h3>
+                        <p style="font-size: 0.85rem; color: #888; margin-bottom: 1rem;">
+                            These checks require manual verification before submitting to the global repository.
+                        </p>
+
+                        <div class="form-group">
+                            <label>
+                                <input type="checkbox" id="editLinksOffline"> Offline Links Verified
+                            </label>
+                            <p style="font-size: 0.8rem; color: #888; margin-top: 0.25rem;">
+                                I have tested that internal links in the backup work correctly
+                            </p>
+                        </div>
+                        <div class="form-group">
+                            <label>
+                                <input type="checkbox" id="editLinksOnline"> Online Links Verified
+                            </label>
+                            <p style="font-size: 0.8rem; color: #888; margin-top: 0.25rem;">
+                                I have verified that external URLs are valid and accessible
+                            </p>
+                        </div>
+                        <div class="tool-actions">
+                            <button class="btn btn-primary" onclick="saveLinkVerification()">Save Verification Status</button>
+                        </div>
+                    </div>
+
+                    <!-- Test Links Section -->
+                    <div class="tool-section" id="sectionTestLinks">
+                        <h3>3. Test Links</h3>
+                        <p>Test offline backup links and online URLs. Click Offline to preview content below.</p>
+                        <div class="tool-actions">
+                            <button class="btn btn-secondary" id="btnTestLinks" onclick="testLinks()">Load Sample Links</button>
+                            <button class="btn btn-secondary" id="btnTestMore" onclick="showMoreSampleLinks()" style="display: none;">Show More (5)</button>
+                        </div>
+                        <div id="testLinksResults" style="display: none; margin-top: 1rem; font-size: 0.85rem;">
+                            <!-- Results table will be shown here -->
+                        </div>
+                        <div id="testLinksCounter" style="display: none; margin-top: 0.5rem; font-size: 0.8rem; color: #888;">
+                            <!-- Showing X of Y samples -->
+                        </div>
+
+                        <!-- Offline Content Preview -->
+                        <div id="offlinePreviewSection" style="display: none; margin-top: 1rem; border-top: 1px solid #0f3460; padding-top: 1rem;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+                                <strong style="color: #4ecca3;">Offline Preview</strong>
+                                <span id="previewFilename" style="font-size: 0.75rem; color: #888; font-family: monospace;"></span>
+                            </div>
+                            <div id="previewLoading" style="display: none; padding: 2rem; text-align: center; background: #1a1a2e; border: 1px solid #0f3460; border-radius: 4px;">
+                                <div style="color: #4fc3f7;">Loading content...</div>
+                                <div style="color: #888; font-size: 0.8rem; margin-top: 0.5rem;">(Building ZIM index cache on first load - this may take 5-10 min+)</div>
+                            </div>
+                            <iframe id="offlineContentFrame" style="width: 100%; height: 400px; border: 1px solid #0f3460; border-radius: 4px; background: #fff;" onload="hidePreviewLoading()"></iframe>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="step-navigation">
+                <button class="btn btn-secondary" onclick="prevStep()">Back</button>
+                <button class="btn btn-primary" onclick="nextStep()">Next: Index</button>
+            </div>
+        </div>
+
+        <!-- Step 4: Index -->
+        <div class="step-content" data-step="4">
+            <div class="section">
+                <h2>Create Index</h2>
+                <p class="description">Generate vector embeddings for semantic search</p>
+
+                <div id="noSourceSelected4" class="empty-state">
+                    Please select or create a source in Step 1 first.
+                </div>
+
+                <div id="indexContent" style="display: none;">
+                    <!-- Source Indicator Banner -->
+                    <div id="indexSourceBanner2" class="source-banner" style="background: #0f3460; border: 1px solid #4ecca3; border-radius: 6px; padding: 1rem; margin-bottom: 1.5rem; display: flex; align-items: center; gap: 1rem;">
+                        <div style="flex: 1;">
+                            <div style="color: #888; font-size: 0.75rem; text-transform: uppercase; margin-bottom: 0.25rem;">Working on source:</div>
+                            <div style="color: #4ecca3; font-size: 1.1rem; font-weight: 600;" id="indexSourceName2">-</div>
+                        </div>
+                        <div style="text-align: right;">
+                            <div style="color: #888; font-size: 0.75rem;">Type</div>
+                            <div style="color: #e94560; font-weight: 500;" id="indexSourceType2">-</div>
+                        </div>
+                        <div style="text-align: right;">
+                            <div style="color: #888; font-size: 0.75rem;">Documents</div>
+                            <div style="color: #fff; font-weight: 500;" id="indexSourceDocs2">-</div>
+                        </div>
+                    </div>
+
                     <div class="tool-section" id="sectionCreateIndex">
-                        <h3>3. Create Embeddings</h3>
+                        <h3>Create Embeddings</h3>
                         <p>Generate vector embeddings for semantic search. Uses the filtered document list from metadata.</p>
 
                         <!-- Document count display (shown after metadata generation) -->
@@ -1129,27 +1227,44 @@
 
             <div class="step-navigation">
                 <button class="btn btn-secondary" onclick="prevStep()">Back</button>
-                <button class="btn btn-primary" onclick="nextStep()">Next: Review</button>
+                <button class="btn btn-primary" onclick="nextStep()">Next: Validate</button>
             </div>
         </div>
 
-        <!-- Step 4: Review -->
-        <div class="step-content" data-step="4">
+        <!-- Step 5: Validate -->
+        <div class="step-content" data-step="5">
             <div class="section">
-                <h2>Review Source</h2>
-                <p class="description">Check source completeness and adjust tags based on indexed content</p>
+                <h2>Validate & Review</h2>
+                <p class="description">Manage tags, review source info, run validation checks</p>
 
-                <div id="noSourceSelected4" class="empty-state">
+                <div id="noSourceSelected5" class="empty-state">
                     Please select or create a source in Step 1 first.
                 </div>
 
-                <div id="reviewContent" style="display: none;">
-                    <div id="sourceInfo" class="source-info">
+                <div id="validateTools" style="display: none;">
+                    <!-- Source Indicator Banner -->
+                    <div id="validateSourceBanner" class="source-banner" style="background: #0f3460; border: 1px solid #4ecca3; border-radius: 6px; padding: 1rem; margin-bottom: 1.5rem; display: flex; align-items: center; gap: 1rem;">
+                        <div style="flex: 1;">
+                            <div style="color: #888; font-size: 0.75rem; text-transform: uppercase; margin-bottom: 0.25rem;">Validating source:</div>
+                            <div style="color: #4ecca3; font-size: 1.1rem; font-weight: 600;" id="validateSourceName">-</div>
+                        </div>
+                        <div style="text-align: right;">
+                            <div style="color: #888; font-size: 0.75rem;">Type</div>
+                            <div style="color: #e94560; font-weight: 500;" id="validateSourceType">-</div>
+                        </div>
+                        <div style="text-align: right;">
+                            <div style="color: #888; font-size: 0.75rem;">Status</div>
+                            <div id="validateSourceStatus">-</div>
+                        </div>
+                    </div>
+
+                    <!-- Source Info Display -->
+                    <div id="sourceInfo" class="source-info" style="margin-bottom: 1.5rem;">
                         <div class="loading">Loading...</div>
                     </div>
 
                     <!-- Tags Section -->
-                    <div class="tool-section" id="sectionTags" style="margin-top: 1.5rem;">
+                    <div class="tool-section" id="sectionTags" style="margin-bottom: 1.5rem;">
                         <h3>Source Tags</h3>
                         <p>Click tags to move between sections. Suggestions include content analysis and novel terms from titles.</p>
 
@@ -1189,41 +1304,6 @@
                             <button class="btn btn-secondary" id="btnGetSuggestions" onclick="getSuggestedTags()">Get Suggestions</button>
                         </div>
                     </div>
-                </div>
-            </div>
-
-            <div class="step-navigation">
-                <button class="btn btn-secondary" onclick="prevStep()">Back</button>
-                <button class="btn btn-primary" onclick="nextStep()">Next: Validate</button>
-            </div>
-        </div>
-
-        <!-- Step 5: Validate & Share -->
-        <div class="step-content" data-step="5">
-            <div class="section">
-                <h2>Validate & Share</h2>
-                <p class="description">Run validation and optionally upload to the cloud</p>
-
-                <div id="noSourceSelected5" class="empty-state">
-                    Please select or create a source in Step 1 first.
-                </div>
-
-                <div id="validateTools" style="display: none;">
-                    <!-- Source Indicator Banner -->
-                    <div id="validateSourceBanner" class="source-banner" style="background: #0f3460; border: 1px solid #4ecca3; border-radius: 6px; padding: 1rem; margin-bottom: 1.5rem; display: flex; align-items: center; gap: 1rem;">
-                        <div style="flex: 1;">
-                            <div style="color: #888; font-size: 0.75rem; text-transform: uppercase; margin-bottom: 0.25rem;">Validating source:</div>
-                            <div style="color: #4ecca3; font-size: 1.1rem; font-weight: 600;" id="validateSourceName">-</div>
-                        </div>
-                        <div style="text-align: right;">
-                            <div style="color: #888; font-size: 0.75rem;">Type</div>
-                            <div style="color: #e94560; font-weight: 500;" id="validateSourceType">-</div>
-                        </div>
-                        <div style="text-align: right;">
-                            <div style="color: #888; font-size: 0.75rem;">Status</div>
-                            <div id="validateSourceStatus">-</div>
-                        </div>
-                    </div>
 
                     <div class="tool-section" id="sectionValidate">
                         <h3>Validate Source</h3>
@@ -1238,21 +1318,6 @@
                             <div id="validationIssuesList">
                                 <!-- Issues will be rendered here by showActionableIssues() -->
                             </div>
-                        </div>
-                    </div>
-
-                    <div class="tool-section" id="sectionTestLinks">
-                        <h3>Test Links</h3>
-                        <p>Verify that article URLs are correct for online access. Important before publishing to Pinecone.</p>
-                        <div class="tool-actions">
-                            <button class="btn btn-secondary" id="btnTestLinks" onclick="testLinks()">Test Sample Links</button>
-                            <button class="btn btn-secondary" id="btnTestMore" onclick="showMoreSampleLinks()" style="display: none;">Show More (5 more)</button>
-                        </div>
-                        <div id="testLinksResults" style="display: none; margin-top: 1rem; font-size: 0.85rem;">
-                            <!-- Results will be shown here -->
-                        </div>
-                        <div id="testLinksCounter" style="display: none; margin-top: 0.5rem; font-size: 0.8rem; color: #888;">
-                            <!-- Showing X of Y samples -->
                         </div>
                     </div>
 
@@ -1310,26 +1375,30 @@
         // Section completion state tracking
         // Maps section IDs to their completion status
         let sectionState = {
-            // Step 2: Configure
-            'sectionConfig': 'pending',      // License configured
-            'scanBackupSection': 'pending',  // Backup scanned
-            // Step 3: Index
-            'sectionGenerateMetadata': 'pending',
-            'sectionBaseUrl': 'pending',
-            'sectionCreateIndex': 'pending',
-            // Step 4: Review
-            'sectionTags': 'pending',
+            // Step 1: Create Source
+            'scrapeSection': 'pending',      // Website scraped (for scrape sources)
+            'scanBackupSection': 'pending',  // Backup scanned (for HTML sources)
+            // Step 2: Metadata
+            'sectionConfig': 'pending',      // License and description configured
+            'sectionGenerateMetadata': 'pending',  // Metadata generated
+            // Step 3: URL Check
+            'sectionBaseUrl': 'pending',     // Base URL configured
+            'sectionLinkVerification': 'pending',  // Links verified (manual)
+            'sectionTestLinks': 'pending',   // Links tested
+            // Step 4: Index
+            'sectionCreateIndex': 'pending', // Embeddings created
             // Step 5: Validate
-            'sectionValidate': 'pending',
-            'sectionTestLinks': 'pending'
+            'sectionTags': 'pending',        // Tags configured
+            'sectionValidate': 'pending'     // Validation passed
         };
 
         // Map steps to their required sections
         const stepSections = {
-            2: ['sectionConfig', 'scanBackupSection'],  // Need both license AND backup
-            3: ['sectionGenerateMetadata', 'sectionCreateIndex'], // sectionBaseUrl is optional
-            4: ['sectionTags'],
-            5: ['sectionValidate']  // sectionTestLinks is optional
+            1: ['scanBackupSection'],  // scrapeSection is type-specific
+            2: ['sectionConfig', 'sectionGenerateMetadata'],
+            3: ['sectionBaseUrl'],  // sectionLinkVerification and sectionTestLinks are optional
+            4: ['sectionCreateIndex'],
+            5: ['sectionTags', 'sectionValidate']
         };
 
         // Mark a section as completed
@@ -1382,6 +1451,8 @@
             document.querySelectorAll('.wizard-step').forEach(el => {
                 el.classList.remove('completed', 'pending');
             });
+            // Clear step status markers
+            updateStepStatusMarkers(null);
         }
 
         // Check if a step has all required sections completed
@@ -1480,6 +1551,115 @@
                 // Has some vectors but missing one dimension
                 markSectionWarning('sectionValidate');
             }
+
+            // Update step status markers after initializing section states
+            updateStepStatusMarkers(source);
+        }
+
+        // Update step status markers to show what's done/needed per step
+        function updateStepStatusMarkers(source) {
+            // Clear all status markers if no source
+            if (!source) {
+                for (let i = 1; i <= 5; i++) {
+                    const el = document.getElementById('stepStatus' + i);
+                    if (el) el.innerHTML = '';
+                }
+                return;
+            }
+
+            // Helper to format status item
+            const ok = (text) => `<span class="status-ok">[OK] ${text}</span>`;
+            const warn = (text) => `<span class="status-warn">[!] ${text}</span>`;
+            const none = (text) => `<span class="status-none">[-] ${text}</span>`;
+
+            // Step 1: Backup
+            const step1Status = document.getElementById('stepStatus1');
+            if (step1Status) {
+                const items = [];
+                if (source.has_backup) {
+                    items.push(ok('Backup'));
+                } else {
+                    items.push(warn('Backup'));
+                }
+                step1Status.innerHTML = items.join(' ');
+            }
+
+            // Step 2: Config, Metadata, License
+            const step2Status = document.getElementById('stepStatus2');
+            if (step2Status) {
+                const items = [];
+                const hasLicense = source.license && source.license.toLowerCase() !== 'unknown' && source.license !== '';
+                if (source.has_manifest) {
+                    items.push(ok('Config'));
+                } else {
+                    items.push(warn('Config'));
+                }
+                if (source.has_metadata) {
+                    items.push(ok('Metadata'));
+                } else {
+                    items.push(warn('Metadata'));
+                }
+                if (hasLicense && source.license_verified) {
+                    items.push(ok('License'));
+                } else if (hasLicense) {
+                    items.push(warn('License'));
+                } else {
+                    items.push(warn('License'));
+                }
+                step2Status.innerHTML = items.join(' ');
+            }
+
+            // Step 3: Base URL, Verified links
+            const step3Status = document.getElementById('stepStatus3');
+            if (step3Status) {
+                const items = [];
+                if (source.base_url) {
+                    items.push(ok('URL'));
+                } else {
+                    items.push(none('URL'));
+                }
+                if (source.links_verified_offline && source.links_verified_online) {
+                    items.push(ok('Verified'));
+                } else if (source.links_verified_offline || source.links_verified_online) {
+                    items.push(warn('Verified'));
+                } else {
+                    items.push(none('Verified'));
+                }
+                step3Status.innerHTML = items.join(' ');
+            }
+
+            // Step 4: 1536-dim (online), 768-dim (offline)
+            const step4Status = document.getElementById('stepStatus4');
+            if (step4Status) {
+                const items = [];
+                if (source.has_vectors_1536) {
+                    items.push(ok('1536-dim'));
+                } else {
+                    items.push(warn('1536-dim'));
+                }
+                if (source.has_vectors_768) {
+                    items.push(ok('768-dim'));
+                } else {
+                    items.push(warn('768-dim'));
+                }
+                step4Status.innerHTML = items.join(' ');
+            }
+
+            // Step 5: Overall validation status
+            const step5Status = document.getElementById('stepStatus5');
+            if (step5Status) {
+                const items = [];
+                const isComplete = source.has_manifest && source.has_backup && source.has_metadata &&
+                                   source.has_vectors_1536 && source.has_vectors_768 && source.license_verified;
+                if (isComplete) {
+                    items.push(ok('Ready'));
+                } else if (source.can_submit) {
+                    items.push(warn('Partial'));
+                } else {
+                    items.push(warn('Incomplete'));
+                }
+                step5Status.innerHTML = items.join(' ');
+            }
         }
 
         // Wizard Navigation
@@ -1539,7 +1719,7 @@
             document.getElementById('noSourceSelected3').style.display = hasSource ? 'none' : 'block';
             document.getElementById('indexTools').style.display = hasSource ? 'block' : 'none';
             document.getElementById('noSourceSelected4').style.display = hasSource ? 'none' : 'block';
-            document.getElementById('reviewContent').style.display = hasSource ? 'block' : 'none';
+            document.getElementById('indexContent').style.display = hasSource ? 'block' : 'none';
             document.getElementById('noSourceSelected5').style.display = hasSource ? 'none' : 'block';
             document.getElementById('validateTools').style.display = hasSource ? 'block' : 'none';
             document.getElementById('dangerZoneSection').style.display = hasSource ? 'block' : 'none';
@@ -1548,7 +1728,7 @@
             document.getElementById('step1Next').disabled = !hasSource;
 
             // Populate step-specific forms when entering that step
-            if (hasSource && currentStep === 4) {
+            if (hasSource && currentStep === 5) {
                 populateTagsForm();
             }
         }
@@ -1966,12 +2146,17 @@
             const sourceType = (s.backup_type || 'Unknown').toUpperCase();
             const docCount = (s.document_count || 0).toLocaleString();
 
-            // Index step banner
+            // Step 3 (URL Check) banner
             document.getElementById('indexSourceName').textContent = displayName;
             document.getElementById('indexSourceType').textContent = sourceType;
             document.getElementById('indexSourceDocs').textContent = docCount;
 
-            // Validate step banner
+            // Step 4 (Index) banner
+            document.getElementById('indexSourceName2').textContent = displayName;
+            document.getElementById('indexSourceType2').textContent = sourceType;
+            document.getElementById('indexSourceDocs2').textContent = docCount;
+
+            // Step 5 (Validate) banner
             document.getElementById('validateSourceName').textContent = displayName;
             document.getElementById('validateSourceType').textContent = sourceType;
 
@@ -2218,6 +2403,45 @@
                     }
                     await refreshSources();
                     await loadSourceDetails();
+                } else {
+                    logOutput(`Error: ${data.detail || 'Save failed'}`, 'error');
+                    showToast(data.detail || 'Save failed', true);
+                }
+            } catch (e) {
+                logOutput(`Error: ${e.message}`, 'error');
+                showToast('Error: ' + e.message, true);
+            }
+        }
+
+        // Save link verification status (Step 3)
+        async function saveLinkVerification() {
+            if (!currentSource) return;
+
+            const config = {
+                source_id: currentSource.source_id,
+                links_verified_offline: document.getElementById('editLinksOffline').checked,
+                links_verified_online: document.getElementById('editLinksOnline').checked
+            };
+
+            logOutput(`Saving link verification status for ${currentSource.source_id}...`);
+
+            try {
+                const response = await fetch('/useradmin/api/update-source-config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(config)
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    logOutput('Link verification status saved', 'success');
+                    showToast('Verification status saved');
+                    // Mark link verification section complete if both are verified
+                    if (config.links_verified_offline && config.links_verified_online) {
+                        markSectionComplete('sectionLinkVerification');
+                    }
+                    await refreshSources();
                 } else {
                     logOutput(`Error: ${data.detail || 'Save failed'}`, 'error');
                     showToast(data.detail || 'Save failed', true);
@@ -4155,23 +4379,38 @@
             const batch = allSampleLinks.slice(sampleLinksOffset, sampleLinksOffset + 5);
 
             let html = `<div style="margin-bottom: 0.5rem;">
-                <strong>Base URL:</strong> ${sampleLinksBaseUrl || '(not set)'}
+                <strong>Base URL:</strong> ${sampleLinksBaseUrl || '(not set - online links will not work)'}
             </div>`;
 
             html += '<table style="width: 100%; border-collapse: collapse; margin-top: 0.5rem;">';
-            html += '<tr style="border-bottom: 1px solid #333;"><th style="text-align: left; padding: 0.25rem;">Title</th><th style="text-align: left; padding: 0.25rem;">URL Type</th><th style="text-align: left; padding: 0.25rem;">Test</th></tr>';
+            html += '<tr style="border-bottom: 1px solid #333;"><th style="text-align: left; padding: 0.25rem;">Title</th><th style="text-align: center; padding: 0.25rem;">Offline</th><th style="text-align: center; padding: 0.25rem;">Online</th></tr>';
 
-            batch.forEach(link => {
-                const typeColor = link.is_online_url ? '#4ecca3' : '#e94560';
-                const typeLabel = link.is_online_url ? 'Online' : (link.is_local_url ? 'Local' : 'Unknown');
-                const displayUrl = link.constructed_url || link.stored_url;
-                const testUrl = link.is_online_url ? displayUrl : null;
+            batch.forEach((link, idx) => {
+                const onlineUrl = link.is_online_url ? (link.constructed_url || link.stored_url) : null;
+
+                // Construct offline filename from local_url (authoritative source for actual filename)
+                // local_url format: /backup/source_id/filename.html
+                let offlineFilename = '';
+                if (link.local_url) {
+                    // Extract filename from local_url path - this is always the actual file on disk
+                    offlineFilename = link.local_url.split('/').pop();
+                } else if (link.article_name) {
+                    // Fallback to article_name for legacy support
+                    offlineFilename = link.article_name.endsWith('.html') ? link.article_name : link.article_name + '.html';
+                } else {
+                    // Last resort - try to get filename from stored_url
+                    offlineFilename = link.stored_url.split('/').pop();
+                }
+
+                const offlineUrl = `/useradmin/search-test/content/${currentSource.source_id}/${encodeURIComponent(offlineFilename)}`;
 
                 html += `<tr style="border-bottom: 1px solid #222;">
-                    <td style="padding: 0.25rem; max-width: 200px; overflow: hidden; text-overflow: ellipsis;" title="${link.title}">${link.title}</td>
-                    <td style="padding: 0.25rem; color: ${typeColor};">${typeLabel}</td>
-                    <td style="padding: 0.25rem;">
-                        ${testUrl ? `<a href="${testUrl}" target="_blank" style="color: #4ecca3;">Open</a>` : '<span style="color: #666;">N/A</span>'}
+                    <td style="padding: 0.25rem; max-width: 250px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${link.title}">${link.title}</td>
+                    <td style="padding: 0.25rem; text-align: center;">
+                        <a href="#" onclick="previewOffline('${offlineUrl}', '${offlineFilename}'); return false;" style="color: #4fc3f7;">Preview</a>
+                    </td>
+                    <td style="padding: 0.25rem; text-align: center;">
+                        ${onlineUrl ? `<a href="${onlineUrl}" target="_blank" style="color: #4ecca3;">Open</a>` : '<span style="color: #666;">-</span>'}
                     </td>
                 </tr>`;
             });
@@ -4186,6 +4425,31 @@
                 counterDiv.textContent = `Showing ${start}-${end} of ${allSampleLinks.length} samples`;
                 counterDiv.style.display = 'block';
             }
+        }
+
+        // Preview offline content in iframe
+        function previewOffline(url, filename) {
+            const previewSection = document.getElementById('offlinePreviewSection');
+            const frame = document.getElementById('offlineContentFrame');
+            const filenameSpan = document.getElementById('previewFilename');
+            const loadingDiv = document.getElementById('previewLoading');
+
+            previewSection.style.display = 'block';
+            loadingDiv.style.display = 'block';
+            frame.style.display = 'none';
+            frame.src = url;
+            filenameSpan.textContent = filename;
+
+            // Scroll to preview
+            previewSection.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+
+        // Hide loading indicator when iframe loads
+        function hidePreviewLoading() {
+            const frame = document.getElementById('offlineContentFrame');
+            const loadingDiv = document.getElementById('previewLoading');
+            if (loadingDiv) loadingDiv.style.display = 'none';
+            if (frame) frame.style.display = 'block';
         }
 
         function showMoreSampleLinks() {

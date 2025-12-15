@@ -114,6 +114,7 @@ from .routes.jobs import router as jobs_router
 from .routes.visualise import router as visualise_router
 from .routes.models import router as models_router
 from .routes.job_builder import router as job_builder_router
+from .routes.search_test import router as search_test_router
 
 # Create router with public mode check - blocks all routes when VECTOR_DB_MODE=pinecone
 router = APIRouter(
@@ -128,6 +129,7 @@ router.include_router(jobs_router)
 router.include_router(visualise_router)
 router.include_router(models_router)
 router.include_router(job_builder_router)
+router.include_router(search_test_router)
 
 
 # =============================================================================

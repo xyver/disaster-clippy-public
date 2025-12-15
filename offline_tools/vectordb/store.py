@@ -7,6 +7,7 @@ from typing import List, Dict, Optional, Any
 from pathlib import Path
 import json
 import os
+import time
 
 # ChromaDB is optional (not available in cloud deployments)
 try:
@@ -527,6 +528,9 @@ class VectorStore:
             # Compute embeddings for this batch
             embeddings = self.embedding_service.embed_batch(contents)
 
+            # Yield GIL before heavy ChromaDB write
+            time.sleep(0)
+
             # Add to ChromaDB (persists immediately)
             self.collection.add(
                 ids=ids,
@@ -534,6 +538,9 @@ class VectorStore:
                 documents=contents,
                 metadatas=metadatas
             )
+
+            # Yield GIL after batch to let web server respond
+            time.sleep(0)
 
             total_added += len(ids)
             print(f"[VectorStore] Batch {batch_num}/{total_batches}: Added {len(ids)} documents (total: {total_added})")
@@ -667,9 +674,15 @@ class VectorStore:
             if progress_callback:
                 progress_callback(0, 1, f"Wiping {source_id} from vector store...")
 
+            # Yield GIL before heavy operation to let web server respond
+            time.sleep(0)
+
             # Single filter-based delete - ChromaDB handles finding + deleting internally
             # Skip count query for speed - force reindex doesn't need exact count
             self.collection.delete(where={"source": source_id})
+
+            # Yield GIL after heavy operation
+            time.sleep(0)
 
             if progress_callback:
                 progress_callback(1, 1, f"Wiped {source_id}")

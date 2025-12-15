@@ -7,6 +7,10 @@ Routes for the visual job chain builder.
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
+import logging
+import re
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/job-builder", tags=["Job Builder"])
 
@@ -44,6 +48,29 @@ async def get_schemas():
     """Get all job schemas for the job builder UI"""
     from admin.job_schemas import get_all_schemas_dict
     return get_all_schemas_dict()
+
+
+@router.get("/dimension-status")
+async def get_dimension_status():
+    """
+    Get current ChromaDB dimension usage status.
+
+    Returns which dimensions are currently being used by running jobs,
+    useful for opportunistic scheduling and monitoring.
+
+    Example response:
+    {
+        "384": {"busy": false, "job_id": null, "operation": null, "source_id": null},
+        "768": {"busy": true, "job_id": "abc123", "operation": "index", "source_id": "wiki"},
+        "1024": {"busy": false, "job_id": null, "operation": null, "source_id": null},
+        "1536": {"busy": true, "job_id": "def456", "operation": "delete", "source_id": "bitcoin"}
+    }
+    """
+    from admin.job_manager import get_job_manager
+    manager = get_job_manager()
+    status = manager.get_dimension_status()
+    # Convert int keys to strings for JSON serialization
+    return {str(k): v for k, v in status.items()}
 
 
 @router.post("/validate")
@@ -192,8 +219,10 @@ def check_source_state(source_id: str, job_types: List[str]) -> List[str]:
             pages_path = source_path / "pages"
             if not pages_path.exists():
                 warnings.append(f"Source '{source_id}' has no pages folder - extract content first (ZIM or scrape)")
-            # Check if base_url already set
-            manifest_path = source_path / "manifest.json"
+            # Check if base_url already set (check both manifest file locations)
+            manifest_path = source_path / "_manifest.json"
+            if not manifest_path.exists():
+                manifest_path = source_path / "manifest.json"
             if manifest_path.exists():
                 try:
                     import json
@@ -245,19 +274,30 @@ async def run_chain(request: RunChainRequest):
                 raise HTTPException(400, "install_source requires selecting a cloud source")
 
         elif first_job in ("zim_import", "zim_extract"):
-            # Source ID comes from ZIM filename
+            # Source ID comes from user-provided name, or ZIM filename
             zim_path = first_params.get("zim_path", "")
             if not zim_path:
                 raise HTTPException(400, f"{first_job} requires selecting a ZIM file")
-            # Extract source_id from ZIM path (use the parent folder name or derive from filename)
+
             from pathlib import Path
+            from admin.local_config import get_local_config
             zim_file = Path(zim_path)
-            # Check if ZIM is already in a source folder
-            if zim_file.parent.name and not zim_file.parent.name.startswith("_"):
-                effective_source_id = zim_file.parent.name
+
+            # Helper to sanitize source_id
+            def sanitize_source_id(name):
+                safe = re.sub(r'[<>:"/\\|?*]', '_', name)
+                safe = re.sub(r'\s+', '-', safe)
+                safe = safe.strip('._-')
+                return safe.lower()[:100]
+
+            # Priority: user-provided name > ZIM filename (always)
+            # We no longer try to derive from folder names - that was causing issues
+            if request.source_name:
+                effective_source_id = sanitize_source_id(request.source_name)
             else:
-                # Derive from filename (e.g., "wikipedia_en_all.zim" -> "wikipedia_en_all")
-                effective_source_id = zim_file.stem
+                # Always use ZIM filename as source_id when no name provided
+                effective_source_id = sanitize_source_id(zim_file.stem)
+                logger.info(f"[run_chain] Derived source_id from ZIM filename: {effective_source_id}")
 
         elif first_job in ("scrape", "scrape_sitemap"):
             # Source ID should be provided in params for scrape jobs
@@ -449,65 +489,98 @@ def get_job_function(job_type: str, source_id: str, params: Dict[str, Any]):
         return run_metadata
 
     elif job_type == "index_online":
-        def run_index_online(progress_callback=None, cancel_checker=None):
+        def run_index_online(progress_callback=None, cancel_checker=None, job_id=None, **kwargs):
             from offline_tools.source_manager import SourceManager
+            from admin.job_manager import get_job_manager
 
             force = params.get("force_reindex", False)
             resume = params.get("resume", False)
 
-            manager = SourceManager()
-            result = manager.create_index(
-                source_id,
-                limit=None,  # No limit - index all documents
-                skip_existing=not force,  # force=True means skip_existing=False
-                dimension=1536,
-                resume=resume,
-                progress_callback=progress_callback,
-                cancel_checker=cancel_checker
-            )
-            return result
+            # Track dimension usage for opportunistic scheduling
+            job_manager = get_job_manager()
+            if job_id:
+                job_manager.update_job_dimension(job_id, 1536, "index")
+
+            try:
+                manager = SourceManager()
+                result = manager.create_index(
+                    source_id,
+                    limit=None,  # No limit - index all documents
+                    skip_existing=not force,  # force=True means skip_existing=False
+                    dimension=1536,
+                    resume=resume,
+                    progress_callback=progress_callback,
+                    cancel_checker=cancel_checker
+                )
+                return result
+            finally:
+                # Clear dimension tracking when done
+                if job_id:
+                    job_manager.update_job_dimension(job_id, None, None)
 
         return run_index_online
 
     elif job_type == "index_offline":
-        def run_index_offline(progress_callback=None, cancel_checker=None):
+        def run_index_offline(progress_callback=None, cancel_checker=None, job_id=None, **kwargs):
             from offline_tools.source_manager import SourceManager
+            from admin.job_manager import get_job_manager
 
             force = params.get("force_reindex", False)
             resume = params.get("resume", False)
             dimension = int(params.get("dimension", 768))
 
-            manager = SourceManager()
-            result = manager.create_index(
-                source_id,
-                limit=None,  # No limit - index all documents
-                skip_existing=not force,  # force=True means skip_existing=False
-                dimension=dimension,
-                resume=resume,
-                progress_callback=progress_callback,
-                cancel_checker=cancel_checker
-            )
-            return result
+            # Track dimension usage for opportunistic scheduling
+            job_manager = get_job_manager()
+            if job_id:
+                job_manager.update_job_dimension(job_id, dimension, "index")
+
+            try:
+                manager = SourceManager()
+                result = manager.create_index(
+                    source_id,
+                    limit=None,  # No limit - index all documents
+                    skip_existing=not force,  # force=True means skip_existing=False
+                    dimension=dimension,
+                    resume=resume,
+                    progress_callback=progress_callback,
+                    cancel_checker=cancel_checker
+                )
+                return result
+            finally:
+                # Clear dimension tracking when done
+                if job_id:
+                    job_manager.update_job_dimension(job_id, None, None)
 
         return run_index_offline
 
     elif job_type == "clear_vectors":
-        def run_clear_vectors(progress_callback=None, cancel_checker=None):
+        def run_clear_vectors(progress_callback=None, cancel_checker=None, job_id=None, **kwargs):
             from offline_tools.vectordb import get_vector_store
+            from admin.job_manager import get_job_manager
 
             dimension = int(params.get("dimension", 768))
 
-            if progress_callback:
-                progress_callback(0, 100, f"Clearing {dimension}-dim vectors...")
+            # Track dimension usage for opportunistic scheduling (delete has priority)
+            job_manager = get_job_manager()
+            if job_id:
+                job_manager.update_job_dimension(job_id, dimension, "delete")
 
-            store = get_vector_store(mode="local", dimension=dimension, read_only=True)
-            result = store.delete_by_source(source_id)
-            deleted = result.get("deleted_count", 0) if isinstance(result, dict) else 0
+            try:
+                if progress_callback:
+                    progress_callback(0, 100, f"Clearing {dimension}-dim vectors...")
 
-            if progress_callback:
-                progress_callback(100, 100, f"Cleared {deleted} vectors")
+                store = get_vector_store(mode="local", dimension=dimension, read_only=True)
+                result = store.delete_by_source(source_id)
+                deleted = result.get("deleted_count", 0) if isinstance(result, dict) else 0
 
-            return {"success": True, "deleted_count": deleted}
+                if progress_callback:
+                    progress_callback(100, 100, f"Cleared {deleted} vectors")
+
+                return {"success": True, "deleted_count": deleted}
+            finally:
+                # Clear dimension tracking when done
+                if job_id:
+                    job_manager.update_job_dimension(job_id, None, None)
 
         return run_clear_vectors
 
@@ -609,17 +682,20 @@ def get_job_function(job_type: str, source_id: str, params: Dict[str, Any]):
             """
             Combined ZIM Import job that:
             1. Opens and analyzes ZIM file
-            2. Creates source folder and manifest
-            3. Extracts indexable HTML pages to pages/ folder
-            4. Reports statistics
+            2. Creates a dedicated source folder
+            3. Moves ZIM file into that folder
+            4. Extracts indexable HTML pages to pages/ folder
+            5. Creates manifest with all metadata
             """
             from pathlib import Path
             from admin.local_config import get_local_config
             import json
+            import shutil
+            import re
 
             zim_path = params.get("zim_path", "")
             min_text_length = int(params.get("min_text_length", 100))
-            custom_source_name = params.get("source_name", "")  # User-provided display name
+            custom_source_name = params.get("source_name", "")  # User-provided source name
 
             if not zim_path:
                 return {"success": False, "error": "No ZIM file selected"}
@@ -634,14 +710,37 @@ def get_job_function(job_type: str, source_id: str, params: Dict[str, Any]):
             if not backup_folder:
                 return {"success": False, "error": "No backup folder configured"}
 
-            # Determine source_id from ZIM path
-            if zim_file.parent.name and not zim_file.parent.name.startswith("_"):
-                derived_source_id = zim_file.parent.name
-            else:
-                derived_source_id = zim_file.stem
+            backup_path = Path(backup_folder).resolve()
+            zim_parent = zim_file.parent.resolve()
 
-            source_path = Path(backup_folder) / derived_source_id
+            # Determine source_id:
+            # 1. If user provided a custom name, use that (sanitized)
+            # 2. Otherwise, always use the ZIM filename (sanitized)
+            # Note: We no longer try to derive from folder names - that was causing issues
+            def sanitize_source_id(name):
+                """Sanitize a name for use as source_id (filesystem-safe)"""
+                # Remove/replace problematic characters
+                safe = re.sub(r'[<>:"/\\|?*]', '_', name)
+                safe = re.sub(r'\s+', '-', safe)  # spaces to hyphens
+                safe = safe.strip('._-')  # remove leading/trailing dots, underscores, hyphens
+                return safe.lower()[:100]  # lowercase, max 100 chars
+
+            if custom_source_name:
+                # User provided a name - use it as source_id
+                derived_source_id = sanitize_source_id(custom_source_name)
+                logger.info(f"[zim_import] Using user-provided source name: {derived_source_id}")
+            else:
+                # Always use ZIM filename as source_id
+                derived_source_id = sanitize_source_id(zim_file.stem)
+                logger.info(f"[zim_import] Derived source_id from ZIM filename: {derived_source_id}")
+
+            source_path = backup_path / derived_source_id
             pages_path = source_path / "pages"
+
+            # Check if ZIM is already in the target source folder
+            # Use os.path.normcase for case-insensitive comparison on Windows
+            import os
+            zim_already_in_place = os.path.normcase(str(zim_parent)) == os.path.normcase(str(source_path))
 
             if progress_callback:
                 progress_callback(0, 100, "Opening ZIM file...")
@@ -778,30 +877,83 @@ def get_job_function(job_type: str, source_id: str, params: Dict[str, Any]):
             except Exception:
                 pass
 
-            # Update manifest with extraction stats
+            # Move ZIM file into source folder if not already there
+            zim_moved = False
+            final_zim_path = zim_file  # Default: keep original path
+
+            if not zim_already_in_place:
+                if progress_callback:
+                    progress_callback(96, 100, "Moving ZIM file into source folder...")
+
+                try:
+                    # Keep original filename (don't rename to source.zim - preserves version info)
+                    new_zim_path = source_path / zim_file.name
+
+                    # Check if destination already exists
+                    if new_zim_path.exists() and new_zim_path != zim_file:
+                        # ZIM with same name already in folder - skip move
+                        final_zim_path = new_zim_path
+                    else:
+                        # Move the file
+                        shutil.move(str(zim_file), str(new_zim_path))
+                        final_zim_path = new_zim_path
+                        zim_moved = True
+                except Exception as e:
+                    # Move failed - continue with original path but warn
+                    logger.warning(f"Could not move ZIM file: {e}")
+            else:
+                final_zim_path = zim_file
+
+            # Update manifest with extraction stats and final ZIM path
             manifest["extraction_stats"] = {
                 "extracted_pages": extracted_count,
                 "skipped_pages": skipped_count,
                 "min_text_length": min_text_length,
                 "avg_text_length": round(total_text_length / max(extracted_count, 1)),
             }
+            manifest["zim_file"] = final_zim_path.name
+            manifest["zim_path"] = str(final_zim_path)
 
-            # Save manifest
-            manifest_path = source_path / "manifest.json"
+            # Save manifest (use _manifest.json standard)
+            # IMPORTANT: Preserve user-edited fields from existing manifest
+            manifest_path = source_path / "_manifest.json"
+            existing_manifest = {}
+            if manifest_path.exists():
+                try:
+                    with open(manifest_path, 'r', encoding='utf-8') as f:
+                        existing_manifest = json.load(f)
+                except Exception:
+                    pass
+
+            # Fields to preserve from existing manifest (user edits take precedence)
+            preserved_fields = ["name", "description", "base_url", "license",
+                               "license_verified", "attribution", "tags", "language",
+                               "version", "created_at"]
+            for field in preserved_fields:
+                if field in existing_manifest and existing_manifest[field]:
+                    manifest[field] = existing_manifest[field]
+
             with open(manifest_path, 'w', encoding='utf-8') as f:
                 json.dump(manifest, f, indent=2, ensure_ascii=False)
 
             if progress_callback:
                 progress_callback(100, 100, f"Import complete: {extracted_count} pages extracted")
 
+            result_msg = f"Imported {extracted_count} pages from ZIM ({skipped_count} skipped as too short)"
+            if zim_moved:
+                result_msg += f". ZIM moved to {source_path.name}/"
+
             return {
                 "success": True,
                 "source_id": derived_source_id,
+                "source_folder": str(source_path),
                 "extracted_pages": extracted_count,
                 "skipped_pages": skipped_count,
                 "total_zim_entries": article_count,
                 "manifest_created": True,
-                "message": f"Imported {extracted_count} pages from ZIM ({skipped_count} skipped as too short)"
+                "zim_moved": zim_moved,
+                "zim_path": str(final_zim_path),
+                "message": result_msg
             }
 
         return run_zim_import
@@ -825,7 +977,7 @@ def get_job_function(job_type: str, source_id: str, params: Dict[str, Any]):
             import re
 
             sample_count = int(params.get("sample_count", 10))
-            auto_apply = params.get("auto_apply", True)
+            force_override = params.get("force_override", False)
 
             if progress_callback:
                 progress_callback(0, 100, "Scanning source folder...")
@@ -840,7 +992,10 @@ def get_job_function(job_type: str, source_id: str, params: Dict[str, Any]):
             pages_path = source_path / "pages"
 
             # Check manifest for existing hints first (can work without pages)
-            manifest_path = source_path / "manifest.json"
+            # Try _manifest.json first (standard), then manifest.json (legacy)
+            manifest_path = source_path / "_manifest.json"
+            if not manifest_path.exists():
+                manifest_path = source_path / "manifest.json"
             existing_manifest = {}
             if manifest_path.exists():
                 try:
@@ -848,9 +1003,18 @@ def get_job_function(job_type: str, source_id: str, params: Dict[str, Any]):
                         existing_manifest = json.load(f)
                 except Exception:
                     pass
+            else:
+                # If neither exists, use the standard path for saving
+                manifest_path = source_path / "_manifest.json"
 
-            # Check for existing base_url
+            # Check for existing base_url - don't override if user has set a meaningful value
             existing_base_url = existing_manifest.get("base_url", "")
+            # Consider these as "not set" - placeholder values that should be overwritten
+            placeholder_urls = ["", "https://example.org/", "https://example.com/"]
+            has_user_set_url = existing_base_url and existing_base_url not in placeholder_urls
+            # Allow override if force_override is set
+            if force_override:
+                has_user_set_url = False
 
             # Try ZIM metadata detection first (works without pages)
             zim_metadata = existing_manifest.get("zim_metadata", {})
@@ -909,8 +1073,8 @@ def get_job_function(job_type: str, source_id: str, params: Dict[str, Any]):
                     "auto_applied": False
                 }
 
-                # Auto-apply if enabled
-                if auto_apply:
+                # Apply if no user-set URL exists (or force_override is on)
+                if not has_user_set_url:
                     if progress_callback:
                         progress_callback(85, 100, "Updating manifest...")
                     try:
@@ -921,6 +1085,8 @@ def get_job_function(job_type: str, source_id: str, params: Dict[str, Any]):
                         result["message"] = f"Base URL set to: {detected_base_url} (from ZIM metadata)"
                     except Exception as e:
                         result["warning"] = f"Could not update manifest: {str(e)}"
+                else:
+                    result["message"] = f"Keeping existing base URL: {existing_base_url} (check 'Override Existing' to replace)"
 
                 if progress_callback:
                     progress_callback(100, 100, "Detection complete")
@@ -1018,8 +1184,8 @@ def get_job_function(job_type: str, source_id: str, params: Dict[str, Any]):
                 "auto_applied": False
             }
 
-            # Auto-apply if confident and enabled
-            if auto_apply and detected_base_url and confidence in ("high", "medium"):
+            # Apply if confident and no user-set URL (or force_override is on)
+            if detected_base_url and confidence in ("high", "medium") and not has_user_set_url:
                 if progress_callback:
                     progress_callback(85, 100, "Updating manifest...")
 
@@ -1031,10 +1197,32 @@ def get_job_function(job_type: str, source_id: str, params: Dict[str, Any]):
                     result["message"] = f"Base URL set to: {detected_base_url}"
                 except Exception as e:
                     result["warning"] = f"Could not update manifest: {str(e)}"
+            elif has_user_set_url:
+                result["message"] = f"Keeping existing base URL: {existing_base_url} (check 'Override Existing' to replace)"
             elif detected_base_url:
                 result["message"] = f"Detected base URL: {detected_base_url} (confidence: {confidence}) - review and set manually if needed"
             else:
                 result["message"] = "Could not auto-detect base URL. Please set manually in source editor."
+
+            # For ZIM sources, pre-build URL index for fast offline content serving
+            # This avoids delay when user first tests offline links
+            if existing_manifest.get("created_from") == "zim_import":
+                zim_path = existing_manifest.get("zim_path")
+                if zim_path and Path(zim_path).exists():
+                    if progress_callback:
+                        progress_callback(90, 100, "Building ZIM URL index for offline preview...")
+
+                    try:
+                        from admin.routes.search_test import get_cached_zim, build_url_index
+                        zim = get_cached_zim(zim_path)
+                        if zim:
+                            url_index = build_url_index(zim_path, zim)
+                            result["zim_index_entries"] = len(url_index)
+                            result["message"] = (result.get("message", "") +
+                                f" | ZIM index built: {len(url_index)} entries for offline preview")
+                    except Exception as e:
+                        # Non-fatal - index will be built on first preview request
+                        print(f"[detect_base_url] Could not pre-build ZIM index: {e}")
 
             if progress_callback:
                 progress_callback(100, 100, "Detection complete")

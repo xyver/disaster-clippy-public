@@ -386,6 +386,86 @@ history = manager.get_job_history(limit=50, max_age_days=7)
 - `download` -> now `install_source`
 - `vectors_768` -> still exists for pack vector generation
 
+### Dimension Tracking (Opportunistic Scheduling)
+
+Jobs that interact with ChromaDB now track which dimension they're using. This enables:
+- Monitoring which databases are busy
+- Future opportunistic scheduling (if 768 is busy, work on 1536 first)
+- Better visibility into concurrent job activity
+
+**Job Class Fields** (`admin/job_manager.py`):
+```python
+current_dimension: Optional[int]  # 384, 768, 1024, or 1536
+current_operation: Optional[str]  # "delete" or "index"
+pending_dimensions: List[int]     # For future multi-dimension jobs
+```
+
+**JobManager Methods**:
+- `get_dimension_status()` - Returns status of all 4 dimensions
+- `is_dimension_busy(dim)` - Quick check for a single dimension
+- `get_available_dimensions()` - List of dimensions not in use
+- `update_job_dimension(job_id, dim, op)` - Update tracking state
+
+**API Endpoint**: `GET /api/job-builder/dimension-status`
+```json
+{
+  "384": {"busy": false, "job_id": null, "operation": null, "source_id": null},
+  "768": {"busy": true, "job_id": "abc123", "operation": "index", "source_id": "wiki"},
+  "1024": {"busy": false, "job_id": null, "operation": null, "source_id": null},
+  "1536": {"busy": true, "job_id": "def456", "operation": "delete", "source_id": "bitcoin"}
+}
+```
+
+**Jobs with Dimension Tracking**:
+- `index_online` - tracks 1536 dimension with "index" operation
+- `index_offline` - tracks selected dimension (384/768/1024) with "index" operation
+- `clear_vectors` - tracks selected dimension with "delete" operation
+
+**Key Insight**: Different dimensions use separate ChromaDB instances (`chroma_db_384/`, `chroma_db_768/`, etc.), so operations on different dimensions can run in true parallel without lock contention.
+
+### Future: Delete Optimization
+
+ChromaDB delete operations are blocking and can freeze the app for large sources. Current implementation at `offline_tools/vectordb/store.py:682`:
+
+```python
+self.collection.delete(where={"source": source_id})
+```
+
+This is already the optimized "filter-based delete" (ChromaDB handles finding + deleting internally), but it still:
+- Scans the entire index to find matching documents
+- Loads segments into memory
+- Blocks until complete (no async API)
+
+**Potential Optimization Options:**
+
+1. **Batched Deletes with Yields** (quickest win)
+   - Query IDs in batches of 1000
+   - Delete batch
+   - `time.sleep(0)` to yield GIL
+   - Repeat
+   - Lets web server respond between batches
+
+2. **Subprocess Isolation**
+   - Run delete in separate process via `multiprocessing`
+   - Main app stays responsive
+   - Risk: ChromaDB file locking conflicts
+
+3. **Per-Source Collections** (architectural change)
+   - Each source gets its own collection: `articles_bitcoin`, `articles_wiki_top_100`
+   - Delete = `client.delete_collection(name)` (nearly instant)
+   - Major refactor but makes deletes trivial
+
+4. **Copy-and-Swap (rebuild strategy)**
+   - Instead of deleting source X:
+     1. Create temp collection
+     2. Copy all docs WHERE source != X
+     3. Drop old collection, rename temp
+   - Avoids delete operation entirely but complex
+
+**References:**
+- [ChromaDB Delete Docs](https://docs.trychroma.com/docs/collections/delete-data)
+- [ChromaDB Rebuilding Guide](https://cookbook.chromadb.dev/strategies/rebuilding/)
+
 ### Future: Parallel Processing
 
 The checkpoint system is prepared for future parallel processing with:
