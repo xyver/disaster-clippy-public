@@ -281,6 +281,7 @@ class SourceManager:
 
     # Common English stopwords to filter from term discovery
     STOPWORDS = {
+        # English articles/prepositions/conjunctions
         "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for",
         "of", "with", "by", "from", "as", "is", "was", "are", "were", "been",
         "be", "have", "has", "had", "do", "does", "did", "will", "would",
@@ -299,11 +300,27 @@ class SourceManager:
         "made", "make", "see", "also", "known", "called", "like", "get", "got",
         "however", "example", "including", "because", "while", "being", "since",
         "based", "within", "without", "although", "either", "another", "per",
+        # Wiki/document structure
         "list", "lists", "article", "articles", "page", "pages", "section",
         "wikipedia", "wikimedia", "category", "categories", "file", "files",
         "index", "main", "content", "contents", "external", "links", "link",
         "references", "reference", "source", "sources", "note", "notes",
         "image", "images", "figure", "figures", "table", "tables", "data",
+        # URL/web fragments (common in scraped titles)
+        "www", "http", "https", "html", "htm", "php", "aspx", "jsp", "cgi",
+        "com", "org", "gov", "edu", "net", "info", "node", "webform", "form",
+        "default", "site", "sites", "web", "online", "url", "uri", "pdf",
+        # Common Spanish words (filter non-English from English sources)
+        "para", "del", "los", "las", "con", "por", "una", "uno", "que", "han",
+        "hant", "como", "mas", "pero", "sobre", "entre", "cuando", "donde",
+        "este", "esta", "estos", "estas", "ese", "esa", "esos", "esas",
+        "muy", "hay", "ser", "estar", "tienen", "puede", "pueden", "debe",
+        "medio", "durante", "hacia", "desde", "hasta", "sin", "contra",
+        # Common web/CMS terms
+        "npm", "api", "ajax", "json", "xml", "css", "javascript", "script",
+        "module", "modules", "plugin", "plugins", "widget", "widgets",
+        "header", "footer", "sidebar", "menu", "nav", "navigation",
+        "button", "submit", "click", "input", "output", "search",
     }
 
     def __init__(self, backup_path: str = None):
@@ -985,8 +1002,11 @@ class SourceManager:
         errors = []
 
         # Check if this is a ZIM source (underscores should be preserved in URLs)
+        # ZIM sources (Wikipedia/MediaWiki) use underscores in article URLs
         is_zim_source = False
-        manifest_path = source_path / "manifest.json"
+        manifest_path = source_path / "_manifest.json"  # v3 schema
+        if not manifest_path.exists():
+            manifest_path = source_path / "manifest.json"  # legacy fallback
         if manifest_path.exists():
             try:
                 with open(manifest_path, 'r', encoding='utf-8') as f:
@@ -1289,354 +1309,34 @@ class SourceManager:
         Returns:
             Dict with success status and document count
         """
-        source_type = self._detect_source_type(source_id)
-
-        if not source_type:
-            return {
-                "success": False,
-                "error": "Could not detect source type",
-                "document_count": 0
-            }
-
         source_path = self.get_source_path(source_id)
 
-        if source_type == "zim":
-            return self._generate_zim_metadata(source_id, source_path, progress_callback, language_filter, resume, cancel_checker)
-        elif source_type == "html":
+        # Check for pages/ folder (required for all HTML and ZIM-imported sources)
+        pages_folder = source_path / "pages"
+        if pages_folder.exists():
             return self._generate_html_metadata(source_id, source_path, progress_callback)
-        elif source_type == "pdf":
+
+        # Check for PDF collection
+        if (source_path / "_collection.json").exists() or list(source_path.glob("*.pdf")):
             return self._generate_pdf_metadata(source_id, source_path, progress_callback)
-        else:
+
+        # Check if there's a ZIM file that hasn't been extracted yet
+        zim_files = list(source_path.glob("*.zim"))
+        if zim_files:
             return {
                 "success": False,
-                "error": f"Unknown source type: {source_type}",
+                "error": f"ZIM file found but no pages/ folder. Run ZIM import job first to extract HTML pages.",
                 "document_count": 0
             }
 
-    def _generate_zim_metadata(self, source_id: str, source_path: Path,
-                               progress_callback: Callable = None,
-                               language_filter: str = None,
-                               resume: bool = False,
-                               cancel_checker: Callable = None) -> Dict[str, Any]:
-        """
-        Generate metadata from ZIM file with checkpoint support.
-
-        Checkpoints are saved every 60 seconds OR every 2000 articles.
-        The partial work is stored in _jobs/{source_id}_metadata.partial.json
-
-        Args:
-            source_id: Source identifier
-            source_path: Path to source folder
-            progress_callback: Progress reporting function
-            language_filter: ISO language code to filter (e.g., 'en')
-            resume: If True, attempt to resume from checkpoint
-            cancel_checker: Function that returns True if job was cancelled
-
-        Returns:
-            Dict with success status and document count
-        """
-        import time as time_module
-        import re
-        from collections import Counter
-        from .schemas import get_metadata_file, get_manifest_file
-        from .indexer import should_include_article, extract_text_lenient, extract_internal_links_from_html
-
-        # Import checkpoint functions
-        try:
-            from admin.job_manager import (
-                Checkpoint, save_checkpoint, load_checkpoint, delete_checkpoint,
-                get_partial_file_path
-            )
-            checkpointing_available = True
-        except ImportError:
-            checkpointing_available = False
-            print("[metadata] Checkpoint system not available")
-
-        zim_files = list(source_path.glob("*.zim"))
-        if not zim_files:
-            return {"success": False, "error": "No ZIM file found", "document_count": 0}
-
-        try:
-            from zimply_core.zim_core import ZIMFile
-        except ImportError:
-            return {"success": False, "error": "zimply-core not installed", "document_count": 0}
-
-        zim_path = zim_files[0]
-        try:
-            zim = ZIMFile(str(zim_path), 'utf-8')
-        except Exception as e:
-            return {"success": False, "error": f"Failed to open ZIM: {e}", "document_count": 0}
-
-        article_count = zim.header_fields.get('articleCount', 0)
-
-        # Initialize or load from checkpoint
-        documents = {}
-        word_freq = Counter()  # Track word frequency for term discovery
-        start_index = 0
-        language_filtered = 0
-        checkpoint = None
-        resumed = False
-
-        # Build set of existing keywords to exclude from term discovery
-        existing_keywords = set()
-        for keywords in self.TOPIC_KEYWORDS.values():
-            for kw in keywords:
-                existing_keywords.update(kw.lower().split())
-
-        if checkpointing_available and resume:
-            checkpoint = load_checkpoint(source_id, "metadata")
-            if checkpoint:
-                # Load partial work
-                partial_path = get_partial_file_path(source_id, "metadata")
-                if partial_path and partial_path.exists():
-                    try:
-                        with open(partial_path, 'r', encoding='utf-8') as f:
-                            partial_data = json.load(f)
-                        documents = partial_data.get("documents", {})
-                        language_filtered = partial_data.get("language_filtered", 0)
-                        # Restore word frequency from checkpoint if available
-                        saved_freq = partial_data.get("word_freq", {})
-                        word_freq = Counter(saved_freq)
-                        start_index = checkpoint.last_article_index + 1
-                        resumed = True
-                        print(f"[metadata] Resuming from checkpoint: {len(documents)} docs, starting at article {start_index}")
-                    except Exception as e:
-                        print(f"[metadata] Error loading partial file: {e}")
-                        # Start fresh if partial file is corrupted
-                        documents = {}
-                        word_freq = Counter()
-                        start_index = 0
-
-        if not checkpoint and checkpointing_available:
-            # Create new checkpoint
-            checkpoint = Checkpoint(
-                job_type="metadata",
-                source_id=source_id,
-                work_range_end=article_count
-            )
-
-        processed = len(documents)
-        last_checkpoint_time = time_module.time()
-        articles_since_checkpoint = 0
-        CHECKPOINT_INTERVAL_SECONDS = 60
-        CHECKPOINT_INTERVAL_ARTICLES = 2000
-
-        lang_msg = f" (language: {language_filter})" if language_filter else ""
-        resume_msg = f" (resumed from {start_index})" if resumed else ""
-        if progress_callback:
-            progress_callback(start_index, article_count, f"Extracting ZIM metadata{lang_msg}{resume_msg}...")
-
-        if language_filter:
-            print(f"Language filter: {language_filter} (only including {language_filter} articles in metadata)")
-
-        # Setup URL building - extract ZIM metadata and manifest base_url once
-        from .indexer import ZIMIndexer
-        indexer_instance = ZIMIndexer(zim_path=str(zim_path), source_id=source_id, backup_folder=str(source_path))
-        zim_metadata = indexer_instance._extract_zim_metadata(zim.header_fields)
-        manifest_path = source_path / get_manifest_file()
-        manifest_base_url = None
-        if manifest_path.exists():
-            try:
-                with open(manifest_path, 'r', encoding='utf-8') as mf:
-                    manifest = json.load(mf)
-                    manifest_base_url = manifest.get("base_url")
-            except:
-                pass
-
-        for i in range(start_index, article_count):
-            try:
-                article = zim.get_article_by_id(i)
-                if article is None:
-                    continue
-
-                url = getattr(article, 'url', '') or ''
-                title = getattr(article, 'title', '') or ''
-                mimetype = str(getattr(article, 'mimetype', ''))
-
-                # Strip quotes from title and URL (fixes articles like "Aquifex aeolicus")
-                url = url.strip('"')
-                title = title.strip('"')
-
-                # Only process HTML articles
-                if 'text/html' not in mimetype:
-                    continue
-
-                # Skip navigation/namespace pages
-                if url.startswith(('-/', 'X/', 'M/')):
-                    continue
-
-                # Apply language filter if specified
-                if language_filter and not should_include_article(
-                    url, title, language_filter, debug=(language_filtered < 10)
-                ):
-                    language_filtered += 1
-                    continue
-
-                content = article.data
-                if isinstance(content, bytes):
-                    content = content.decode('utf-8', errors='ignore')
-
-                # Use unified BeautifulSoup extraction for consistency with indexing
-                text = extract_text_lenient(content)
-                if len(text) < 100:  # Skip very short articles
-                    continue
-
-                # Extract internal links from HTML content
-                internal_links = extract_internal_links_from_html(content)
-
-                # Build URLs - local for offline viewer, online for ChromaDB
-                local_url = f"/zim/{source_id}/{url}"
-                online_url = indexer_instance._build_online_url(url, zim_metadata, manifest_base_url) or local_url
-
-                # Use same ID format as indexer: MD5 hash of source_id:url
-                doc_id = hashlib.md5(f"{source_id}:{url}".encode()).hexdigest()
-                doc_entry = {
-                    "title": title[:200] if title else url[:200],
-                    "url": online_url,  # Use online URL
-                    "local_url": local_url,  # Store local path
-                    "snippet": text[:500],
-                    "char_count": len(text),
-                    "source_id": source_id,
-                    "zim_index": i,
-                    "zim_url": url
-                }
-
-                # Only add internal_links if there are any (to save space)
-                if internal_links:
-                    doc_entry["internal_links"] = internal_links
-
-                documents[doc_id] = doc_entry
-                processed += 1
-                articles_since_checkpoint += 1
-
-                # Extract words from title for term discovery
-                # Only count words 3+ chars that aren't stopwords or existing keywords
-                title_words = re.findall(r'\b[a-zA-Z]{3,}\b', title.lower())
-                for word in title_words:
-                    if word not in self.STOPWORDS and word not in existing_keywords:
-                        word_freq[word] += 1
-
-                # Progress callback
-                if progress_callback and processed % 100 == 0:
-                    lang_info = f", {language_filtered} filtered" if language_filtered > 0 else ""
-                    progress_callback(i, article_count, f"Processed {processed} articles{lang_info}...")
-
-                # Check for cancellation every 100 articles
-                if cancel_checker and cancel_checker():
-                    print(f"[metadata] Job cancelled by user at article {i}")
-                    # Save checkpoint before exiting so work isn't lost
-                    if checkpoint and checkpointing_available:
-                        checkpoint.last_article_index = i
-                        checkpoint.documents_processed = processed
-                        checkpoint.progress = int((i / article_count) * 100)
-                        save_checkpoint(checkpoint)
-                        # Save partial work
-                        partial_path = get_partial_file_path(source_id, "metadata")
-                        if partial_path:
-                            with open(partial_path, 'w', encoding='utf-8') as f:
-                                json.dump({
-                                    "source_id": source_id,
-                                    "documents": documents,
-                                    "language_filtered": language_filtered,
-                                    "word_freq": dict(word_freq),
-                                    "last_article_index": i
-                                }, f)
-                    zim.close()
-                    return {
-                        "success": False,
-                        "error": "Cancelled by user",
-                        "cancelled": True,
-                        "document_count": processed
-                    }
-
-                # Checkpoint: every 60 seconds OR every 2000 articles
-                if checkpointing_available and checkpoint:
-                    time_since_checkpoint = time_module.time() - last_checkpoint_time
-                    should_checkpoint = (
-                        time_since_checkpoint >= CHECKPOINT_INTERVAL_SECONDS or
-                        articles_since_checkpoint >= CHECKPOINT_INTERVAL_ARTICLES
-                    )
-
-                    if should_checkpoint:
-                        # Update checkpoint
-                        checkpoint.last_article_index = i
-                        checkpoint.documents_processed = processed
-                        checkpoint.progress = int((i / article_count) * 100)
-
-                        # Save partial work to file
-                        partial_path = get_partial_file_path(source_id, "metadata")
-                        if partial_path:
-                            checkpoint.partial_file = str(partial_path)
-                            try:
-                                partial_data = {
-                                    "source_id": source_id,
-                                    "documents": documents,
-                                    "language_filtered": language_filtered,
-                                    "word_freq": dict(word_freq),
-                                    "last_article_index": i
-                                }
-                                temp_path = partial_path.with_suffix('.tmp')
-                                with open(temp_path, 'w', encoding='utf-8') as f:
-                                    json.dump(partial_data, f)
-                                temp_path.replace(partial_path)
-                            except Exception as e:
-                                print(f"[metadata] Error saving partial file: {e}")
-
-                        # Save checkpoint
-                        save_checkpoint(checkpoint)
-                        last_checkpoint_time = time_module.time()
-                        articles_since_checkpoint = 0
-
-            except Exception as e:
-                # Track errors in checkpoint
-                if checkpoint:
-                    checkpoint.errors.append({"article_index": i, "error": str(e)})
-                continue
-
-        try:
-            zim.close()
-        except Exception:
-            pass
-
-        # Save final metadata
-        metadata_file = source_path / get_metadata_file()
-
-        # Filter discovered terms: only include words appearing 2+ times, sorted by frequency
-        discovered_terms = {
-            word: count for word, count in word_freq.most_common()
-            if count >= 2
-        }
-
-        metadata = {
-            "source_id": source_id,
-            "document_count": len(documents),
-            "language_filter": language_filter,
-            "language_filtered_count": language_filtered,
-            "discovered_terms": discovered_terms,
-            "documents": documents
-        }
-
-        with open(metadata_file, 'w', encoding='utf-8') as f:
-            json.dump(metadata, f, indent=2)
-
-        # Delete checkpoint on successful completion
-        if checkpointing_available:
-            delete_checkpoint(source_id, "metadata")
-
-        lang_info = f", {language_filtered} filtered by language" if language_filtered > 0 else ""
-        terms_info = f", {len(discovered_terms)} novel terms found" if discovered_terms else ""
-        if progress_callback:
-            progress_callback(article_count, article_count, f"Metadata generation complete{lang_info}{terms_info}")
-
         return {
-            "success": True,
-            "document_count": len(documents),
-            "language_filter": language_filter,
-            "language_filtered_count": language_filtered,
-            "discovered_terms_count": len(discovered_terms),
-            "metadata_file": str(metadata_file),
-            "resumed": resumed
+            "success": False,
+            "error": "No pages/ folder or PDF collection found. Cannot generate metadata.",
+            "document_count": 0
         }
+
+    # NOTE: _generate_zim_metadata() was removed (Dec 2024)
+    # All sources now use HTML pathway - ZIM files must be extracted via ZIM import job first
 
     def _generate_html_metadata(self, source_id: str, source_path: Path,
                                 progress_callback: Callable = None) -> Dict[str, Any]:
@@ -1777,45 +1477,54 @@ class SourceManager:
             )
 
     def _detect_source_type(self, source_id: str) -> Optional[str]:
-        """Auto-detect source type based on files present"""
+        """
+        Auto-detect source type based on files present.
+
+        NOTE (Dec 2024): Direct ZIM indexing is no longer supported.
+        ZIM files must be extracted via ZIM import job first.
+        This function now only returns "html" or "pdf".
+        """
         source_path = self.get_source_path(source_id)
 
-        # Check for ZIM file - first in root backup folder
-        zim_path = self.backup_path / f"{source_id}.zim"
-        if zim_path.exists():
-            return "zim"
+        if not source_path.exists():
+            print(f"[_detect_source_type] {source_id}: Source path does not exist: {source_path}")
+            return None
 
-        # Check for ZIM file inside source folder (any .zim file)
-        if source_path.exists():
-            zim_files = list(source_path.glob("*.zim"))
-            if zim_files:
-                return "zim"
+        # Check for pages/ folder first (primary indicator of HTML source)
+        # This covers both pure HTML backups AND ZIM-imported sources
+        if (source_path / "pages").exists():
+            print(f"[_detect_source_type] {source_id}: pages/ folder exists -> html")
+            return "html"
 
-            # Check for PDF collection (_collection.json is the definitive marker)
-            if (source_path / "_collection.json").exists():
-                return "pdf"
+        # Check for PDF collection
+        if (source_path / "_collection.json").exists():
+            print(f"[_detect_source_type] {source_id}: _collection.json exists -> pdf")
+            return "pdf"
 
-            # Check for PDFs (fallback - might not have _collection.json yet)
-            if list(source_path.glob("*.pdf")):
-                return "pdf"
+        # Check for PDFs (fallback - might not have _collection.json yet)
+        if list(source_path.glob("*.pdf")):
+            print(f"[_detect_source_type] {source_id}: PDF files exist -> pdf")
+            return "pdf"
 
-            # Check for HTML backup manifest
-            manifest = source_path / f"{source_id}_backup_manifest.json"
-            if manifest.exists():
-                return "html"
+        # Check for HTML backup manifest (legacy)
+        manifest = source_path / f"{source_id}_backup_manifest.json"
+        if manifest.exists():
+            print(f"[_detect_source_type] {source_id}: backup manifest exists -> html")
+            return "html"
 
-            # Legacy manifest
-            if (source_path / "manifest.json").exists():
-                return "html"
+        # Check for HTML files directly (legacy)
+        if list(source_path.glob("*.html")):
+            print(f"[_detect_source_type] {source_id}: HTML files exist -> html")
+            return "html"
 
-            # Check for pages folder (HTML backup)
-            if (source_path / "pages").exists():
-                return "html"
+        # If there's a ZIM file but no pages/ folder, it needs ZIM import first
+        zim_files = list(source_path.glob("*.zim"))
+        if zim_files:
+            print(f"[_detect_source_type] {source_id}: ZIM file exists but no pages/ folder. "
+                  f"Run ZIM import job first to extract HTML pages.")
+            return None  # Caller should handle this error
 
-            # Check for HTML files directly
-            if list(source_path.glob("*.html")):
-                return "html"
-
+        print(f"[_detect_source_type] {source_id}: No recognized source type found")
         return None
 
     def _index_html(self, source_id: str, limit: int, skip_existing: bool,
@@ -1860,54 +1569,19 @@ class SourceManager:
                    resume: bool = False,
                    cancel_checker: Callable = None,
                    dimension: int = 1536) -> IndexResult:
-        """Index a ZIM file with optional checkpoint support"""
-        try:
-            from offline_tools.indexer import index_zim_file
+        """
+        DEPRECATED: Direct ZIM indexing is no longer supported.
 
-            # Find ZIM file - check root first, then source folder
-            zim_path = self.backup_path / f"{source_id}.zim"
-            if not zim_path.exists():
-                source_path = self.get_source_path(source_id)
-                zim_files = list(source_path.glob("*.zim")) if source_path.exists() else []
-                if zim_files:
-                    zim_path = zim_files[0]
-                else:
-                    return IndexResult(
-                        success=False,
-                        source_id=source_id,
-                        error=f"No ZIM file found for {source_id}"
-                    )
-
-            result = index_zim_file(
-                zim_path=str(zim_path),
-                source_id=source_id,
-                limit=limit,
-                progress_callback=progress_callback,
-                backup_folder=str(self.get_source_path(source_id)),
-                language_filter=language_filter,
-                clear_existing=clear_existing,
-                resume=resume,
-                cancel_checker=cancel_checker,
-                dimension=dimension
-            )
-
-            return IndexResult(
-                success=result.get("success", False),
-                source_id=source_id,
-                indexed_count=result.get("indexed_count", 0),
-                total_chars=result.get("total_chars", 0),
-                language_filtered=result.get("language_filtered", 0),
-                resumed=result.get("resumed", False),
-                error=result.get("error", ""),
-                errors=result.get("errors", [])
-            )
-
-        except Exception as e:
-            return IndexResult(
-                success=False,
-                source_id=source_id,
-                error=str(e)
-            )
+        ZIM files must be extracted via ZIM import job first, then indexed
+        using _index_html() on the resulting pages/ folder.
+        """
+        return IndexResult(
+            success=False,
+            source_id=source_id,
+            error="Direct ZIM indexing is no longer supported. "
+                  "Run ZIM import job first to extract HTML pages, "
+                  "then use HTML indexing on the extracted source."
+        )
 
     def _index_pdf(self, source_id: str, limit: int, skip_existing: bool,
                    progress_callback: Callable, dimension: int = 1536) -> IndexResult:
@@ -2797,7 +2471,7 @@ class SourceManager:
                 "total_terms": 0
             }
 
-    def suggest_all_tags_combined(self, source_id: str, progress_callback=None) -> Dict[str, Any]:
+    def suggest_all_tags_combined(self, source_id: str, progress_callback=None, save_to_manifest: bool = False) -> Dict[str, Any]:
         """
         Optimized combined tag suggestion - scans documents only ONCE.
 
@@ -2807,6 +2481,7 @@ class SourceManager:
         Args:
             source_id: Source identifier
             progress_callback: Optional callback(current, total, message) for progress updates
+            save_to_manifest: If True, cache results in manifest for later retrieval
 
         Returns:
             Dict with:
@@ -2970,6 +2645,27 @@ class SourceManager:
 
         print(f"[suggest_all_tags_combined] Returning {len(result_tags)} tags ({topic_count} topic, {novel_count} novel)")
 
+        # Cache results in manifest if requested
+        if save_to_manifest:
+            try:
+                from datetime import datetime
+                manifest_path = source_path / "_manifest.json"
+                if manifest_path.exists():
+                    with open(manifest_path, 'r', encoding='utf-8') as f:
+                        manifest = json.load(f)
+                    manifest["cached_tag_suggestions"] = {
+                        "tags": result_tags,
+                        "topic_count": topic_count,
+                        "novel_count": novel_count,
+                        "documents_scanned": documents_scanned,
+                        "cached_at": datetime.now().isoformat()
+                    }
+                    with open(manifest_path, 'w', encoding='utf-8') as f:
+                        json.dump(manifest, f, indent=2, ensure_ascii=False)
+                    print(f"[suggest_all_tags_combined] Cached {len(result_tags)} tags to manifest")
+            except Exception as e:
+                print(f"[suggest_all_tags_combined] Warning: Could not cache to manifest: {e}")
+
         return {
             "success": True,
             "tags": result_tags,
@@ -2977,6 +2673,43 @@ class SourceManager:
             "novel_count": novel_count,
             "documents_scanned": documents_scanned
         }
+
+    def get_cached_tag_suggestions(self, source_id: str) -> Dict[str, Any]:
+        """
+        Retrieve cached tag suggestions from manifest if available.
+
+        Args:
+            source_id: Source identifier
+
+        Returns:
+            Dict with cached tags or None if not cached
+        """
+        source_path = self.get_source_path(source_id)
+        manifest_path = source_path / "_manifest.json"
+
+        if not manifest_path.exists():
+            return None
+
+        try:
+            with open(manifest_path, 'r', encoding='utf-8') as f:
+                manifest = json.load(f)
+
+            cached = manifest.get("cached_tag_suggestions")
+            if cached and cached.get("tags"):
+                print(f"[get_cached_tag_suggestions] Found {len(cached['tags'])} cached tags for {source_id}")
+                return {
+                    "success": True,
+                    "tags": cached["tags"],
+                    "topic_count": cached.get("topic_count", 0),
+                    "novel_count": cached.get("novel_count", 0),
+                    "documents_scanned": cached.get("documents_scanned", 0),
+                    "cached_at": cached.get("cached_at"),
+                    "from_cache": True
+                }
+        except Exception as e:
+            print(f"[get_cached_tag_suggestions] Error reading cache: {e}")
+
+        return None
 
     def discover_novel_used_tags(self, source_ids: List[str] = None) -> Dict[str, Any]:
         """

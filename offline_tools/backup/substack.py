@@ -31,6 +31,13 @@ try:
 except ImportError:
     pass
 
+try:
+    from offline_tools.schemas import get_backup_manifest_file
+except ImportError:
+    # Fallback if schemas not available
+    def get_backup_manifest_file():
+        return "backup_manifest.json"
+
 
 class SubstackBackup:
     """
@@ -67,8 +74,8 @@ class SubstackBackup:
         if self.session_cookie:
             self.session.cookies.set("substack.sid", self.session_cookie)
 
-        # Load or create manifest
-        self.manifest_path = self.backup_dir / "manifest.json"
+        # Load or create manifest (v3 schema: backup_manifest.json)
+        self.manifest_path = self.backup_dir / get_backup_manifest_file()
         self.manifest = self._load_manifest()
 
         # Track stats

@@ -21,6 +21,31 @@ from dataclasses import dataclass, field, asdict
 from enum import Enum
 import traceback
 
+# =============================================================================
+# PRE-IMPORT HEAVY MODULES
+# =============================================================================
+# These imports happen at server startup rather than when jobs run,
+# preventing GIL contention that blocks the web server during job submission.
+# The actual import only happens once, subsequent imports are instant.
+
+def _preload_modules():
+    """Pre-load heavy modules in a background thread at startup."""
+    try:
+        # ChromaDB and vector store - heaviest import
+        from offline_tools.vectordb import VectorStore
+        # Source manager - used by most jobs
+        from offline_tools.source_manager import SourceManager
+        # Indexer classes (ZIMIndexer removed Dec 2024 - all sources now use HTML pathway)
+        from offline_tools.indexer import HTMLBackupIndexer
+        print("[JobManager] Heavy modules pre-loaded")
+    except Exception as e:
+        # Non-fatal - modules will be imported on first use
+        print(f"[JobManager] Module pre-load skipped: {e}")
+
+# Start pre-loading in background (doesn't block server startup)
+_preload_thread = threading.Thread(target=_preload_modules, daemon=True)
+_preload_thread.start()
+
 
 class JobStatus(str, Enum):
     PENDING = "pending"
@@ -468,6 +493,11 @@ class Job:
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
 
+    # Dimension tracking for opportunistic scheduling
+    current_dimension: Optional[int] = None      # Active ChromaDB dimension (384/768/1024/1536)
+    current_operation: Optional[str] = None      # "delete" | "index" | None
+    pending_dimensions: List[int] = field(default_factory=list)  # Dimensions still to process
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "id": self.id,
@@ -483,7 +513,10 @@ class Job:
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "started_at": self.started_at.isoformat() if self.started_at else None,
             "completed_at": self.completed_at.isoformat() if self.completed_at else None,
-            "duration_seconds": self._get_duration()
+            "duration_seconds": self._get_duration(),
+            "current_dimension": self.current_dimension,
+            "current_operation": self.current_operation,
+            "pending_dimensions": self.pending_dimensions
         }
 
     def _get_duration(self) -> Optional[float]:
@@ -574,6 +607,12 @@ class JobManager:
     def _run_job(self, job_id: str, func: Callable,
                  args: tuple, kwargs: dict):
         """Execute job in background thread."""
+        # Pause to let the HTTP response complete before heavy work starts
+        # This prevents GIL contention from blocking the web server's response
+        # 2 seconds ensures the browser receives the response and can navigate
+        import time
+        time.sleep(2)
+
         job = self._jobs.get(job_id)
         if not job:
             return
@@ -614,6 +653,9 @@ class JobManager:
                 return job.status == JobStatus.CANCELLED
 
             kwargs['cancel_checker'] = check_cancelled
+
+            # Add job_id for dimension tracking (opportunistic scheduling)
+            kwargs['job_id'] = job_id
 
             # Run the function
             result = func(*args, **kwargs)
@@ -672,6 +714,71 @@ class JobManager:
         with self._job_lock:
             jobs = [job.to_dict() for job in self._jobs.values()]
         return sorted(jobs, key=lambda j: j['created_at'], reverse=True)[:limit]
+
+    # =========================================================================
+    # DIMENSION STATUS - for opportunistic scheduling
+    # =========================================================================
+
+    def get_dimension_status(self) -> Dict[int, Dict[str, Any]]:
+        """
+        Get status of each dimension's ChromaDB usage.
+
+        Returns dict like:
+        {
+            384: {"busy": False, "job_id": None, "operation": None, "source_id": None},
+            768: {"busy": True, "job_id": "abc123", "operation": "index", "source_id": "wiki"},
+            1024: {"busy": False, "job_id": None, "operation": None, "source_id": None},
+            1536: {"busy": True, "job_id": "def456", "operation": "delete", "source_id": "bitcoin"},
+        }
+        """
+        with self._job_lock:
+            status = {dim: {"busy": False, "job_id": None, "operation": None, "source_id": None}
+                      for dim in [384, 768, 1024, 1536]}
+
+            for job in self._jobs.values():
+                if job.status == JobStatus.RUNNING and job.current_dimension:
+                    dim = job.current_dimension
+                    status[dim] = {
+                        "busy": True,
+                        "job_id": job.id,
+                        "operation": job.current_operation,
+                        "source_id": job.source_id
+                    }
+
+            return status
+
+    def is_dimension_busy(self, dimension: int) -> bool:
+        """Quick check if a dimension is currently in use."""
+        status = self.get_dimension_status()
+        return status.get(dimension, {}).get("busy", False)
+
+    def get_available_dimensions(self) -> List[int]:
+        """Get list of dimensions not currently in use."""
+        status = self.get_dimension_status()
+        return [dim for dim, info in status.items() if not info["busy"]]
+
+    def update_job_dimension(self, job_id: str, dimension: Optional[int] = None,
+                             operation: Optional[str] = None) -> bool:
+        """
+        Update a job's current dimension and operation.
+
+        Call this when a job starts/finishes working on a ChromaDB dimension.
+
+        Args:
+            job_id: The job ID
+            dimension: The ChromaDB dimension (384/768/1024/1536) or None when done
+            operation: "delete" | "index" | None
+
+        Returns:
+            True if updated, False if job not found
+        """
+        with self._job_lock:
+            job = self._jobs.get(job_id)
+            if not job:
+                return False
+            job.current_dimension = dimension
+            job.current_operation = operation
+            return True
 
     def get_job_history(self, limit: int = 50, max_age_days: int = 7) -> List[Dict[str, Any]]:
         """

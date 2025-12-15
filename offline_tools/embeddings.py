@@ -198,7 +198,20 @@ class EmbeddingService:
                 "     pip install sentence-transformers"
             )
         from openai import OpenAI
-        self.client = OpenAI(api_key=api_key)
+        import httpx
+
+        # Custom retry configuration with longer delays to avoid 429 rate limit spam
+        # Default OpenAI SDK retries too fast (0.025s), we want minimum 0.25s between retries
+        custom_timeout = httpx.Timeout(60.0, connect=10.0)
+
+        self.client = OpenAI(
+            api_key=api_key,
+            max_retries=3,
+            timeout=custom_timeout
+        )
+        # Store min retry delay for manual backoff in rate limit handling
+        self._min_retry_delay = 0.1
+
         self.model = model
         self._local_model = None
         print(f"Using OpenAI embeddings: {model}")
@@ -249,7 +262,7 @@ class EmbeddingService:
             # OpenAI API - use chunking for long texts
             return self._embed_with_chunking(text)
 
-    def _embed_with_chunking(self, text: str, max_depth: int = 3) -> List[float]:
+    def _embed_with_chunking(self, text: str, max_depth: int = 3, _retry_count: int = 0) -> List[float]:
         """
         Embed text, chunking if it exceeds token limit.
 
@@ -259,10 +272,13 @@ class EmbeddingService:
         Args:
             text: Text to embed
             max_depth: Maximum recursion depth for splitting (default 3 = up to 8 chunks)
+            _retry_count: Internal retry counter for rate limit handling
 
         Returns:
             Embedding vector (averaged if chunked)
         """
+        import time
+
         # Truncate to reasonable max (prevents extremely long texts)
         MAX_CHARS = 32000  # ~8k tokens max, gives room for dense text
         text = text[:MAX_CHARS]
@@ -275,6 +291,16 @@ class EmbeddingService:
             return response.data[0].embedding
         except Exception as e:
             error_str = str(e).lower()
+
+            # Handle rate limit errors with longer delay (429 Too Many Requests)
+            if "429" in str(e) or "rate" in error_str:
+                if _retry_count < 5:
+                    delay = self._min_retry_delay * (2 ** _retry_count)  # Exponential backoff starting at 0.25s
+                    print(f"Rate limited, waiting {delay:.2f}s before retry {_retry_count + 1}/5...")
+                    time.sleep(delay)
+                    return self._embed_with_chunking(text, max_depth, _retry_count + 1)
+                else:
+                    raise Exception(f"Rate limit exceeded after 5 retries: {e}")
 
             # Check if it's a token limit error
             if "token" in error_str or "maximum context length" in error_str:
@@ -407,6 +433,7 @@ class EmbeddingService:
                 return [e.tolist() for e in embeddings]
 
         # OpenAI API path
+        import time
         all_embeddings = []
         MAX_CHARS = 32000
 
@@ -417,24 +444,43 @@ class EmbeddingService:
             if progress_callback:
                 progress_callback(i, total, f"Computing embeddings ({i}/{total})...")
 
-            try:
-                response = self.client.embeddings.create(
-                    model=self.model,
-                    input=batch_truncated
-                )
-                batch_embeddings = [item.embedding for item in response.data]
-                all_embeddings.extend(batch_embeddings)
-            except Exception as e:
-                # If batch fails, try one at a time with chunking support
-                print(f"Batch embedding failed, trying individually with chunking: {e}")
-                for text in batch_truncated:
-                    try:
-                        embedding = self._embed_with_chunking(text)
-                        all_embeddings.append(embedding)
-                    except Exception as e2:
-                        print(f"Failed to embed text after chunking: {e2}")
-                        dim = 1536 if "small" in self.model or "ada" in self.model else 3072
-                        all_embeddings.append([0.0] * dim)
+            # Retry loop for rate limiting
+            retry_count = 0
+            max_retries = 5
+            while retry_count < max_retries:
+                try:
+                    response = self.client.embeddings.create(
+                        model=self.model,
+                        input=batch_truncated
+                    )
+                    batch_embeddings = [item.embedding for item in response.data]
+                    all_embeddings.extend(batch_embeddings)
+                    break  # Success, exit retry loop
+                except Exception as e:
+                    error_str = str(e).lower()
+
+                    # Handle rate limit errors with exponential backoff starting at 0.25s
+                    if "429" in str(e) or "rate" in error_str:
+                        retry_count += 1
+                        if retry_count < max_retries:
+                            delay = self._min_retry_delay * (2 ** (retry_count - 1))  # 0.25, 0.5, 1.0, 2.0s
+                            print(f"Rate limited on batch {i//batch_size}, waiting {delay:.2f}s (retry {retry_count}/{max_retries})...")
+                            time.sleep(delay)
+                            continue
+                        else:
+                            print(f"Rate limit persisted after {max_retries} retries, falling back to individual...")
+
+                    # If batch fails (rate limit exhausted or other error), try one at a time
+                    print(f"Batch embedding failed, trying individually with chunking: {e}")
+                    for text in batch_truncated:
+                        try:
+                            embedding = self._embed_with_chunking(text)
+                            all_embeddings.append(embedding)
+                        except Exception as e2:
+                            print(f"Failed to embed text after chunking: {e2}")
+                            dim = 1536 if "small" in self.model or "ada" in self.model else 3072
+                            all_embeddings.append([0.0] * dim)
+                    break  # Exit retry loop after individual processing
 
         if progress_callback:
             progress_callback(total, total, "Embeddings complete")

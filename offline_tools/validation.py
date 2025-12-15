@@ -554,17 +554,45 @@ def _check_backup(path: Path, source_id: str) -> Tuple[bool, str, int]:
 
 
 def _check_license_allowlist(license_str: str, license_notes: str) -> bool:
-    """Check if license is in allowlist (case-insensitive)."""
+    """Check if license is in allowlist (flexible matching)."""
     if not license_str:
         return False
 
-    # Normalize license string
-    normalized = license_str.strip()
+    import re
 
-    # Check against allowlist (case-insensitive)
+    # Normalize license string - lowercase, strip whitespace
+    normalized = license_str.strip().lower()
+
+    # Remove version numbers like "3.0", "4.0", "2.0"
+    normalized_no_version = re.sub(r'\s*\d+(\.\d+)?\s*$', '', normalized)
+
+    # Normalize CC license format: "cc by-sa" -> "cc-by-sa", "cc by sa" -> "cc-by-sa"
+    normalized_cc = normalized_no_version.replace(' ', '-').replace('--', '-')
+
+    # Check against allowlist
     for allowed in ALLOWED_LICENSES:
-        if normalized.lower() == allowed.lower():
-            # If Custom, require license_notes
+        allowed_lower = allowed.lower()
+
+        # Exact match
+        if normalized == allowed_lower:
+            if allowed == "Custom":
+                return len(license_notes.strip()) >= MIN_LICENSE_NOTES_LENGTH
+            return True
+
+        # Match without version
+        if normalized_no_version == allowed_lower:
+            if allowed == "Custom":
+                return len(license_notes.strip()) >= MIN_LICENSE_NOTES_LENGTH
+            return True
+
+        # Match normalized CC format (handles "CC BY-SA 4.0" matching "CC-BY-SA")
+        if normalized_cc == allowed_lower:
+            if allowed == "Custom":
+                return len(license_notes.strip()) >= MIN_LICENSE_NOTES_LENGTH
+            return True
+
+        # Partial match for CC licenses (e.g., "cc-by-sa" in "cc-by-sa-4.0")
+        if allowed_lower.startswith('cc') and allowed_lower in normalized_cc:
             if allowed == "Custom":
                 return len(license_notes.strip()) >= MIN_LICENSE_NOTES_LENGTH
             return True

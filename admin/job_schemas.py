@@ -216,8 +216,8 @@ JOB_SCHEMAS: Dict[str, JobSchema] = {
             JobParam("sample_count", "int", "Sample Count", default=10,
                      min_value=3, max_value=50,
                      description="Number of random articles to sample for URL detection"),
-            JobParam("auto_apply", "bool", "Auto Apply", default=True,
-                     description="Automatically update manifest if confident detection")
+            JobParam("force_override", "bool", "Override Existing", default=False,
+                     description="Override existing base URL even if already set")
         ],
         should_run_after=["zim_import", "scrape", "metadata"],
         should_run_before=["index_online", "index_offline"]
@@ -313,62 +313,6 @@ JOB_SCHEMAS: Dict[str, JobSchema] = {
 # =============================================================================
 
 PREDEFINED_CHAINS: Dict[str, Dict[str, Any]] = {
-    "generate_source": {
-        "name": "Generate Source",
-        "description": "Full source processing: metadata, both indexes, and tag suggestions",
-        "resumable": True,
-        "phases": [
-            {"job_type": "metadata", "weight": 15, "params": {"resume": True}},
-            {"job_type": "index_online", "weight": 35, "params": {"resume": True}},
-            {"job_type": "index_offline", "weight": 35, "params": {"resume": True}},
-            {"job_type": "suggest_tags", "weight": 15, "params": {}},
-        ]
-    },
-
-    "regenerate_source": {
-        "name": "Regenerate Source",
-        "description": "Nuclear option: clear everything and rebuild from scratch",
-        "resumable": False,
-        "phases": [
-            {"job_type": "metadata", "weight": 10, "params": {"resume": False}},
-            {"job_type": "clear_vectors", "weight": 5, "params": {"dimension": "1536"}},
-            {"job_type": "index_online", "weight": 30, "params": {"force_reindex": True}},
-            {"job_type": "clear_vectors", "weight": 5, "params": {"dimension": "768"}},
-            {"job_type": "index_offline", "weight": 30, "params": {"force_reindex": True}},
-            {"job_type": "suggest_tags", "weight": 20, "params": {}},
-        ]
-    },
-
-    "reindex_online": {
-        "name": "Reindex (Online)",
-        "description": "Clear and rebuild 1536-dim cloud vectors",
-        "resumable": False,
-        "phases": [
-            {"job_type": "clear_vectors", "weight": 10, "params": {"dimension": "1536"}},
-            {"job_type": "index_online", "weight": 90, "params": {"force_reindex": True}},
-        ]
-    },
-
-    "reindex_offline": {
-        "name": "Reindex (Offline)",
-        "description": "Clear and rebuild local vectors",
-        "resumable": False,
-        "phases": [
-            {"job_type": "clear_vectors", "weight": 10, "params": {"dimension": "768"}},
-            {"job_type": "index_offline", "weight": 90, "params": {"force_reindex": True}},
-        ]
-    },
-
-    "cloud_publish": {
-        "name": "Cloud Publish",
-        "description": "Sync to Pinecone and regenerate visualization",
-        "resumable": True,
-        "phases": [
-            {"job_type": "pinecone_sync", "weight": 80, "params": {}},
-            {"job_type": "visualisation", "weight": 20, "params": {}},
-        ]
-    },
-
     # -------------------------------------------------------------------------
     # STAGE 1: Source Preparation (ends with human review of URLs)
     # -------------------------------------------------------------------------
@@ -379,7 +323,7 @@ PREDEFINED_CHAINS: Dict[str, Dict[str, Any]] = {
         "resumable": True,
         "phases": [
             {"job_type": "metadata", "weight": 70, "params": {"resume": True}},
-            {"job_type": "detect_base_url", "weight": 30, "params": {"auto_apply": True}},
+            {"job_type": "detect_base_url", "weight": 30, "params": {}},
         ]
     },
 
@@ -390,12 +334,12 @@ PREDEFINED_CHAINS: Dict[str, Dict[str, Any]] = {
         "phases": [
             {"job_type": "zim_import", "weight": 40, "params": {"min_text_length": 100}},
             {"job_type": "metadata", "weight": 40, "params": {"resume": True}},
-            {"job_type": "detect_base_url", "weight": 20, "params": {"auto_apply": True}},
+            {"job_type": "detect_base_url", "weight": 20, "params": {}},
         ]
     },
 
     # -------------------------------------------------------------------------
-    # STAGE 2: Indexing & Tagging (ends with human review of tags)
+    # STAGE 2: Indexing & Tagging (after URL review, ends with tag review)
     # -------------------------------------------------------------------------
 
     "index_and_tag": {
@@ -430,33 +374,36 @@ PREDEFINED_CHAINS: Dict[str, Dict[str, Any]] = {
     },
 
     # -------------------------------------------------------------------------
-    # LEGACY: Full pipelines (kept for backwards compatibility)
+    # MAINTENANCE: Reindex and republish operations
     # -------------------------------------------------------------------------
 
-    "new_source_full": {
-        "name": "[Legacy] Full Source Setup",
-        "description": "Complete pipeline without review breaks - use staged workflow instead",
-        "resumable": True,
+    "reindex_online": {
+        "name": "Reindex (Online)",
+        "description": "Clear and rebuild 1536-dim cloud vectors",
+        "resumable": False,
         "phases": [
-            {"job_type": "metadata", "weight": 15, "params": {"resume": True}},
-            {"job_type": "detect_base_url", "weight": 5, "params": {"auto_apply": True}},
-            {"job_type": "index_online", "weight": 30, "params": {"resume": True}},
-            {"job_type": "index_offline", "weight": 30, "params": {"resume": True}},
-            {"job_type": "suggest_tags", "weight": 20, "params": {}},
+            {"job_type": "clear_vectors", "weight": 10, "params": {"dimension": "1536"}},
+            {"job_type": "index_online", "weight": 90, "params": {"force_reindex": True}},
         ]
     },
 
-    "zim_full_import": {
-        "name": "[Legacy] ZIM Full Import",
-        "description": "Complete ZIM pipeline without review breaks - use staged workflow instead",
+    "reindex_offline": {
+        "name": "Reindex (Offline)",
+        "description": "Clear and rebuild local vectors",
+        "resumable": False,
+        "phases": [
+            {"job_type": "clear_vectors", "weight": 10, "params": {"dimension": "768"}},
+            {"job_type": "index_offline", "weight": 90, "params": {"force_reindex": True}},
+        ]
+    },
+
+    "cloud_publish": {
+        "name": "Cloud Publish",
+        "description": "Sync to Pinecone and regenerate visualization",
         "resumable": True,
         "phases": [
-            {"job_type": "zim_import", "weight": 20, "params": {"min_text_length": 100}},
-            {"job_type": "metadata", "weight": 15, "params": {"resume": True}},
-            {"job_type": "detect_base_url", "weight": 5, "params": {"auto_apply": True}},
-            {"job_type": "index_online", "weight": 25, "params": {"resume": True}},
-            {"job_type": "index_offline", "weight": 25, "params": {"resume": True}},
-            {"job_type": "suggest_tags", "weight": 10, "params": {}},
+            {"job_type": "pinecone_sync", "weight": 80, "params": {}},
+            {"job_type": "visualisation", "weight": 20, "params": {}},
         ]
     },
 }

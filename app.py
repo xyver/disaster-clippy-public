@@ -8,10 +8,61 @@ FastAPI backend with LangChain integration
 import os
 from pathlib import Path
 from dotenv import load_dotenv
+import logging
+import sys
 
 # Load .env from the same directory as this file (not cwd)
 _env_path = Path(__file__).parent / ".env"
 load_dotenv(_env_path)
+
+# =============================================================================
+# LOGGING CONFIGURATION - Timestamps on all logs, HTTP access logs disabled
+# =============================================================================
+
+# Custom uvicorn log config with timestamps
+# HTTP access logs (GET/POST 200 OK) are disabled via access_log=False in uvicorn.run()
+UVICORN_LOG_CONFIG = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "default": {
+            "format": "%(asctime)s %(levelname)s %(name)s: %(message)s",
+            "datefmt": "%Y-%m-%d %H:%M:%S"
+        }
+    },
+    "handlers": {
+        "default": {
+            "class": "logging.StreamHandler",
+            "formatter": "default",
+            "stream": "ext://sys.stdout"
+        }
+    },
+    "loggers": {
+        "uvicorn": {
+            "handlers": ["default"],
+            "level": "INFO",
+            "propagate": False
+        },
+        "uvicorn.error": {
+            "handlers": ["default"],
+            "level": "INFO",
+            "propagate": False
+        }
+    },
+    "root": {
+        "handlers": ["default"],
+        "level": "INFO"
+    }
+}
+
+# Configure root logger with timestamps (for non-uvicorn logs)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s %(levelname)s %(name)s: %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S',
+    stream=sys.stdout,
+    force=True  # Override any existing config
+)
 
 # Debug: verify env loaded correctly
 _mode = os.getenv("VECTOR_DB_MODE", "NOT_SET")
@@ -2403,26 +2454,12 @@ if __name__ == "__main__":
 
     print(f"Starting Disaster Clippy on http://localhost:{port}")
 
-    # Configure logging to reduce noise - only show errors in access logs
-    import logging
-
-    class ErrorOnlyFilter(logging.Filter):
-        """Filter that only allows non-200 status codes through"""
-        def filter(self, record):
-            # Allow all non-access log messages
-            if not hasattr(record, 'args') or not record.args:
-                return True
-            # For access logs, check the status code (usually 3rd arg)
-            try:
-                if len(record.args) >= 3:
-                    status_code = record.args[2]
-                    if isinstance(status_code, int) and 200 <= status_code < 300:
-                        return False  # Filter out 2xx responses
-            except (TypeError, IndexError):
-                pass
-            return True
-
-    # Apply filter to uvicorn access logger
-    logging.getLogger("uvicorn.access").addFilter(ErrorOnlyFilter())
-
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    # Run uvicorn with timestamps, HTTP access logs disabled (too noisy)
+    # Errors/exceptions still show via uvicorn.error logger
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=port,
+        log_config=UVICORN_LOG_CONFIG,
+        access_log=False  # Disable "GET /path 200 OK" messages
+    )

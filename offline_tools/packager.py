@@ -594,8 +594,10 @@ def generate_metadata_from_html(
         except Exception as e:
             print(f"Warning: Could not load backup manifest: {e}")
 
-    # Check main manifest.json for ZIM source detection
-    main_manifest_path = source_folder / "manifest.json"
+    # Check manifest for ZIM source detection (try _manifest.json first, then legacy manifest.json)
+    main_manifest_path = source_folder / "_manifest.json"
+    if not main_manifest_path.exists():
+        main_manifest_path = source_folder / "manifest.json"
     if main_manifest_path.exists():
         try:
             with open(main_manifest_path, 'r', encoding='utf-8') as f:
@@ -606,16 +608,41 @@ def generate_metadata_from_html(
 
     documents = {}
     total_chars = 0
+    skipped_short = 0
+    skipped_asset = 0
 
-    # Scan HTML files
+    # Folders to skip - these contain supporting assets, not content pages
+    ASSET_FOLDERS = {'css', 'js', 'javascript', 'assets', 'static', 'fonts',
+                     'images', 'img', 'media', 'styles', 'scripts', '_assets',
+                     '_mw_', '_res_', '_webp_'}
+
+    # Minimum text length for content pages (skip stubs/templates)
+    MIN_TEXT_LENGTH = 100
+
+    # Scan HTML files - only in pages/ folder, not asset subfolders
     html_files = list(html_path.rglob('*.html')) + list(html_path.rglob('*.htm'))
 
     for html_file in html_files:
         try:
+            # Skip files in asset folders
+            rel_parts = html_file.relative_to(html_path).parts
+            if any(part.lower() in ASSET_FOLDERS for part in rel_parts[:-1]):
+                skipped_asset += 1
+                continue
+
             with open(html_file, 'r', encoding='utf-8', errors='ignore') as f:
                 content = f.read()
 
             soup = BeautifulSoup(content, 'html.parser')
+
+            # Get text content first to check length
+            text = soup.get_text(separator=' ', strip=True)
+            char_count = len(text)
+
+            # Skip short files (likely templates, error pages, or stubs)
+            if char_count < MIN_TEXT_LENGTH:
+                skipped_short += 1
+                continue
 
             # Extract title
             title = "Untitled"
@@ -624,9 +651,7 @@ def generate_metadata_from_html(
             elif soup.h1:
                 title = soup.h1.get_text(strip=True)
 
-            # Get text content
-            text = soup.get_text(separator=' ', strip=True)
-            char_count = len(text)
+            # text and char_count already extracted above
             total_chars += char_count
 
             # Generate content hash
@@ -673,8 +698,14 @@ def generate_metadata_from_html(
             print(f"Warning: Failed to process {html_file}: {e}")
             continue
 
+    # Log skip statistics
+    total_scanned = len(documents) + skipped_short + skipped_asset
+    print(f"[metadata] Scanned {total_scanned} HTML files: {len(documents)} content pages, "
+          f"{skipped_short} skipped (too short), {skipped_asset} skipped (asset folders)")
+
     if not documents:
-        raise ValueError(f"No HTML files found in {backup_path}")
+        raise ValueError(f"No content HTML files found in {backup_path} "
+                        f"(scanned {total_scanned}, {skipped_short} too short, {skipped_asset} in asset folders)")
 
     # Create metadata structure
     metadata = {
@@ -685,6 +716,9 @@ def generate_metadata_from_html(
         "total_documents": len(documents),
         "document_count": len(documents),
         "total_chars": total_chars,
+        "skipped_short": skipped_short,
+        "skipped_asset_folders": skipped_asset,
+        "min_text_length": MIN_TEXT_LENGTH,
         "documents": documents
     }
 
@@ -979,23 +1013,25 @@ def index_zim_to_chromadb(
     source_id: str
 ) -> Dict[str, Any]:
     """
-    Index ZIM file content to ChromaDB.
+    DEPRECATED: Direct ZIM indexing is no longer supported (Dec 2024).
+
+    ZIM files must be extracted via ZIM import job first, then indexed
+    using index_html_to_chromadb() on the resulting pages/ folder.
 
     Args:
         zim_path: Path to ZIM file
         source_id: Source identifier
 
     Returns:
-        Dict with indexed count and status
+        Dict with error message
     """
-    from offline_tools.indexer import ZIMIndexer
-
-    indexer = ZIMIndexer(
-        zim_path=zim_path,
-        source_id=source_id
-    )
-
-    return indexer.index()
+    return {
+        "success": False,
+        "error": "Direct ZIM indexing is no longer supported. "
+                 "Use ZIM import job first to extract HTML pages, "
+                 "then use index_html_to_chromadb() on the extracted source.",
+        "indexed_count": 0
+    }
 
 
 def index_pdf_to_chromadb(
