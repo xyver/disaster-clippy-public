@@ -122,7 +122,7 @@ async def get_model_info(model_id: str):
 # MODEL DOWNLOAD
 # =============================================================================
 
-def _download_embedding_model(model_id: str, progress_callback=None, cancel_checker=None):
+def _download_embedding_model(model_id: str, progress_callback=None, cancel_checker=None, job_id=None):
     """
     Background job to download an embedding model from HuggingFace.
     """
@@ -252,7 +252,7 @@ def _download_embedding_model(model_id: str, progress_callback=None, cancel_chec
     }
 
 
-def _download_llm_model(model_id: str, progress_callback=None, cancel_checker=None):
+def _download_llm_model(model_id: str, progress_callback=None, cancel_checker=None, job_id=None):
     """
     Background job to download an LLM model (GGUF) from HuggingFace.
     """
@@ -541,7 +541,7 @@ async def get_language_info(lang_code: str):
         raise HTTPException(500, f"Failed to get language info: {str(e)}")
 
 
-def _download_language_pack(lang_code: str, progress_callback=None, cancel_checker=None):
+def _download_language_pack(lang_code: str, progress_callback=None, cancel_checker=None, job_id=None):
     """
     Background job to download a language pack from HuggingFace.
     Downloads both en->lang and lang->en models.

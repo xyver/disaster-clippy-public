@@ -98,37 +98,76 @@
                 document.getElementById('vectorDbLabel').textContent = 'ChromaDB (Local)';
             }
 
-            // Load local stats (always available)
+            // Load local stats (always available) with timeout
             try {
-                const statusResp = await fetch('/useradmin/api/status');
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 5000);
+
+                const statusResp = await fetch('/useradmin/api/status', { signal: controller.signal });
+                clearTimeout(timeoutId);
                 const status = await statusResp.json();
 
                 if (!globalMode) {
-                    document.getElementById('totalSources').textContent = status.local_sources || 0;
-                    document.getElementById('totalDocs').textContent = (status.total_documents || 0).toLocaleString();
-                    document.getElementById('storageUsed').textContent = status.storage_mb ? status.storage_mb + ' MB' : '-';
+                    const sources = status.local_sources || 0;
+                    const docs = status.total_documents || 0;
+                    document.getElementById('totalSources').textContent = sources;
+                    document.getElementById('totalDocs').textContent = docs.toLocaleString();
+                    document.getElementById('storageUsed').textContent = status.storage_mb ? status.storage_mb + ' MB' : '0 MB';
+
+                    // Show helpful message if empty
+                    if (sources === 0 && docs === 0) {
+                        document.getElementById('totalSources').textContent = '0';
+                        document.getElementById('totalSources').title = 'No sources yet. Visit Cloud to download packs.';
+                    }
                 }
             } catch (e) {
                 console.error('Error loading status:', e);
+                if (e.name === 'AbortError') {
+                    document.getElementById('totalSources').textContent = '...';
+                    document.getElementById('totalSources').title = 'Database busy (indexing). Refresh later.';
+                    document.getElementById('totalDocs').textContent = '...';
+                } else {
+                    document.getElementById('totalSources').textContent = '0';
+                    document.getElementById('totalDocs').textContent = '0';
+                }
             }
 
-            // Load ChromaDB status (for local mode)
+            // Load ChromaDB status (for local mode) with timeout
             if (!globalMode) {
+                const chromaCard = document.getElementById('vectorDbStatus');
                 try {
-                    const chromaResp = await fetch('/useradmin/api/chromadb-status');
+                    const controller = new AbortController();
+                    const timeoutId = setTimeout(() => controller.abort(), 5000);
+
+                    const chromaResp = await fetch('/useradmin/api/chromadb-status', { signal: controller.signal });
+                    clearTimeout(timeoutId);
                     const chroma = await chromaResp.json();
-                    const chromaCard = document.getElementById('vectorDbStatus');
 
                     if (chroma.connected) {
                         chromaCard.querySelector('.stat-value').textContent = 'Connected';
                         chromaCard.querySelector('.stat-value').style.color = '#4ecca3';
-                        document.getElementById('vectorCount').textContent = (chroma.total_vectors || 0).toLocaleString();
+                        const vectorCount = chroma.total_vectors || 0;
+                        document.getElementById('vectorCount').textContent = vectorCount.toLocaleString();
+                        // Show helpful message if empty
+                        if (vectorCount === 0) {
+                            document.getElementById('vectorCount').title = 'No vectors yet. Install sources from Cloud.';
+                        }
                     } else {
                         chromaCard.querySelector('.stat-value').textContent = 'Not Available';
                         chromaCard.querySelector('.stat-value').style.color = '#f9a825';
+                        document.getElementById('vectorCount').textContent = '0';
                     }
                 } catch (e) {
-                    document.getElementById('vectorDbStatus').querySelector('.stat-value').textContent = 'Error';
+                    if (e.name === 'AbortError') {
+                        chromaCard.querySelector('.stat-value').textContent = 'Busy';
+                        chromaCard.querySelector('.stat-value').style.color = '#f9a825';
+                        chromaCard.querySelector('.stat-value').title = 'Database busy (indexing)';
+                        document.getElementById('vectorCount').textContent = '...';
+                    } else {
+                        chromaCard.querySelector('.stat-value').textContent = 'Error';
+                        chromaCard.querySelector('.stat-value').style.color = '#e94560';
+                        document.getElementById('vectorCount').textContent = '-';
+                    }
                 }
             }
 
