@@ -470,10 +470,10 @@ class MetadataIndex:
     def get_stats(self) -> Dict[str, Any]:
         """Get index statistics from master"""
         return {
-            "total_documents": self._master["total_documents"],
+            "total_documents": self._master.get("total_documents", 0),
             "total_chars": self._master.get("total_chars", 0),
-            "last_updated": self._master["last_updated"],
-            "sources": self._master["sources"]
+            "last_updated": self._master.get("last_updated"),
+            "sources": self._master.get("sources", {})
         }
 
     def get_source_breakdown(self) -> Dict[str, int]:
@@ -634,15 +634,15 @@ class MetadataIndex:
             "=" * 60,
             "METADATA INDEX SUMMARY",
             "=" * 60,
-            f"Total Documents: {self._master['total_documents']}",
+            f"Total Documents: {self._master.get('total_documents', 0)}",
             f"Total Characters: {self._master.get('total_chars', 0):,}",
-            f"Last Updated: {self._master['last_updated'] or 'Never'}",
+            f"Last Updated: {self._master.get('last_updated') or 'Never'}",
             f"Index Location: {self.index_dir}",
             "",
             "Sources:",
         ]
 
-        for source, info in self._master["sources"].items():
+        for source, info in self._master.get("sources", {}).items():
             topics_str = ", ".join(info.get("topics", [])[:3]) or "none detected"
             lines.append(f"  - {source}: {info['count']} docs, {info.get('chars', 0):,} chars")
             lines.append(f"      Topics: {topics_str}")

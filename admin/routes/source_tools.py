@@ -927,7 +927,7 @@ async def start_scrape(request: StartScrapeRequest):
     def _run_scrape_job(source_id: str, url: str, page_limit: int,
                         include_assets: bool, follow_links: bool, max_depth: int,
                         request_delay: float,
-                        progress_callback=None, cancel_checker=None):
+                        progress_callback=None, cancel_checker=None, job_id=None):
         from offline_tools.backup.html import run_backup
         from urllib.parse import urlparse
 
@@ -1074,7 +1074,7 @@ async def generate_metadata(request: GenerateMetadataRequest):
 
     def _run_generate_metadata(source_id: str, language_filter: str = None,
                                resume: bool = False, progress_callback=None,
-                               cancel_checker=None):
+                               cancel_checker=None, job_id=None):
         from offline_tools.source_manager import SourceManager
         manager = SourceManager()
         result = manager.generate_metadata(
@@ -1148,7 +1148,7 @@ async def create_index(request: CreateIndexRequest):
     def _run_create_index(source_id: str, limit: int, force: bool,
                           language_filter: str = None, resume: bool = False,
                           dimension: int = 1536,
-                          progress_callback=None, cancel_checker=None):
+                          progress_callback=None, cancel_checker=None, job_id=None):
         from offline_tools.source_manager import SourceManager
         manager = SourceManager()
         result = manager.create_index(
@@ -1228,7 +1228,7 @@ async def clear_vectors(request: ClearVectorsRequest):
     from admin.job_manager import get_job_manager
 
     def _run_clear_vectors(source_id: str, dimension: int,
-                           progress_callback=None, cancel_checker=None):
+                           progress_callback=None, cancel_checker=None, job_id=None):
         from offline_tools.vectordb import get_vector_store
 
         if progress_callback:
@@ -1306,7 +1306,7 @@ async def reindex_source(request: ReindexRequest):
     from admin.job_manager import get_job_manager, JobPhase, run_combined_job
 
     def _run_clear_phase(source_id: str, dimension: int,
-                         progress_callback=None, cancel_checker=None):
+                         progress_callback=None, cancel_checker=None, job_id=None):
         """Phase 1: Clear existing vectors"""
         from offline_tools.vectordb import get_vector_store
 
@@ -1331,7 +1331,7 @@ async def reindex_source(request: ReindexRequest):
 
     def _run_index_phase(source_id: str, limit: int, force: bool,
                          language_filter: str, dimension: int,
-                         progress_callback=None, cancel_checker=None):
+                         progress_callback=None, cancel_checker=None, job_id=None):
         """Phase 2: Create fresh index"""
         from offline_tools.source_manager import SourceManager
 
@@ -1354,7 +1354,7 @@ async def reindex_source(request: ReindexRequest):
 
     def _run_reindex_combined(source_id: str, limit: int, force: bool,
                               language_filter: str, dimension: int,
-                              progress_callback=None, cancel_checker=None):
+                              progress_callback=None, cancel_checker=None, job_id=None):
         """Combined job: clear then index"""
         phases = [
             JobPhase(
@@ -1529,7 +1529,7 @@ async def generate_768_vectors(request: Generate768VectorsRequest):
             "Local embedding model not available. Install from Models tab first."
         )
 
-    def _run_generate_768(source_id: str, progress_callback=None, cancel_checker=None):
+    def _run_generate_768(source_id: str, progress_callback=None, cancel_checker=None, job_id=None):
         """Background job to generate 768-dim vectors"""
         from offline_tools.source_manager import SourceManager
         from offline_tools.indexer import generate_768_vectors
@@ -1791,7 +1791,7 @@ async def suggest_tags_job(request: dict):
     if not source_id:
         raise HTTPException(400, "source_id is required")
 
-    def _run_suggest_tags(source_id: str, progress_callback=None, cancel_checker=None):
+    def _run_suggest_tags(source_id: str, progress_callback=None, cancel_checker=None, job_id=None):
         from offline_tools.source_manager import SourceManager
 
         manager = SourceManager()
@@ -2066,7 +2066,7 @@ async def rename_source(request: RenameSourceRequest):
         raise HTTPException(500, f"Rename failed: {e}")
 
 
-def _run_delete_job(source_id: str, delete_files: bool, progress_callback=None, cancel_checker=None):
+def _run_delete_job(source_id: str, delete_files: bool, progress_callback=None, cancel_checker=None, job_id=None):
     """Background job to delete a source from the system"""
     import shutil
 
@@ -2447,7 +2447,7 @@ async def index_zim_file(request: ZIMIndexRequest):
     if not zim_path.exists():
         raise HTTPException(404, f"ZIM file not found: {request.zim_path}")
 
-    def _run_zim_index(zim_path: str, source_id: str, limit: int, progress_callback=None, cancel_checker=None):
+    def _run_zim_index(zim_path: str, source_id: str, limit: int, progress_callback=None, cancel_checker=None, job_id=None):
         """
         DEPRECATED: Direct ZIM indexing is no longer supported (Dec 2024).
         ZIM files must be extracted via ZIM import job first.
@@ -2639,7 +2639,7 @@ class TranslateSourceRequest(BaseModel):
 
 def _run_translate_source_job(source_id: str, language: str, batch_size: int = 10,
                                skip_cached: bool = True, progress_callback=None,
-                               cancel_checker=None):
+                               cancel_checker=None, job_id=None):
     """
     Background job to pre-cache translations for all documents in a source.
     """
@@ -2793,7 +2793,7 @@ class InstallSourceRequest(BaseModel):
     sync_mode: str = "update"  # "update" (add/merge) or "replace" (delete old vectors first)
 
 
-def _run_install_job(source_id: str, include_backup: bool, sync_mode: str = "update", progress_callback=None, cancel_checker=None):
+def _run_install_job(source_id: str, include_backup: bool, sync_mode: str = "update", progress_callback=None, cancel_checker=None, job_id=None):
     """Background job function for source installation"""
     from offline_tools.source_manager import install_source_from_cloud
     from offline_tools.vectordb.metadata import MetadataIndex
@@ -3081,23 +3081,25 @@ async def test_source_links(source_id: str, test_base_url: Optional[str] = None)
             constructed_url = stored_url
         elif base_url:
             if is_zim_source:
-                # ZIM sources: extract filename from local_url and preserve underscores
-                # local_url is like /backup/source_id/Article_Name.html or /zim/source_id/Article_Name
-                filename = ""
-                if local_url:
-                    # Get the last path segment (the filename)
-                    filename = local_url.rstrip("/").split("/")[-1]
-                    # Remove .html extension for URL
-                    if filename.endswith(".html"):
-                        filename = filename[:-5]
-                    elif filename.endswith(".htm"):
-                        filename = filename[:-4]
-
-                if filename:
-                    # Keep underscores - they're part of the Wikipedia article name
-                    constructed_url = base_url.rstrip("/") + "/" + filename
+                # ZIM sources (MediaWiki): Use TITLE to construct URL
+                # The filename has slashes encoded as underscores, but wiki URLs preserve slashes
+                # Title: "Crypto News 24/7" -> Wiki URL: "Crypto_News_24/7"
+                # (spaces become underscores, but slashes stay as slashes)
+                title = doc.get("title", "")
+                if title:
+                    # Convert spaces to underscores, but preserve slashes
+                    wiki_path = title.replace(" ", "_")
+                    constructed_url = base_url.rstrip("/") + "/" + wiki_path
                 else:
-                    constructed_url = stored_url
+                    # Fallback to filename if no title
+                    filename = ""
+                    if local_url:
+                        filename = local_url.rstrip("/").split("/")[-1]
+                        if filename.endswith(".html"):
+                            filename = filename[:-5]
+                        elif filename.endswith(".htm"):
+                            filename = filename[:-4]
+                    constructed_url = base_url.rstrip("/") + "/" + filename if filename else stored_url
             else:
                 # HTML sources: stored_url already has correct path structure with slashes
                 if stored_url:

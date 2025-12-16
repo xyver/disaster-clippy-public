@@ -1004,6 +1004,7 @@ class SourceManager:
         # Check if this is a ZIM source (underscores should be preserved in URLs)
         # ZIM sources (Wikipedia/MediaWiki) use underscores in article URLs
         is_zim_source = False
+        zim_path = None
         manifest_path = source_path / "_manifest.json"  # v3 schema
         if not manifest_path.exists():
             manifest_path = source_path / "manifest.json"  # legacy fallback
@@ -1012,8 +1013,47 @@ class SourceManager:
                 with open(manifest_path, 'r', encoding='utf-8') as f:
                     existing_manifest = json.load(f)
                 is_zim_source = existing_manifest.get("created_from") == "zim_import"
+                zim_path = existing_manifest.get("zim_path")
             except Exception:
                 pass
+
+        # For ZIM sources, try to read original URLs from ZIM file
+        # This preserves slashes in article names (e.g., "Crypto_News_24/7")
+        zim_url_map = {}  # filename -> original_url
+        if is_zim_source and zim_path:
+            try:
+                from zimply_core.zim_core import ZIMFile
+                zim_file_path = Path(zim_path)
+                if zim_file_path.exists():
+                    if progress_callback:
+                        progress_callback(0, len(html_files), "Reading URLs from ZIM file...")
+                    zim = ZIMFile(str(zim_file_path), 'utf-8')
+                    article_count = zim.header_fields.get('articleCount', 0)
+                    for i in range(article_count):
+                        try:
+                            article = zim.get_article_by_id(i)
+                            if article is None:
+                                continue
+                            url = getattr(article, 'url', '') or ''
+                            mimetype = str(getattr(article, 'mimetype', ''))
+                            if 'text/html' not in mimetype:
+                                continue
+                            # Build the same filename that ZIM import creates
+                            safe_url = url.replace('/', '_').replace('\\', '_').replace(':', '_')
+                            if not safe_url.endswith('.html'):
+                                safe_url += '.html'
+                            zim_url_map[safe_url] = url
+                        except Exception:
+                            continue
+                    try:
+                        zim.close()
+                    except Exception:
+                        pass
+                    print(f"[scan_backup] Loaded {len(zim_url_map)} URLs from ZIM file")
+            except ImportError:
+                print("[scan_backup] zimply-core not available, using filename-based URLs")
+            except Exception as e:
+                print(f"[scan_backup] Could not read ZIM for URLs: {e}")
 
         for i, html_file in enumerate(html_files):
             try:
@@ -1030,9 +1070,14 @@ class SourceManager:
                 except Exception:
                     pass  # Use filename-based title
 
-                # Reconstruct URL from filename using centralized function
-                # ZIM sources preserve underscores, HTML scrapes convert to slashes
-                url = html_filename_to_url(filename, is_zim_source=is_zim_source)
+                # For ZIM sources: prefer original URL from ZIM file
+                # This preserves slashes (e.g., "Crypto_News_24/7" vs "Crypto_News_24_7")
+                if filename in zim_url_map:
+                    url = zim_url_map[filename]
+                else:
+                    # Reconstruct URL from filename using centralized function
+                    # ZIM sources preserve underscores, HTML scrapes convert to slashes
+                    url = html_filename_to_url(filename, is_zim_source=is_zim_source)
 
                 # Get file size
                 file_size = html_file.stat().st_size
@@ -3244,6 +3289,27 @@ def download_source_pack(
         result["files_downloaded"] = downloaded
         # Success if we downloaded or skipped files (skipped = already had them)
         result["success"] = len(downloaded) > 0 or len(skipped) > 0
+
+        # Extract HTML zip files if present (for browseable content)
+        html_zip_name = f"{source_id}-html.zip"
+        html_zip_path = dest_path / html_zip_name
+        if html_zip_path.exists():
+            pages_folder = dest_path / "pages"
+            # Only extract if pages folder doesn't exist or is empty
+            if not pages_folder.exists() or not any(pages_folder.iterdir()):
+                import zipfile
+                try:
+                    if progress_callback:
+                        progress_callback(f"Extracting {html_zip_name}...", total_files, total_files)
+                    with zipfile.ZipFile(html_zip_path, 'r') as zf:
+                        zf.extractall(dest_path)
+                    result["html_extracted"] = True
+                    print(f"[download_source_pack] Extracted {html_zip_name} to {dest_path}")
+                except Exception as e:
+                    print(f"[download_source_pack] Warning: Failed to extract {html_zip_name}: {e}")
+                    result["html_extract_error"] = str(e)
+            else:
+                result["html_extracted"] = "skipped (pages folder exists)"
 
     except Exception as e:
         result["error"] = str(e)

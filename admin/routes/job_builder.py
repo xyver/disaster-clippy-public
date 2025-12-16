@@ -363,7 +363,7 @@ async def run_chain(request: RunChainRequest):
     custom_source_name = request.source_name
 
     # Create wrapper function that runs the combined job
-    def _run_custom_chain(progress_callback=None, cancel_checker=None):
+    def _run_custom_chain(progress_callback=None, cancel_checker=None, job_id=None):
         print(f"[job_builder] Starting custom chain: {job_type_name} for {effective_source_id}")
         print(f"[job_builder] Phases: {[p.name for p in phases]}")
         try:
@@ -463,7 +463,7 @@ def get_job_function(job_type: str, source_id: str, params: Dict[str, Any]):
     """
 
     if job_type == "metadata":
-        def run_metadata(progress_callback=None, cancel_checker=None):
+        def run_metadata(progress_callback=None, cancel_checker=None, job_id=None):
             from offline_tools.source_manager import SourceManager
             manager = SourceManager()
 
@@ -585,7 +585,7 @@ def get_job_function(job_type: str, source_id: str, params: Dict[str, Any]):
         return run_clear_vectors
 
     elif job_type == "suggest_tags":
-        def run_suggest_tags(progress_callback=None, cancel_checker=None):
+        def run_suggest_tags(progress_callback=None, cancel_checker=None, job_id=None):
             from offline_tools.source_manager import SourceManager
 
             manager = SourceManager()
@@ -603,7 +603,7 @@ def get_job_function(job_type: str, source_id: str, params: Dict[str, Any]):
         return run_suggest_tags
 
     elif job_type == "pinecone_sync":
-        def run_pinecone_sync(progress_callback=None, cancel_checker=None):
+        def run_pinecone_sync(progress_callback=None, cancel_checker=None, job_id=None):
             from admin.cloud_upload import push_to_pinecone
 
             dry_run = params.get("dry_run", False)
@@ -619,7 +619,7 @@ def get_job_function(job_type: str, source_id: str, params: Dict[str, Any]):
         return run_pinecone_sync
 
     elif job_type == "visualisation":
-        def run_visualisation(progress_callback=None, cancel_checker=None):
+        def run_visualisation(progress_callback=None, cancel_checker=None, job_id=None):
             from admin.cloud_upload import generate_knowledge_map
 
             result = generate_knowledge_map(
@@ -632,7 +632,7 @@ def get_job_function(job_type: str, source_id: str, params: Dict[str, Any]):
         return run_visualisation
 
     elif job_type == "install_source":
-        def run_install_source(progress_callback=None, cancel_checker=None):
+        def run_install_source(progress_callback=None, cancel_checker=None, job_id=None):
             from admin.routes.source_tools import _run_install_job
 
             # Use cloud_source_id from params (not the main source_id)
@@ -655,7 +655,7 @@ def get_job_function(job_type: str, source_id: str, params: Dict[str, Any]):
         return run_install_source
 
     elif job_type == "translate_source":
-        def run_translate_source(progress_callback=None, cancel_checker=None):
+        def run_translate_source(progress_callback=None, cancel_checker=None, job_id=None):
             from admin.routes.source_tools import _run_translate_source_job
 
             language = params.get("language", "")
@@ -678,7 +678,7 @@ def get_job_function(job_type: str, source_id: str, params: Dict[str, Any]):
         return run_translate_source
 
     elif job_type == "zim_import":
-        def run_zim_import(progress_callback=None, cancel_checker=None):
+        def run_zim_import(progress_callback=None, cancel_checker=None, job_id=None):
             """
             Combined ZIM Import job that:
             1. Opens and analyzes ZIM file
@@ -817,6 +817,7 @@ def get_job_function(job_type: str, source_id: str, params: Dict[str, Any]):
             extracted_count = 0
             skipped_count = 0
             total_text_length = 0
+            backup_pages = {}  # Track original URLs for backup_manifest.json
 
             for i in range(article_count):
                 if cancel_checker and cancel_checker():
@@ -837,6 +838,7 @@ def get_job_function(job_type: str, source_id: str, params: Dict[str, Any]):
                         continue
 
                     url = getattr(article, 'url', '') or ''
+                    title = getattr(article, 'title', '') or ''
                     mimetype = str(getattr(article, 'mimetype', ''))
 
                     # Only process HTML content
@@ -856,7 +858,7 @@ def get_job_function(job_type: str, source_id: str, params: Dict[str, Any]):
                         continue
 
                     # Extract to pages folder
-                    # Clean up URL for filesystem
+                    # Clean up URL for filesystem (slashes, backslashes, colons become underscores)
                     safe_url = url.replace('/', '_').replace('\\', '_').replace(':', '_')
                     if not safe_url.endswith('.html'):
                         safe_url += '.html'
@@ -864,6 +866,15 @@ def get_job_function(job_type: str, source_id: str, params: Dict[str, Any]):
                     page_file = pages_path / safe_url
                     with open(page_file, 'w', encoding='utf-8') as f:
                         f.write(content)
+
+                    # Track in backup_manifest: original ZIM URL -> filename
+                    # This preserves slashes in the URL (e.g., "Crypto_News_24/7")
+                    # so we can reconstruct the correct online URL later
+                    backup_pages[url] = {
+                        "filename": safe_url,
+                        "title": title or url,
+                        "size": len(content)
+                    }
 
                     extracted_count += 1
                     total_text_length += text_len
@@ -936,6 +947,24 @@ def get_job_function(job_type: str, source_id: str, params: Dict[str, Any]):
             with open(manifest_path, 'w', encoding='utf-8') as f:
                 json.dump(manifest, f, indent=2, ensure_ascii=False)
 
+            # Save backup_manifest.json with original ZIM URLs
+            # This is critical for preserving slashes in article names
+            # (e.g., "Crypto_News_24/7" -> filename "Crypto_News_24_7.html")
+            from datetime import datetime as dt
+            backup_manifest = {
+                "schema_version": 3,
+                "source_id": derived_source_id,
+                "base_url": manifest.get("base_url", ""),
+                "scraper_type": "zim",
+                "created_at": dt.now().isoformat(),
+                "last_updated": dt.now().isoformat(),
+                "total_pages": len(backup_pages),
+                "pages": backup_pages
+            }
+            backup_manifest_path = source_path / "backup_manifest.json"
+            with open(backup_manifest_path, 'w', encoding='utf-8') as f:
+                json.dump(backup_manifest, f, indent=2, ensure_ascii=False)
+
             if progress_callback:
                 progress_callback(100, 100, f"Import complete: {extracted_count} pages extracted")
 
@@ -959,7 +988,7 @@ def get_job_function(job_type: str, source_id: str, params: Dict[str, Any]):
         return run_zim_import
 
     elif job_type == "detect_base_url":
-        def run_detect_base_url(progress_callback=None, cancel_checker=None):
+        def run_detect_base_url(progress_callback=None, cancel_checker=None, job_id=None):
             """
             Sample URLs from source and auto-detect base URL pattern.
 
@@ -1292,7 +1321,7 @@ async def resume_chain(request: ResumeChainRequest):
         ))
 
     # Create wrapper that resumes
-    def _resume_custom_chain(progress_callback=None, cancel_checker=None):
+    def _resume_custom_chain(progress_callback=None, cancel_checker=None, job_id=None):
         print(f"[job_builder] Resuming custom chain: {request.job_type} for {request.source_id}")
         try:
             result = run_combined_job(
