@@ -83,58 +83,52 @@ def html_filename_to_url(filename: str, is_zim_source: bool = False) -> str:
     """
     Convert an HTML backup filename to a URL path.
 
-    The scraper saves files like:
-        Projects_Cooling_ACEvapCool.htm.html  (original was .htm)
-        Projects_Cooling_SolarAC.html         (original was .html or no extension)
+    IMPORTANT: This function preserves underscores in filenames since many websites
+    use underscores in their URLs (e.g., about_me.htm). The scraper uses underscores
+    to encode path separators, but this is lossy - we cannot distinguish between
+    original underscores and encoded slashes.
 
-    This converts them to URL paths:
-        /Projects/Cooling/ACEvapCool.htm
-        /Projects/Cooling/SolarAC
+    The backup_manifest stores the original URL, which should be used when available.
+    This function is a fallback for when no manifest exists.
 
-    For ZIM sources, there are two formats:
-
-    1. Wikipedia-style ZIMs: underscores are part of the article name
-        Anatomical_terms_of_location.html -> Anatomical_terms_of_location
-
-    2. WARC-style ZIMs (web archives): filenames contain full domain
+    For WARC-style ZIMs (web archives), the filename contains the full domain:
         www.ready.gov_alerts.html -> https://www.ready.gov/alerts
-        www.fema.gov_locations.html -> https://www.fema.gov/locations
 
     Args:
-        filename: The HTML filename (e.g., "Projects_Cooling_Page.htm.html")
-        is_zim_source: If True, check for WARC or Wikipedia-style ZIM format
+        filename: The HTML filename (e.g., "Contact_about_me.htm.html")
+        is_zim_source: If True, check for WARC-style ZIM format
 
     Returns:
-        URL path or full URL for WARC-style sources
+        URL path (preserving underscores) or full URL for WARC-style sources
     """
     # Preserve .htm extension (scraper adds .html to all files including .htm)
     # Order matters: check .htm.html first, then .html
     url_path = filename.replace(".htm.html", ".htm").replace(".html", "")
 
-    if is_zim_source:
-        # Check for WARC-style ZIM (filename starts with domain like www.domain.com_)
-        # These have a dot before the first underscore (domain pattern)
-        first_underscore = url_path.find('_')
-        if first_underscore > 0:
-            prefix = url_path[:first_underscore]
-            # Check if prefix looks like a domain (contains at least one dot)
-            if '.' in prefix and not prefix.startswith('.'):
-                # WARC-style: extract domain and path
-                domain = prefix
-                path_part = url_path[first_underscore + 1:] if first_underscore < len(url_path) - 1 else ''
-                # Convert remaining underscores in path to slashes
-                path = path_part.replace('_', '/')
-                # Handle empty path (homepage)
-                if not path:
-                    return f"https://{domain}/"
-                return f"https://{domain}/{path}"
+    # Check for WARC-style format (filename starts with domain like www.domain.com_)
+    # These have a dot before the first underscore (domain pattern)
+    # This applies to both ZIM and HTML sources that were scraped from WARC archives
+    first_underscore = url_path.find('_')
+    if first_underscore > 0:
+        prefix = url_path[:first_underscore]
+        # Check if prefix looks like a domain (contains at least one dot)
+        if '.' in prefix and not prefix.startswith('.'):
+            # WARC-style: extract domain and path
+            domain = prefix
+            path_part = url_path[first_underscore + 1:] if first_underscore < len(url_path) - 1 else ''
+            # Convert remaining underscores in path to slashes for WARC sources
+            # (WARC archives don't have underscores in paths, only as path separators)
+            path = path_part.replace('_', '/')
+            # Handle empty path (homepage)
+            if not path:
+                return f"https://{domain}/"
+            return f"https://{domain}/{path}"
 
-        # Wikipedia-style ZIM: underscores are part of the article name
-        return url_path
-    else:
-        # HTML scrapes: underscores represent path separators
-        url_path = url_path.replace("_", "/")
-        return f"/{url_path}"
+    # Non-WARC sources: preserve underscores as they may be part of the actual URL
+    # The original URL structure is lost in the filename encoding, so we just
+    # return the filename as a flat path. The backup_manifest should be used
+    # for accurate URL reconstruction.
+    return f"/{url_path}"
 
 
 def html_filename_to_title(filename: str) -> str:
@@ -587,8 +581,16 @@ class DocumentMetadata:
     doc_type: str = "article"  # article, guide, research, product
     scraped_at: str = ""
 
+    # PDF-specific fields (optional - only set for PDF sources)
+    parent_pdf: Optional[str] = None  # Original PDF filename
+    page_start: Optional[int] = None  # First page in this chunk
+    page_end: Optional[int] = None    # Last page in this chunk
+    chunk_index: Optional[int] = None # Index of this chunk (0-based)
+    total_chunks: Optional[int] = None # Total chunks from parent PDF
+    total_pages: Optional[int] = None  # Total pages in parent PDF
+
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        result = {
             "title": self.title,
             "url": self.url,
             "content_hash": self.content_hash,
@@ -597,6 +599,20 @@ class DocumentMetadata:
             "doc_type": self.doc_type,
             "scraped_at": self.scraped_at,
         }
+        # Only include PDF fields if set (keeps JSON clean for non-PDF sources)
+        if self.parent_pdf is not None:
+            result["parent_pdf"] = self.parent_pdf
+        if self.page_start is not None:
+            result["page_start"] = self.page_start
+        if self.page_end is not None:
+            result["page_end"] = self.page_end
+        if self.chunk_index is not None:
+            result["chunk_index"] = self.chunk_index
+        if self.total_chunks is not None:
+            result["total_chunks"] = self.total_chunks
+        if self.total_pages is not None:
+            result["total_pages"] = self.total_pages
+        return result
 
 
 @dataclass

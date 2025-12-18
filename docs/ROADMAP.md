@@ -349,21 +349,33 @@ All indexers (ZIM, HTML, PDF) now use incremental indexing via `VectorStore.add_
 
 Structured ingestion and management for PDF documents.
 
-**Status:** Partial (indexer ready, needs serving routes)
+**Status:** CORE IMPLEMENTED (Dec 2025)
 
-**What exists:**
-- `PDFIndexer` class in [offline_tools/indexer.py](offline_tools/indexer.py) - extracts text, chunks long docs
-- Metadata extraction (title, author from PDF properties)
-- Text extraction via PyMuPDF or pypdf
+**Implemented (Dec 2025):**
+- `PDFIndexer` class with page-aware extraction and chunking
+- Page tracking: each chunk knows which pages it spans (page_start, page_end)
+- 300-char chunk overlap for context preservation at boundaries
+- Browser-navigable URLs using `#page=N` (works in Chrome, Firefox, Edge)
+- PDF server at `/pdf/{source_id}/{filename}` for local serving
+- Enhanced metadata extraction (title, author, page_count, file_size)
+- PDF-specific fields in DocumentMetadata schema
 
-**What's missing:**
-- `/pdf/{source_id}/{filename}` route to serve PDFs locally (browser handles rendering)
+**Key Files:**
+- `offline_tools/indexer.py` - PDFIndexer class with new methods:
+  - `_extract_text_with_pages()` - preserves page boundaries
+  - `_extract_enhanced_metadata()` - comprehensive PDF metadata
+  - `_chunk_pages_with_overlap()` - 300-char overlap, page tracking
+- `admin/pdf_server.py` - serves PDFs with browser page navigation
+- `offline_tools/schemas.py` - PDF fields (parent_pdf, page_start, page_end, chunk_index, total_chunks, total_pages)
+
+**URL Pattern:**
+- `url`: `/pdf/{source_id}/filename.pdf#page=47` - browser jumps to page
+- `local_url`: `file:///path/to/doc.pdf#page=47` - works for local files
+
+**What's Still Missing:**
 - R2 upload for cloud distribution
 - Dashboard UI for PDF ingestion
-
-**URL handling:**
-- `local_url`: `/pdf/{source_id}/doc.pdf` - needs serving route (not yet implemented)
-- `url`: `https://r2.../sources/{source_id}/doc.pdf` - for cloud access (PDFs often have no original online location)
+- Collection-based organization UI
 
 **Features (planned):**
 - Collection-based organization (group PDFs by topic/author)
@@ -371,7 +383,6 @@ Structured ingestion and management for PDF documents.
 - DOI detection and CrossRef citation lookup
 - License classification (public domain, open access, restricted)
 - R2 hosting for public domain PDFs
-- Smart chunking with section header detection
 
 **Input Methods:**
 - Single PDF file
@@ -395,6 +406,100 @@ python cli/ingest.py pdf add <file_or_folder> --collection <name>
 python cli/ingest.py pdf list
 python cli/ingest.py pdf create-collection <name> --license <type>
 ```
+
+---
+
+### OCR for Scanned PDFs
+
+Many historical and archival PDFs are image-only scans without a text layer.
+
+**Status:** PLANNED (High Priority)
+
+**The Problem:**
+- Book scans, historical documents, government archives often have no text layer
+- `PDFIndexer` extracts 0 characters from these files
+- Valuable content is invisible to search
+
+**Recommended Tools:**
+
+| Tool | Description | Platform |
+|------|-------------|----------|
+| **OCRmyPDF** | Adds text layer to PDFs (preserves original) | Python, CLI |
+| **Tesseract** | Core OCR engine (used by OCRmyPDF) | C++, many bindings |
+| **pdftoppm** (poppler-utils) | Converts PDF pages to images for OCR | CLI |
+
+**Proposed Approach: Preprocessing Pipeline**
+
+OCR should be a separate preprocessing step, not part of indexing:
+
+```
+1. Detect: Check if PDF has text layer (char_count < threshold)
+2. Convert: pdftoppm -> page images (PNG/TIFF)
+3. OCR: Tesseract -> text per page
+4. Embed: OCRmyPDF -> creates searchable PDF with text layer
+5. Index: PDFIndexer processes the OCR'd PDF normally
+```
+
+**Why Separate Preprocessing:**
+- OCR is slow (30-60 sec per page) - shouldn't block indexing
+- Can run in batch overnight for large collections
+- Preserves original PDF (OCRmyPDF creates new file)
+- Can use GPU acceleration (Tesseract with CUDA)
+- Results can be reviewed/corrected before indexing
+
+**Installation:**
+```bash
+# Ubuntu/Debian
+sudo apt install tesseract-ocr ocrmypdf poppler-utils
+
+# macOS
+brew install tesseract ocrmypdf poppler
+
+# Windows (via chocolatey or manual install)
+choco install tesseract poppler
+pip install ocrmypdf
+```
+
+**OCRmyPDF Usage:**
+```bash
+# Basic usage - adds text layer to PDF
+ocrmypdf input.pdf output_searchable.pdf
+
+# Skip if already has text
+ocrmypdf --skip-text input.pdf output.pdf
+
+# Force re-OCR (replace existing text layer)
+ocrmypdf --force-ocr input.pdf output.pdf
+
+# Optimize for size after OCR
+ocrmypdf --optimize 3 input.pdf output.pdf
+```
+
+**Future Implementation Files:**
+- `cli/ocr_preprocess.py` - CLI tool for batch OCR
+- `offline_tools/ocr.py` - OCR detection and processing functions
+- Integration with Source Tools (detect + offer OCR option)
+
+**Language Support:**
+Tesseract supports 100+ languages via language packs:
+```bash
+# Install additional languages
+sudo apt install tesseract-ocr-spa tesseract-ocr-fra tesseract-ocr-deu
+
+# Use specific language
+ocrmypdf -l spa input.pdf output.pdf
+
+# Multiple languages
+ocrmypdf -l eng+spa input.pdf output.pdf
+```
+
+**Quality Considerations:**
+- Scanned quality affects accuracy (300 DPI minimum recommended)
+- Preprocessing (deskew, denoise) improves results
+- Historical fonts may need custom training data
+- Consider confidence scores for questionable OCR
+
+**See:** [docs/document-type-weighting.md](document-type-weighting.md) (OCR PDFs section)
 
 ---
 

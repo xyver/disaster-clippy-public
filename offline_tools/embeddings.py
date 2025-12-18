@@ -291,16 +291,23 @@ class EmbeddingService:
             return response.data[0].embedding
         except Exception as e:
             error_str = str(e).lower()
+            full_error = str(e)
 
-            # Handle rate limit errors with longer delay (429 Too Many Requests)
-            if "429" in str(e) or "rate" in error_str:
-                if _retry_count < 5:
-                    delay = self._min_retry_delay * (2 ** _retry_count)  # Exponential backoff starting at 0.25s
-                    print(f"Rate limited, waiting {delay:.2f}s before retry {_retry_count + 1}/5...")
-                    time.sleep(delay)
-                    return self._embed_with_chunking(text, max_depth, _retry_count + 1)
-                else:
-                    raise Exception(f"Rate limit exceeded after 5 retries: {e}")
+            # Handle rate limit errors with exponential backoff (keeps doubling, max 5 min)
+            if "429" in full_error or "rate" in error_str:
+                max_delay = 3000  # 5 minutes max see line 470
+                delay = min(self._min_retry_delay * (2 ** _retry_count), max_delay)
+                # Show full error on first occurrence, then abbreviated
+                if _retry_count == 0:
+                    print(f"[OpenAI] Rate limit error: {full_error[:200]}")
+                print(f"Rate limited, waiting {delay:.1f}s before retry {_retry_count + 1}...")
+                time.sleep(delay)
+                return self._embed_with_chunking(text, max_depth, _retry_count + 1)
+
+            # Check for quota/billing errors - these won't resolve with retries
+            if "quota" in error_str or "billing" in error_str or "insufficient" in error_str:
+                print(f"[OpenAI] QUOTA/BILLING ERROR - cannot continue: {full_error}")
+                raise Exception(f"OpenAI quota/billing error: {full_error}")
 
             # Check if it's a token limit error
             if "token" in error_str or "maximum context length" in error_str:
@@ -444,10 +451,9 @@ class EmbeddingService:
             if progress_callback:
                 progress_callback(i, total, f"Computing embeddings ({i}/{total})...")
 
-            # Retry loop for rate limiting
+            # Retry loop for rate limiting (unlimited retries with exponential backoff)
             retry_count = 0
-            max_retries = 5
-            while retry_count < max_retries:
+            while True:
                 try:
                     response = self.client.embeddings.create(
                         model=self.model,
@@ -458,20 +464,27 @@ class EmbeddingService:
                     break  # Success, exit retry loop
                 except Exception as e:
                     error_str = str(e).lower()
+                    full_error = str(e)
 
-                    # Handle rate limit errors with exponential backoff starting at 0.25s
-                    if "429" in str(e) or "rate" in error_str:
+                    # Handle rate limit errors with exponential backoff (keeps doubling, max 5 min)
+                    if "429" in full_error or "rate" in error_str:
                         retry_count += 1
-                        if retry_count < max_retries:
-                            delay = self._min_retry_delay * (2 ** (retry_count - 1))  # 0.25, 0.5, 1.0, 2.0s
-                            print(f"Rate limited on batch {i//batch_size}, waiting {delay:.2f}s (retry {retry_count}/{max_retries})...")
-                            time.sleep(delay)
-                            continue
-                        else:
-                            print(f"Rate limit persisted after {max_retries} retries, falling back to individual...")
+                        max_delay = 3000  # 5 minutes max see line 300
+                        delay = min(self._min_retry_delay * (2 ** (retry_count - 1)), max_delay)
+                        # Show full error on first occurrence
+                        if retry_count == 1:
+                            print(f"[OpenAI] Rate limit error: {full_error[:200]}")
+                        print(f"Rate limited on batch {i//batch_size}, waiting {delay:.1f}s (retry {retry_count})...")
+                        time.sleep(delay)
+                        continue
 
-                    # If batch fails (rate limit exhausted or other error), try one at a time
-                    print(f"Batch embedding failed, trying individually with chunking: {e}")
+                    # Check for quota/billing errors - these won't resolve with retries
+                    if "quota" in error_str or "billing" in error_str or "insufficient" in error_str:
+                        print(f"[OpenAI] QUOTA/BILLING ERROR - stopping job: {full_error}")
+                        raise Exception(f"OpenAI quota/billing error: {full_error}")
+
+                    # If batch fails for non-rate-limit error, try one at a time
+                    print(f"Batch embedding failed ({full_error[:100]}), trying individually...")
                     for text in batch_truncated:
                         try:
                             embedding = self._embed_with_chunking(text)

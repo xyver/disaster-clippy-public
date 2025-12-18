@@ -553,6 +553,7 @@
         let predefinedChains = {};
         let chain = [];
         let selectedSource = '';
+        let currentTemplateKey = null;  // Track which predefined template was loaded
         let savedTemplates = [];
 
         // Initialize
@@ -699,6 +700,7 @@
             const tmpl = predefinedChains[key];
             if (!tmpl) return;
 
+            currentTemplateKey = key;  // Track which template was loaded
             chain = tmpl.phases.map((p, i) => ({
                 id: Date.now() + i,
                 job_type: p.job_type,
@@ -714,6 +716,7 @@
             const tmpl = savedTemplates[idx];
             if (!tmpl) return;
 
+            currentTemplateKey = null;  // User-saved templates use their own name
             chain = tmpl.phases.map((p, i) => ({
                 id: Date.now() + i,
                 job_type: p.job_type,
@@ -728,6 +731,8 @@
         function addJobToChain(jobType) {
             const schema = jobSchemas[jobType];
             if (!schema) return;
+
+            currentTemplateKey = null;  // Reset - chain is now custom
 
             // Build default params
             const params = {};
@@ -1076,6 +1081,7 @@
 
         // Remove from chain
         function removeFromChain(idx) {
+            currentTemplateKey = null;  // Reset - chain is now custom
             chain.splice(idx, 1);
             renderChain();
             validateChain();
@@ -1083,6 +1089,7 @@
 
         // Clear chain
         function clearChain() {
+            currentTemplateKey = null;  // Reset
             chain = [];
             renderChain();
             document.getElementById('validationBox').innerHTML = '';
@@ -1294,6 +1301,69 @@
             }
         }
 
+        // Generate a descriptive name for the chain
+        function generateChainName(chainItems) {
+            // Predefined template names (short, descriptive)
+            const TEMPLATE_NAMES = {
+                'source_prepare': 'HTML Prep',
+                'zim_prepare': 'ZIM Prep',
+                'index_and_tag': 'Full Idx',
+                'index_online_only': 'Cloud Idx',
+                'index_offline_only': 'Local Idx',
+                'reindex_online': 'Reidx1536',
+                'reindex_offline': 'Reidx768',
+                'cloud_publish': 'Upload'
+            };
+
+            // If a predefined template was loaded unchanged, use its name
+            if (currentTemplateKey && TEMPLATE_NAMES[currentTemplateKey]) {
+                return TEMPLATE_NAMES[currentTemplateKey];
+            }
+
+            // Individual job type abbreviations
+            const JOB_ABBREVS = {
+                'metadata': 'meta',
+                'index_online': 'idx1536',
+                'index_offline': 'idx',  // Will add dimension dynamically
+                'suggest_tags': 'tags',
+                'clear_vectors': 'clear',
+                'zim_import': 'zim',
+                'detect_base_url': 'url',
+                'pinecone_sync': 'pinecone',
+                'visualisation': 'viz',
+                'scrape': 'scrape',
+                'upload': 'upload',
+                'install_source': 'install',
+                'delete_source': 'delete',
+                'translate_source': 'translate'
+            };
+
+            // Build name from job types
+            const parts = chainItems.map(item => {
+                const jobType = item.job_type;
+                let abbrev = JOB_ABBREVS[jobType] || jobType;
+
+                // For index_offline, append the dimension
+                if (jobType === 'index_offline' && item.params && item.params.dimension) {
+                    abbrev = 'idx' + item.params.dimension;
+                }
+                // For clear_vectors, append the dimension
+                if (jobType === 'clear_vectors' && item.params && item.params.dimension) {
+                    abbrev = 'clear' + item.params.dimension;
+                }
+
+                return abbrev;
+            });
+
+            // Join with + and limit length
+            let name = parts.join('+');
+            if (name.length > 30) {
+                name = name.substring(0, 27) + '...';
+            }
+
+            return name || 'custom_chain';
+        }
+
         // Run the chain
         async function runChain() {
             if (chain.length === 0) return;
@@ -1312,6 +1382,9 @@
                 const sourceToSend = selectedSource === '__new__' ? null : selectedSource;
                 const sourceName = selectedSource === '__new__' ? (document.getElementById('newSourceName').value.trim() || null) : null;
 
+                // Generate descriptive chain name from phases
+                const chainName = generateChainName(chain);
+
                 const resp = await fetch('/useradmin/api/job-builder/run', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -1320,7 +1393,8 @@
                         source_from_job: selectedSource === '__new__',  // Flag to indicate source comes from job
                         source_name: sourceName,  // Custom display name for new source
                         phases: phases,
-                        resumable: true
+                        resumable: true,
+                        chain_name: chainName
                     })
                 });
 

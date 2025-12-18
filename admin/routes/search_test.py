@@ -473,10 +473,12 @@ def serve_zim_asset(zim_path: str, asset_url: str) -> Optional[Tuple[bytes, Opti
 ZIM_ASSET_PREFIXES = ('_mw_/', '_res_/', '_assets_/', '_webp_/', '-/', 'I/', 'M/', '_zim_static/')
 
 
-@router.get("/content/{source_id}/{filename:path}")
+@router.api_route("/content/{source_id}/{filename:path}", methods=["GET", "HEAD"])
 async def serve_content(source_id: str, filename: str):
     """
     Serve offline content from a source.
+
+    Supports both GET (full content) and HEAD (existence check for link validation).
 
     For HTML pages: serves from pages/ folder with base tag injection.
     For ZIM assets (CSS, JS, images): serves directly from ZIM file.
@@ -536,6 +538,17 @@ async def serve_content(source_id: str, filename: str):
         alt_path = (source_path / filename).resolve()
         if str(alt_path).startswith(str(source_path.resolve())) and alt_path.exists():
             file_path = alt_path
+
+    # For ZIM sources with extracted pages, links use URLs like "Make_a_Kit"
+    # but actual files are saved as "Make_a_Kit.html" in pages/ folder
+    # Try adding .html extension first (before falling back to ZIM)
+    if not file_path.exists() and is_zim_source:
+        # ZIM internal links don't have .html extension, but extracted files do
+        if not filename.endswith('.html'):
+            html_filename = f"{filename}.html"
+            alt_path = (pages_path / html_filename).resolve()
+            if str(alt_path).startswith(str(source_path.resolve())) and alt_path.exists():
+                file_path = alt_path
 
     # For HTML scrapes, internal links use original paths (e.g., ../index.htm)
     # but scraped files are in pages/ with different naming conventions:
@@ -766,10 +779,12 @@ a.clippy-missing::after {
     return FileResponse(file_path, media_type=content_type)
 
 
-@router.get("/assets/{source_id}/{asset_path:path}")
+@router.api_route("/assets/{source_id}/{asset_path:path}", methods=["GET", "HEAD"])
 async def serve_asset(source_id: str, asset_path: str):
     """
     Serve static assets (CSS, JS, images) from source folder.
+
+    Supports both GET (full content) and HEAD (existence check).
 
     For filesystem sources: looks in common asset locations.
     For ZIM sources: falls back to serving from ZIM file.

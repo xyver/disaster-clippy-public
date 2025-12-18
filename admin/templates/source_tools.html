@@ -792,6 +792,9 @@
                 </div>
 
                 <div id="configForm" style="display: none;">
+                    <!-- Configuration Section -->
+                    <div class="tool-section" id="sectionConfig">
+                    <h3>Source Configuration</h3>
                     <div class="form-row">
                         <div class="form-group">
                             <label>Display Name</label>
@@ -834,40 +837,11 @@
                         <textarea id="editLicenseNotes" rows="2" placeholder="Describe the custom license terms (min 20 characters)"></textarea>
                     </div>
 
-                    <!-- Language Section -->
-                    <div style="margin-top: 1.5rem; padding-top: 1rem; border-top: 1px solid #0f3460;">
-                        <h4 style="color: #4ecca3; margin-bottom: 0.75rem;">Source Language</h4>
-                        <div class="form-group">
-                            <label>Language</label>
-                            <select id="editLanguage">
-                                <option value="">-- Select --</option>
-                                <option value="en">English</option>
-                                <option value="es">Spanish</option>
-                                <option value="fr">French</option>
-                                <option value="de">German</option>
-                                <option value="pt">Portuguese</option>
-                                <option value="zh">Chinese</option>
-                                <option value="ja">Japanese</option>
-                                <option value="other">Other</option>
-                            </select>
-                            <p style="font-size: 0.8rem; color: #888; margin-top: 0.25rem;">
-                                Global repository requires English sources only
-                            </p>
-                        </div>
-                        <div class="form-group">
-                            <label>
-                                <input type="checkbox" id="editLanguageVerified"> Language Verified
-                            </label>
-                            <p style="font-size: 0.8rem; color: #888; margin-top: 0.25rem;">
-                                I confirm the content is in the selected language
-                            </p>
-                        </div>
-                    </div>
-
                     <div class="tool-actions">
                         <button class="btn btn-primary" onclick="saveSourceConfig()">Save Configuration</button>
                         <button class="btn btn-secondary" onclick="autoDetect()">Auto-Detect</button>
                     </div>
+                    </div><!-- end sectionConfig -->
 
                     <!-- Rename Section (Admin Only) -->
                     <div class="admin-only" id="renameSection" style="display: none; margin-top: 1.5rem; padding-top: 1.5rem; border-top: 1px solid #0f3460;">
@@ -1001,69 +975,53 @@
 
                     <div class="tool-section" id="sectionBaseUrl">
                         <h3>1. Configure Base URL</h3>
-                        <p>For ZIM sources, detect the correct base URL by comparing sample articles with their actual online URLs.</p>
+                        <p>Set the base URL used to construct full article URLs for online viewing.</p>
 
-                        <div class="tool-actions" style="margin-bottom: 1rem;">
-                            <button class="btn btn-secondary" onclick="loadUrlSamples()">Load Sample Articles</button>
-                            <span id="urlSamplesStatus" style="margin-left: 0.5rem; font-size: 0.85rem;"></span>
-                        </div>
-
-                        <!-- Sample articles table -->
-                        <div id="urlSamplesTable" style="display: none; margin-bottom: 1rem;">
-                            <table style="width: 100%; border-collapse: collapse; font-size: 0.85rem;">
-                                <thead>
-                                    <tr style="border-bottom: 1px solid #333;">
-                                        <th style="text-align: left; padding: 0.5rem; width: 25%;">Article Title</th>
-                                        <th style="text-align: left; padding: 0.5rem; width: 20%;">Article ID</th>
-                                        <th style="text-align: left; padding: 0.5rem; width: 55%;">Paste Actual URL Here</th>
-                                    </tr>
-                                </thead>
-                                <tbody id="urlSamplesBody">
-                                    <!-- Sample rows will be inserted here -->
-                                </tbody>
-                            </table>
-                            <div style="display: flex; align-items: center; gap: 1rem; margin-top: 0.5rem;">
-                                <button id="btnMoreUrlSamples" class="btn btn-secondary btn-sm" onclick="showMoreUrlSamples()" style="display: none;">Show More</button>
-                                <div id="urlSamplesCounter" style="font-size: 0.8rem; color: #888;"></div>
-                            </div>
-                            <p style="font-size: 0.8rem; color: #888; margin-top: 0.5rem;">
-                                Find any article online (e.g., search Wikipedia for the title), copy its URL, and paste above. Then click "Detect Pattern".
+                        <div class="form-group" style="margin-top: 1rem;">
+                            <label>Base URL</label>
+                            <input type="text" id="editBaseUrl" placeholder="https://example.com/wiki/" style="font-family: monospace;">
+                            <p style="font-size: 0.8rem; color: #888; margin-top: 0.25rem;">
+                                Article paths will be appended to this URL (e.g., https://en.wikipedia.org/wiki/)
                             </p>
-                            <div class="tool-actions" style="margin-top: 0.75rem;">
-                                <button class="btn btn-primary" onclick="detectUrlPattern()">Detect Pattern</button>
-                            </div>
+                        </div>
+                        <div class="tool-actions">
+                            <button class="btn btn-primary" onclick="saveBaseUrl()">Save Base URL</button>
+                            <button class="btn btn-secondary" onclick="detectBaseUrl()">Detect Base URL</button>
+                        </div>
+                    </div>
+
+                    <!-- Test Links Section -->
+                    <div class="tool-section" id="sectionTestLinks">
+                        <h3>2. Test Links</h3>
+                        <p>Test offline backup links and online URLs. Click Offline to preview content below.</p>
+                        <div class="tool-actions">
+                            <button class="btn btn-secondary" id="btnTestLinks" onclick="testLinks()">Load Sample Links</button>
+                            <button class="btn btn-secondary" id="btnTestMore" onclick="showMoreSampleLinks()" style="display: none;">Show More (5)</button>
+                        </div>
+                        <div id="testLinksResults" style="display: none; margin-top: 1rem; font-size: 0.85rem;">
+                            <!-- Results table will be shown here -->
+                        </div>
+                        <div id="testLinksCounter" style="display: none; margin-top: 0.5rem; font-size: 0.8rem; color: #888;">
+                            <!-- Showing X of Y samples -->
                         </div>
 
-                        <!-- Detected/Manual base URL -->
-                        <div id="detectedUrlSection" style="display: none; margin-top: 1rem; padding: 1rem; background: #0f3460; border: 1px solid #4ecca3; border-radius: 6px;">
-                            <div style="color: #4ecca3; font-weight: 600; margin-bottom: 0.5rem;">Detected Base URL:</div>
-                            <div class="form-group" style="margin-bottom: 0.5rem;">
-                                <input type="text" id="editBaseUrl" placeholder="https://example.com/wiki/" style="font-family: monospace;" oninput="updateUrlPreview()">
+                        <!-- Offline Content Preview -->
+                        <div id="offlinePreviewSection" style="display: none; margin-top: 1rem; border-top: 1px solid #0f3460; padding-top: 1rem;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+                                <strong style="color: #4ecca3;">Offline Preview</strong>
+                                <span id="previewFilename" style="font-size: 0.75rem; color: #888; font-family: monospace;"></span>
                             </div>
-                            <div id="urlPreview" style="font-size: 0.8rem; color: #888; margin-bottom: 0.75rem;">
-                                <!-- Preview will show here -->
+                            <div id="previewLoading" style="display: none; padding: 2rem; text-align: center; background: #1a1a2e; border: 1px solid #0f3460; border-radius: 4px;">
+                                <div style="color: #4fc3f7;">Loading content...</div>
+                                <div style="color: #888; font-size: 0.8rem; margin-top: 0.5rem;">(Building ZIM index cache on first load - this may take 5-10 min+)</div>
                             </div>
-                            <div class="tool-actions">
-                                <button class="btn btn-primary" onclick="saveBaseUrl()">Save Base URL</button>
-                                <button class="btn btn-secondary" onclick="testBaseUrl()">Test All Samples</button>
-                                <span id="testUrlStatus" style="margin-left: 0.5rem; font-size: 0.85rem;"></span>
-                            </div>
-                        </div>
-
-                        <!-- Test results -->
-                        <div id="testUrlResults" style="display: none; margin-top: 0.75rem; padding: 0.75rem; background: #0a0a14; border-radius: 4px; font-size: 0.85rem;">
-                            <!-- Test results will appear here -->
-                        </div>
-
-                        <!-- Manual entry option -->
-                        <div style="margin-top: 1rem;">
-                            <button class="btn btn-small btn-secondary" onclick="showManualBaseUrl()">Or Enter Base URL Manually</button>
+                            <iframe id="offlineContentFrame" style="width: 100%; height: 400px; border: 1px solid #0f3460; border-radius: 4px; background: #fff;" onload="hidePreviewLoading()"></iframe>
                         </div>
                     </div>
 
                     <!-- Link Verification Section -->
                     <div class="tool-section" id="sectionLinkVerification">
-                        <h3>2. Link Verification</h3>
+                        <h3>3. Link Verification</h3>
                         <p style="font-size: 0.85rem; color: #888; margin-bottom: 1rem;">
                             These checks require manual verification before submitting to the global repository.
                         </p>
@@ -1089,32 +1047,36 @@
                         </div>
                     </div>
 
-                    <!-- Test Links Section -->
-                    <div class="tool-section" id="sectionTestLinks">
-                        <h3>3. Test Links</h3>
-                        <p>Test offline backup links and online URLs. Click Offline to preview content below.</p>
+                    <!-- Source Language Section -->
+                    <div class="tool-section" id="sectionLanguage">
+                        <h3>4. Source Language</h3>
+                        <p style="font-size: 0.85rem; color: #888; margin-bottom: 1rem;">
+                            Global repository requires English sources only.
+                        </p>
+                        <div class="form-group">
+                            <label>Language</label>
+                            <select id="editLanguage">
+                                <option value="">-- Select --</option>
+                                <option value="en">English</option>
+                                <option value="es">Spanish</option>
+                                <option value="fr">French</option>
+                                <option value="de">German</option>
+                                <option value="pt">Portuguese</option>
+                                <option value="zh">Chinese</option>
+                                <option value="ja">Japanese</option>
+                                <option value="other">Other</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>
+                                <input type="checkbox" id="editLanguageVerified"> Language Verified
+                            </label>
+                            <p style="font-size: 0.8rem; color: #888; margin-top: 0.25rem;">
+                                I confirm the content is in the selected language
+                            </p>
+                        </div>
                         <div class="tool-actions">
-                            <button class="btn btn-secondary" id="btnTestLinks" onclick="testLinks()">Load Sample Links</button>
-                            <button class="btn btn-secondary" id="btnTestMore" onclick="showMoreSampleLinks()" style="display: none;">Show More (5)</button>
-                        </div>
-                        <div id="testLinksResults" style="display: none; margin-top: 1rem; font-size: 0.85rem;">
-                            <!-- Results table will be shown here -->
-                        </div>
-                        <div id="testLinksCounter" style="display: none; margin-top: 0.5rem; font-size: 0.8rem; color: #888;">
-                            <!-- Showing X of Y samples -->
-                        </div>
-
-                        <!-- Offline Content Preview -->
-                        <div id="offlinePreviewSection" style="display: none; margin-top: 1rem; border-top: 1px solid #0f3460; padding-top: 1rem;">
-                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
-                                <strong style="color: #4ecca3;">Offline Preview</strong>
-                                <span id="previewFilename" style="font-size: 0.75rem; color: #888; font-family: monospace;"></span>
-                            </div>
-                            <div id="previewLoading" style="display: none; padding: 2rem; text-align: center; background: #1a1a2e; border: 1px solid #0f3460; border-radius: 4px;">
-                                <div style="color: #4fc3f7;">Loading content...</div>
-                                <div style="color: #888; font-size: 0.8rem; margin-top: 0.5rem;">(Building ZIM index cache on first load - this may take 5-10 min+)</div>
-                            </div>
-                            <iframe id="offlineContentFrame" style="width: 100%; height: 400px; border: 1px solid #0f3460; border-radius: 4px; background: #fff;" onload="hidePreviewLoading()"></iframe>
+                            <button class="btn btn-primary" onclick="saveLanguageConfig()">Save Language</button>
                         </div>
                     </div>
                 </div>
@@ -1384,6 +1346,7 @@
             // Step 3: URL Check
             'sectionBaseUrl': 'pending',     // Base URL configured
             'sectionLinkVerification': 'pending',  // Links verified (manual)
+            'sectionLanguage': 'pending',    // Language configured
             'sectionTestLinks': 'pending',   // Links tested
             // Step 4: Index
             'sectionCreateIndex': 'pending', // Embeddings created
@@ -1396,7 +1359,7 @@
         const stepSections = {
             1: ['scanBackupSection'],  // scrapeSection is type-specific
             2: ['sectionConfig', 'sectionGenerateMetadata'],
-            3: ['sectionBaseUrl'],  // sectionLinkVerification and sectionTestLinks are optional
+            3: ['sectionBaseUrl', 'sectionLanguage'],  // Language required for global submission
             4: ['sectionCreateIndex'],
             5: ['sectionTags', 'sectionValidate']
         };
@@ -1522,7 +1485,14 @@
                 markSectionSkipped('sectionBaseUrl');
             }
 
-            // Step 3: Index/vectors exist (but show warning if metadata has more docs)
+            // Step 3: Language configured
+            if (source.language && source.language_verified) {
+                markSectionComplete('sectionLanguage');
+            } else if (source.language) {
+                markSectionWarning('sectionLanguage');
+            }
+
+            // Step 4: Index/vectors exist (but show warning if metadata has more docs)
             // Check if at least one dimension is present
             const hasAnyVectors = source.has_vectors_768 || source.has_vectors_1536 || source.has_embeddings || source.has_vectors_file;
             const hasBothVectors = source.has_vectors_768 && source.has_vectors_1536;
@@ -1609,7 +1579,7 @@
                 step2Status.innerHTML = items.join(' ');
             }
 
-            // Step 3: Base URL, Verified links
+            // Step 3: Base URL, Language, Verified links
             const step3Status = document.getElementById('stepStatus3');
             if (step3Status) {
                 const items = [];
@@ -1618,12 +1588,19 @@
                 } else {
                     items.push(none('URL'));
                 }
-                if (source.links_verified_offline && source.links_verified_online) {
-                    items.push(ok('Verified'));
-                } else if (source.links_verified_offline || source.links_verified_online) {
-                    items.push(warn('Verified'));
+                if (source.language && source.language_verified) {
+                    items.push(ok('Lang'));
+                } else if (source.language) {
+                    items.push(warn('Lang'));
                 } else {
-                    items.push(none('Verified'));
+                    items.push(none('Lang'));
+                }
+                if (source.links_verified_offline && source.links_verified_online) {
+                    items.push(ok('Links'));
+                } else if (source.links_verified_offline || source.links_verified_online) {
+                    items.push(warn('Links'));
+                } else {
+                    items.push(none('Links'));
                 }
                 step3Status.innerHTML = items.join(' ');
             }
@@ -2201,6 +2178,7 @@
         function updateLicenseNotesVisibility() {
             const licenseSelect = document.getElementById('editLicense');
             const notesGroup = document.getElementById('licenseNotesGroup');
+            if (!licenseSelect || !notesGroup) return;  // Guard against missing elements
             if (licenseSelect.value === 'Custom') {
                 notesGroup.style.display = 'block';
             } else {
@@ -2208,8 +2186,11 @@
             }
         }
 
-        // Add event listener for license dropdown
-        document.getElementById('editLicense').addEventListener('change', updateLicenseNotesVisibility);
+        // Add event listener for license dropdown (if element exists)
+        const editLicenseEl = document.getElementById('editLicense');
+        if (editLicenseEl) {
+            editLicenseEl.addEventListener('change', updateLicenseNotesVisibility);
+        }
 
         // Track tags in the two sections
         let chosenTags = new Set();
@@ -2445,6 +2426,92 @@
                 } else {
                     logOutput(`Error: ${data.detail || 'Save failed'}`, 'error');
                     showToast(data.detail || 'Save failed', true);
+                }
+            } catch (e) {
+                logOutput(`Error: ${e.message}`, 'error');
+                showToast('Error: ' + e.message, true);
+            }
+        }
+
+        // Save language configuration (Step 3)
+        async function saveLanguageConfig() {
+            if (!currentSource) return;
+
+            const config = {
+                source_id: currentSource.source_id,
+                language: document.getElementById('editLanguage').value,
+                language_verified: document.getElementById('editLanguageVerified').checked
+            };
+
+            logOutput(`Saving language configuration for ${currentSource.source_id}...`);
+
+            try {
+                const response = await fetch('/useradmin/api/update-source-config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(config)
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    logOutput('Language configuration saved', 'success');
+                    showToast('Language saved');
+                    // Update currentSource with saved values
+                    if (currentSource) {
+                        currentSource.language = config.language;
+                        currentSource.language_verified = config.language_verified;
+                        currentSource.language_is_english = (config.language === 'en');
+                    }
+                    // Mark language section based on language + verified
+                    if (config.language && config.language_verified) {
+                        markSectionComplete('sectionLanguage');
+                    } else if (config.language) {
+                        markSectionWarning('sectionLanguage');
+                    }
+                    await refreshSources();
+                    // Update step indicators to reflect new state
+                    updateStepCompletion();
+                } else {
+                    logOutput(`Error: ${data.detail || 'Save failed'}`, 'error');
+                    showToast(data.detail || 'Save failed', true);
+                }
+            } catch (e) {
+                logOutput(`Error: ${e.message}`, 'error');
+                showToast('Error: ' + e.message, true);
+            }
+        }
+
+        // Run detect base URL job
+        async function detectBaseUrl() {
+            if (!currentSource) {
+                showToast('No source selected', true);
+                return;
+            }
+
+            logOutput(`Detecting base URL for ${currentSource.source_id}...`);
+            showToast('Starting base URL detection...');
+
+            try {
+                const response = await fetch('/useradmin/api/job-builder/run', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        source_id: currentSource.source_id,
+                        phases: [
+                            { job_type: 'detect_base_url', params: {} }
+                        ]
+                    })
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    logOutput(`Base URL detection job started: ${data.job_id}`, 'success');
+                    showToast('Detection job started - check Jobs page for results');
+                } else {
+                    logOutput(`Error: ${data.detail || 'Failed to start job'}`, 'error');
+                    showToast(data.detail || 'Failed to start job', true);
                 }
             } catch (e) {
                 logOutput(`Error: ${e.message}`, 'error');
