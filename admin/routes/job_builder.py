@@ -677,6 +677,97 @@ def get_job_function(job_type: str, source_id: str, params: Dict[str, Any]):
 
         return run_translate_source
 
+    elif job_type == "scrape":
+        def run_scrape(progress_callback=None, cancel_checker=None, job_id=None):
+            """
+            Scrape content from a website URL.
+            Creates the source folder if it doesn't exist.
+            """
+            from pathlib import Path
+            from offline_tools.backup.html import run_backup
+            from admin.local_config import get_local_config
+            from urllib.parse import urlparse
+
+            url = params.get("url", "")
+            if not url:
+                return {"success": False, "error": "No URL provided"}
+
+            page_limit = int(params.get("page_limit", 100))
+            include_assets = params.get("include_assets", False)
+            follow_links = params.get("follow_links", True)
+            max_depth = int(params.get("max_depth", 3))
+            request_delay = float(params.get("request_delay", 0.5))
+
+            config = get_local_config()
+            backup_folder = config.get_backup_folder()
+            if not backup_folder:
+                return {"success": False, "error": "No backup folder configured"}
+
+            # Create source folder if it doesn't exist
+            source_path = Path(backup_folder) / source_id
+            source_path.mkdir(parents=True, exist_ok=True)
+
+            def stop_checker():
+                if cancel_checker:
+                    return cancel_checker()
+                return False
+
+            # Detect if URL is a sitemap
+            is_sitemap = url.endswith('.xml') or 'sitemap' in url.lower()
+            if is_sitemap:
+                sitemap_url = url
+                parsed = urlparse(url)
+                base_url = f"{parsed.scheme}://{parsed.netloc}"
+            else:
+                base_url = url
+                sitemap_url = None
+
+            result = run_backup(
+                backup_path=backup_folder,
+                source_id=source_id,
+                base_url=base_url,
+                scraper_type="static",
+                page_limit=page_limit,
+                include_assets=include_assets,
+                progress_callback=progress_callback,
+                stop_callback=stop_checker,
+                sitemap_url=sitemap_url,
+                follow_links=follow_links,
+                max_depth=max_depth,
+                request_delay=request_delay
+            )
+
+            if result.get("stopped_early"):
+                return {
+                    "status": "cancelled",
+                    "pages_saved": result.get("pages_saved", 0),
+                    "total_backed_up": result.get("total_backed_up", 0),
+                    "queued_remaining": result.get("queued_remaining", 0),
+                    "message": "Scrape was stopped early"
+                }
+
+            if not result.get("success"):
+                return {
+                    "status": "error",
+                    "error": "; ".join(result.get("errors", ["Unknown error"])[:3]),
+                    "pages_saved": result.get("pages_saved", 0),
+                    "total_backed_up": result.get("total_backed_up", 0)
+                }
+
+            return {
+                "success": True,
+                "status": "success",
+                "source_id": source_id,
+                "pages_saved": result.get("pages_saved", 0),
+                "total_backed_up": result.get("total_backed_up", 0),
+                "assets_downloaded": result.get("assets_downloaded", 0),
+                "queued_remaining": result.get("queued_remaining", 0),
+                "error_count": len(result.get("errors", [])),
+                "message": f"Scraped {result.get('pages_saved', 0)} pages"
+            }
+
+        return run_scrape
+
     elif job_type == "zim_import":
         def run_zim_import(progress_callback=None, cancel_checker=None, job_id=None):
             """
@@ -1259,6 +1350,71 @@ def get_job_function(job_type: str, source_id: str, params: Dict[str, Any]):
             return result
 
         return run_detect_base_url
+
+    elif job_type == "delete_source":
+        def run_delete_source(progress_callback=None, cancel_checker=None, job_id=None):
+            """Delete a source and its files"""
+            from admin.routes.source_tools import _run_delete_job
+
+            delete_files = params.get("delete_files", True)
+
+            result = _run_delete_job(
+                source_id,
+                delete_files=delete_files,
+                progress_callback=progress_callback,
+                cancel_checker=cancel_checker,
+                job_id=job_id
+            )
+            return result
+
+        return run_delete_source
+
+    elif job_type == "upload":
+        def run_upload(progress_callback=None, cancel_checker=None, job_id=None):
+            """Upload source to cloud storage"""
+            from pathlib import Path
+            from admin.cloud_upload import _run_upload_backup, get_backup_paths
+            from admin.local_config import get_local_config
+
+            include_backup = params.get("include_backup", False)
+
+            # Get source info for upload
+            config = get_local_config()
+            backup_folder = config.get_backup_folder()
+            if not backup_folder:
+                return {"success": False, "error": "No backup folder configured"}
+
+            source_path = Path(backup_folder) / source_id
+            if not source_path.exists():
+                return {"success": False, "error": f"Source not found: {source_id}"}
+
+            # Build source_info dict
+            source_info = {
+                "backup_path": str(source_path),
+                "backup_type": "html",
+                "backup_size_mb": sum(f.stat().st_size for f in source_path.rglob("*") if f.is_file()) / (1024 * 1024)
+            }
+
+            # Check for ZIM file
+            zim_files = list(source_path.glob("*.zim"))
+            if zim_files:
+                source_info["backup_type"] = "zim"
+                source_info["backup_path"] = str(zim_files[0])
+                source_info["backup_size_mb"] = zim_files[0].stat().st_size / (1024 * 1024)
+
+            try:
+                result = _run_upload_backup(
+                    source_id,
+                    source_info,
+                    progress_callback=progress_callback,
+                    cancel_checker=cancel_checker,
+                    job_id=job_id
+                )
+                return {"success": True, **result} if isinstance(result, dict) else {"success": True, "result": result}
+            except Exception as e:
+                return {"success": False, "error": str(e)}
+
+        return run_upload
 
     # Add more job types as needed...
 

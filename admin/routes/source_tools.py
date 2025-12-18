@@ -3075,40 +3075,39 @@ async def test_source_links(source_id: str, test_base_url: Optional[str] = None)
         # For ZIM sources, we need to preserve underscores in article names
         # For WARC-style ZIMs (multi-domain web archives), stored_url is already a full URL
 
-        # Check if stored_url is already a full URL (WARC-style ZIMs like ready_gov)
-        if stored_url and (stored_url.startswith("http://") or stored_url.startswith("https://")):
-            # stored_url is already complete - use it directly
+        # Construct URL based on source type
+        if base_url and is_zim_source:
+            # ZIM sources (MediaWiki): ALWAYS construct from TITLE
+            # Don't trust stored_url - it may have been indexed with wrong URL format
+            # Title: "120V Photovoltaic Microinverter" -> Wiki URL: "120V_Photovoltaic_Microinverter"
+            # (spaces become underscores, slashes in title stay as slashes for subpages)
+            title = doc.get("title", "")
+            if title:
+                # Convert spaces to underscores, but preserve slashes (for subpages like /ar, /de)
+                wiki_path = title.replace(" ", "_")
+                constructed_url = base_url.rstrip("/") + "/" + wiki_path
+            else:
+                # Fallback to filename if no title
+                filename = ""
+                if local_url:
+                    filename = local_url.rstrip("/").split("/")[-1]
+                    if filename.endswith(".html"):
+                        filename = filename[:-5]
+                    elif filename.endswith(".htm"):
+                        filename = filename[:-4]
+                constructed_url = base_url.rstrip("/") + "/" + filename if filename else stored_url
+        elif stored_url and (stored_url.startswith("http://") or stored_url.startswith("https://")):
+            # HTML sources with full URL already stored - use directly
             constructed_url = stored_url
         elif base_url:
-            if is_zim_source:
-                # ZIM sources (MediaWiki): Use TITLE to construct URL
-                # The filename has slashes encoded as underscores, but wiki URLs preserve slashes
-                # Title: "Crypto News 24/7" -> Wiki URL: "Crypto_News_24/7"
-                # (spaces become underscores, but slashes stay as slashes)
-                title = doc.get("title", "")
-                if title:
-                    # Convert spaces to underscores, but preserve slashes
-                    wiki_path = title.replace(" ", "_")
-                    constructed_url = base_url.rstrip("/") + "/" + wiki_path
-                else:
-                    # Fallback to filename if no title
-                    filename = ""
-                    if local_url:
-                        filename = local_url.rstrip("/").split("/")[-1]
-                        if filename.endswith(".html"):
-                            filename = filename[:-5]
-                        elif filename.endswith(".htm"):
-                            filename = filename[:-4]
-                    constructed_url = base_url.rstrip("/") + "/" + filename if filename else stored_url
+            # HTML sources: stored_url already has correct path structure with slashes
+            if stored_url:
+                rel_path = stored_url.lstrip("/")
+                constructed_url = base_url.rstrip("/") + "/" + rel_path
+            elif article_name:
+                constructed_url = base_url.rstrip("/") + "/" + article_name
             else:
-                # HTML sources: stored_url already has correct path structure with slashes
-                if stored_url:
-                    rel_path = stored_url.lstrip("/")
-                    constructed_url = base_url.rstrip("/") + "/" + rel_path
-                elif article_name:
-                    constructed_url = base_url.rstrip("/") + "/" + article_name
-                else:
-                    constructed_url = stored_url
+                constructed_url = stored_url
         else:
             constructed_url = stored_url
 

@@ -1026,8 +1026,8 @@ class HTMLBackupIndexer:
                 relative_url = doc.get("url", "")
                 # Construct full online URL from base_url + relative path
                 if relative_url and not relative_url.startswith(('http://', 'https://')):
-                    # Check for WARC-style relative URLs like /www.fema.gov/path
-                    # These are from ZIM files that contain multiple domains
+                    # Check for WARC-style URLs from ZIM files with multiple domains
+                    # These can be /www.fema.gov/path OR www.fema.gov/path (no leading slash)
                     # First path component looks like a domain if it contains a dot
                     if relative_url.startswith('/'):
                         first_segment = relative_url[1:].split('/')[0] if '/' in relative_url[1:] else relative_url[1:]
@@ -1037,6 +1037,16 @@ class HTMLBackupIndexer:
                             path_after_domain = relative_url[1 + len(first_segment):]
                             doc["url"] = f"https://{first_segment}{path_after_domain}"
                             continue
+                    else:
+                        # Check for domain-like URL without leading slash (www.fema.gov/path)
+                        first_segment = relative_url.split('/')[0] if '/' in relative_url else relative_url
+                        # If first segment looks like a domain (contains dot, has common TLD pattern)
+                        if '.' in first_segment and not first_segment.startswith('.'):
+                            # Check for common domain patterns (www., .gov, .org, .com, .edu, .net)
+                            if first_segment.startswith('www.') or any(first_segment.endswith(tld) for tld in ['.gov', '.org', '.com', '.edu', '.net', '.io']):
+                                # WARC-style: convert www.fema.gov/path to https://www.fema.gov/path
+                                doc["url"] = f"https://{relative_url}"
+                                continue
                     # Normal relative URL - prepend base_url
                     if base_url.endswith('/') and relative_url.startswith('/'):
                         doc["url"] = base_url + relative_url[1:]
@@ -1127,7 +1137,7 @@ class PDFIndexer:
             )
 
     def _extract_text(self, pdf_path: Path) -> str:
-        """Extract text from a PDF file"""
+        """Extract text from a PDF file (legacy - merges all pages)"""
         if self.has_pymupdf:
             import fitz
             doc = fitz.open(str(pdf_path))
@@ -1141,8 +1151,39 @@ class PDFIndexer:
             return "\n".join(text_parts)
         return ""
 
+    def _extract_text_with_pages(self, pdf_path: Path) -> List[Dict]:
+        """
+        Extract text from PDF preserving page boundaries.
+
+        Returns:
+            List of dicts: [{"page_num": 1, "text": "...", "char_count": N}, ...]
+        """
+        pages = []
+        if self.has_pymupdf:
+            import fitz
+            doc = fitz.open(str(pdf_path))
+            for page_num, page in enumerate(doc, start=1):
+                text = page.get_text()
+                pages.append({
+                    "page_num": page_num,
+                    "text": text,
+                    "char_count": len(text)
+                })
+            doc.close()
+        elif self.has_pypdf:
+            from pypdf import PdfReader
+            reader = PdfReader(str(pdf_path))
+            for page_num, page in enumerate(reader.pages, start=1):
+                text = page.extract_text() or ""
+                pages.append({
+                    "page_num": page_num,
+                    "text": text,
+                    "char_count": len(text)
+                })
+        return pages
+
     def _extract_metadata(self, pdf_path: Path) -> dict:
-        """Extract metadata from a PDF file"""
+        """Extract metadata from a PDF file (basic - title and author only)"""
         try:
             if self.has_pymupdf:
                 import fitz
@@ -1164,6 +1205,112 @@ class PDFIndexer:
         except Exception:
             pass
         return {}
+
+    def _extract_enhanced_metadata(self, pdf_path: Path) -> dict:
+        """
+        Extract comprehensive metadata from PDF including page count.
+
+        Returns:
+            Dict with title, author, subject, keywords, creator,
+            creation_date, page_count, file_size
+        """
+        result = {
+            "title": "",
+            "author": "",
+            "subject": "",
+            "keywords": "",
+            "creator": "",
+            "creation_date": "",
+            "page_count": 0,
+            "file_size": 0,
+        }
+        try:
+            result["file_size"] = pdf_path.stat().st_size
+        except Exception:
+            pass
+
+        try:
+            if self.has_pymupdf:
+                import fitz
+                doc = fitz.open(str(pdf_path))
+                metadata = doc.metadata or {}
+                result.update({
+                    "title": metadata.get("title", ""),
+                    "author": metadata.get("author", ""),
+                    "subject": metadata.get("subject", ""),
+                    "keywords": metadata.get("keywords", ""),
+                    "creator": metadata.get("creator", ""),
+                    "creation_date": metadata.get("creationDate", ""),
+                    "page_count": doc.page_count,
+                })
+                doc.close()
+            elif self.has_pypdf:
+                from pypdf import PdfReader
+                reader = PdfReader(str(pdf_path))
+                result["page_count"] = len(reader.pages)
+                if reader.metadata:
+                    result.update({
+                        "title": reader.metadata.get("/Title", ""),
+                        "author": reader.metadata.get("/Author", ""),
+                        "subject": reader.metadata.get("/Subject", ""),
+                        "keywords": reader.metadata.get("/Keywords", ""),
+                        "creator": reader.metadata.get("/Creator", ""),
+                        "creation_date": reader.metadata.get("/CreationDate", ""),
+                    })
+        except Exception:
+            pass
+        return result
+
+    def _chunk_pages_with_overlap(self, pages: List[Dict], chunk_size: int = 4000,
+                                   overlap: int = 300) -> List[Dict]:
+        """
+        Create chunks from pages with overlap and page tracking.
+
+        Args:
+            pages: List from _extract_text_with_pages()
+            chunk_size: Target characters per chunk
+            overlap: Characters to overlap between chunks
+
+        Returns:
+            List of chunk dicts with page_start, page_end, text
+        """
+        if not pages:
+            return []
+
+        chunks = []
+        current_text = ""
+        current_page_start = pages[0]["page_num"]
+        current_page_end = pages[0]["page_num"]
+
+        for page in pages:
+            page_text = page["text"]
+            page_num = page["page_num"]
+
+            # If adding this page would exceed chunk_size
+            if len(current_text) + len(page_text) > chunk_size and current_text:
+                # Save current chunk
+                chunks.append({
+                    "text": current_text,
+                    "page_start": current_page_start,
+                    "page_end": current_page_end,
+                })
+                # Start new chunk with overlap from end of previous
+                overlap_text = current_text[-overlap:] if overlap and len(current_text) > overlap else ""
+                current_text = overlap_text
+                current_page_start = page_num
+
+            current_text += page_text + "\n"
+            current_page_end = page_num
+
+        # Don't forget the last chunk
+        if current_text.strip():
+            chunks.append({
+                "text": current_text,
+                "page_start": current_page_start,
+                "page_end": current_page_end,
+            })
+
+        return chunks
 
     def _get_pdf_files(self) -> list:
         """Get list of PDF files to process"""
@@ -1228,57 +1375,70 @@ class PDFIndexer:
                 progress_callback(i + 1, total_pdfs, f"Processing {pdf_path.name}")
 
             try:
-                text = self._extract_text(pdf_path)
-                if len(text) < 100:
+                # Extract with page awareness
+                pages = self._extract_text_with_pages(pdf_path)
+                total_text_len = sum(p["char_count"] for p in pages)
+                if total_text_len < 100:
                     errors.append(f"{pdf_path.name}: Too little text")
                     continue
 
-                metadata = self._extract_metadata(pdf_path)
-                title = metadata.get("title") or pdf_path.stem.replace('_', ' ').replace('-', ' ').title()
+                # Get enhanced metadata
+                enhanced_meta = self._extract_enhanced_metadata(pdf_path)
+                title = enhanced_meta.get("title") or pdf_path.stem.replace('_', ' ').replace('-', ' ').title()
+                total_pages = enhanced_meta.get("page_count", len(pages))
 
-                content_hash = hashlib.md5(text.encode()).hexdigest()[:12]
+                # Full text for hash
+                full_text = "\n".join(p["text"] for p in pages)
+                content_hash = hashlib.md5(full_text.encode()).hexdigest()[:12]
                 doc_id = f"{self.source_id}_{content_hash}"
 
                 if doc_id in existing_ids:
                     skipped += 1
                     continue
 
-                # Build URLs - online points to API endpoint (served from R2), local to file
+                # Build URLs - use /pdf/ endpoint (browser-navigable with #page=N)
                 pdf_filename = pdf_path.name
-                online_url = f"/api/pdf/{self.source_id}/{pdf_filename}"
+                online_url = f"/pdf/{self.source_id}/{pdf_filename}"
                 local_url = f"file://{pdf_path}"
 
-                # Chunk long PDFs
-                if len(text) > chunk_size:
-                    chunks = [text[j:j+chunk_size] for j in range(0, len(text), chunk_size)]
-                    for idx, chunk in enumerate(chunks):
-                        chunk_id = f"{doc_id}_chunk{idx}"
-                        if chunk_id in existing_ids:
-                            continue
-                        documents.append({
-                            "id": chunk_id,
-                            "content": chunk,
-                            "url": f"{online_url}#chunk-{idx}",  # Online URL for Pinecone
-                            "local_url": f"{local_url}#chunk-{idx}",  # Local file path
-                            "title": f"{title} (Part {idx + 1}/{len(chunks)})",
-                            "source": self.source_id,
-                            "categories": [],
-                            "content_hash": f"{content_hash}_{idx}",
-                            "char_count": len(chunk),
-                            "doc_type": "research",
-                        })
-                else:
+                # Create chunks with page tracking and overlap
+                chunks = self._chunk_pages_with_overlap(pages, chunk_size=chunk_size, overlap=300)
+
+                for idx, chunk in enumerate(chunks):
+                    chunk_id = f"{doc_id}_chunk{idx}" if len(chunks) > 1 else doc_id
+                    if chunk_id in existing_ids:
+                        continue
+
+                    # Use page_start for URL (browser navigation)
+                    page_url = f"{online_url}#page={chunk['page_start']}"
+                    local_page_url = f"{local_url}#page={chunk['page_start']}"
+
+                    # Build title with page range
+                    if len(chunks) == 1:
+                        chunk_title = title
+                    elif chunk["page_start"] == chunk["page_end"]:
+                        chunk_title = f"{title} (p. {chunk['page_start']})"
+                    else:
+                        chunk_title = f"{title} (pp. {chunk['page_start']}-{chunk['page_end']})"
+
                     documents.append({
-                        "id": doc_id,
-                        "content": text,
-                        "url": online_url,  # Online URL for Pinecone
-                        "local_url": local_url,  # Local file path
-                        "title": title,
+                        "id": chunk_id,
+                        "content": chunk["text"],
+                        "url": page_url,
+                        "local_url": local_page_url,
+                        "title": chunk_title,
                         "source": self.source_id,
                         "categories": [],
-                        "content_hash": content_hash,
-                        "char_count": len(text),
+                        "content_hash": f"{content_hash}_{idx}" if len(chunks) > 1 else content_hash,
+                        "char_count": len(chunk["text"]),
                         "doc_type": "research",
+                        # PDF-specific metadata
+                        "parent_pdf": pdf_filename,
+                        "page_start": chunk["page_start"],
+                        "page_end": chunk["page_end"],
+                        "chunk_index": idx,
+                        "total_chunks": len(chunks),
+                        "total_pages": total_pages,
                     })
 
             except Exception as e:

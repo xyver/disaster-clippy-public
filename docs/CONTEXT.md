@@ -59,6 +59,7 @@ Disaster Clippy is an **offline-capable AI search assistant** for emergency prep
 | Doc | When to Read |
 |-----|--------------|
 | [language-packs.md](language-packs.md) | Translation system, MarianMT models |
+| [document-type-weighting.md](document-type-weighting.md) | Document classification, search weighting, PDF handling |
 
 ### For Planning
 | Doc | When to Read |
@@ -141,6 +142,28 @@ Read: docs/admin-guide.md (Knowledge Map section)
 Files: admin/routes/visualise.py, admin/templates/visualise.html
 ```
 
+### PDF Sources / Document Collections
+```
+Read: docs/document-type-weighting.md (PDF Document Challenges section)
+Files: offline_tools/indexer.py (PDFIndexer class)
+       offline_tools/pdf_collections.py (collection management)
+       admin/pdf_server.py (serving PDFs with #page=N navigation)
+```
+
+### OCR for Scanned PDFs (Planned)
+```
+Read: ../ROADMAP.md (OCR for Scanned PDFs section)
+Tools: OCRmyPDF, Tesseract, pdftoppm (poppler-utils)
+Status: Preprocessing pipeline planned, not yet implemented
+```
+
+### Document Type Weighting / Search Relevance
+```
+Read: docs/document-type-weighting.md
+Files: offline_tools/document_classifier.py (classification)
+       app.py (detect_doc_type_preference, prioritize_results_by_doc_type)
+```
+
 ---
 
 ## Key Files (Quick Reference)
@@ -180,9 +203,11 @@ disaster-clippy/
 
 ## Current Status (v0.9)
 
-**Recently completed:** Validation system, job builder, connection states, personal cloud backup, HTML scraper integration, language packs phase 1
+**Recently completed:** PDF page-aware indexing with #page=N URLs, validation system, job builder, connection states, personal cloud backup, HTML scraper integration, language packs phase 1
 
 **In progress:** Search result diversity tuning, pipeline testing
+
+**Planned (high priority):** OCR preprocessing for scanned PDFs
 
 **See:** [ROADMAP.md](../ROADMAP.md) for full status
 
