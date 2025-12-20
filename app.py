@@ -69,8 +69,9 @@ _mode = os.getenv("VECTOR_DB_MODE", "NOT_SET")
 print(f"[STARTUP] .env path: {_env_path}, exists: {_env_path.exists()}, VECTOR_DB_MODE={_mode}")
 
 import json
-from typing import List, Optional
-from datetime import datetime
+import difflib
+from typing import List, Optional, Dict, Any, Tuple
+from datetime import datetime, timedelta, timezone
 from collections import Counter
 
 from fastapi import FastAPI, Request, Header, HTTPException, Depends
@@ -368,7 +369,12 @@ class SimpleQueryRequest(BaseModel):
     """Simple request for external websites - just send a message"""
     message: str
     session_id: Optional[str] = None
-    sources: Optional[List[str]] = None  # List of source IDs to filter by
+    # Legacy - explicit list of source IDs (takes precedence if provided)
+    sources: Optional[List[str]] = None
+    # New mode-based filtering
+    source_mode: Optional[str] = None  # "all" (default) or "none"
+    exclude: Optional[List[str]] = None  # Sources to exclude when mode="all"
+    include: Optional[List[str]] = None  # Sources to include when mode="none"
 
 
 class SimpleQueryResponse(BaseModel):
@@ -440,7 +446,7 @@ async def submit_site_suggestion(suggestion: SiteSuggestion):
     suggestions.append({
         "url": url,
         "description": suggestion.description.strip(),
-        "submitted_at": datetime.utcnow().isoformat(),
+        "submitted_at": datetime.now(timezone.utc).isoformat(),
         "status": "pending"
     })
 
@@ -873,6 +879,25 @@ async def get_sources():
     }
 
 
+@app.get("/api/v1/sources")
+async def list_sources_simple():
+    """
+    Simple endpoint for external API consumers to discover available sources.
+
+    Returns a list of sources with their IDs, display names, and document counts.
+    Use these IDs in the include/exclude fields of /api/v1/chat requests.
+
+    Response cached for 1 hour.
+    """
+    source_list, _ = get_available_sources()
+    total = sum(s["count"] for s in source_list)
+
+    return {
+        "sources": source_list,
+        "total_documents": total
+    }
+
+
 def get_connection_mode() -> str:
     """Get current connection mode from local config"""
     try:
@@ -881,6 +906,178 @@ def get_connection_mode() -> str:
         return config.get_offline_mode()
     except Exception:
         return "hybrid"  # Default to hybrid
+
+
+# =============================================================================
+# SOURCE CACHE AND FILTERING FOR EXTERNAL API
+# =============================================================================
+
+# Cache for available sources (refreshes every hour or on error)
+_source_cache: Dict[str, Any] = {
+    "data": [],  # List of {id, name, count}
+    "ids": set(),  # Quick lookup for validation
+    "expires": None  # datetime when cache expires
+}
+_SOURCE_CACHE_TTL = timedelta(hours=1)
+
+
+def _refresh_source_cache() -> None:
+    """Refresh the source cache from vector store stats."""
+    global _source_cache
+    try:
+        store = get_vector_store()
+        stats = store.get_stats()
+        sources_counts = stats.get("sources", {})
+
+        # Get display names from manifests
+        from admin.local_config import get_local_config
+        local_config = get_local_config()
+        backup_folder = local_config.get_backup_folder()
+
+        source_list = []
+        for source_id, count in sources_counts.items():
+            display_name = source_id.replace("_", " ").replace("-", " ").title()
+
+            # Try to get better name from manifest
+            if backup_folder:
+                manifest_path = Path(backup_folder) / source_id / get_manifest_file()
+                if manifest_path.exists():
+                    try:
+                        with open(manifest_path) as f:
+                            manifest = json.load(f)
+                            display_name = manifest.get("name", display_name)
+                    except Exception:
+                        pass
+
+            source_list.append({
+                "id": source_id,
+                "name": display_name,
+                "count": count
+            })
+
+        _source_cache = {
+            "data": source_list,
+            "ids": set(sources_counts.keys()),
+            "expires": datetime.now(timezone.utc) + _SOURCE_CACHE_TTL
+        }
+    except Exception as e:
+        print(f"[SOURCE_CACHE] Error refreshing cache: {e}")
+        # Keep old cache if refresh fails
+
+
+def get_available_sources() -> Tuple[List[Dict], set]:
+    """Get available sources, refreshing cache if needed."""
+    if _source_cache["expires"] is None or datetime.now(timezone.utc) > _source_cache["expires"]:
+        _refresh_source_cache()
+    return _source_cache["data"], _source_cache["ids"]
+
+
+def resolve_source_filter(
+    source_mode: Optional[str],
+    exclude: Optional[List[str]],
+    include: Optional[List[str]],
+    legacy_sources: Optional[List[str]]
+) -> Tuple[Optional[List[str]], List[str]]:
+    """
+    Resolve source filtering parameters to a list of source IDs.
+
+    Returns:
+        Tuple of (source_ids, warnings)
+        - source_ids: List of valid source IDs to search, or None for all
+        - warnings: List of warning messages to prepend to response
+    """
+    warnings = []
+    _, available_ids = get_available_sources()
+
+    # Legacy sources field takes precedence (backwards compatibility)
+    if legacy_sources is not None:
+        if len(legacy_sources) == 0:
+            return [], []  # Empty list = no sources
+        # Validate and warn about invalid sources
+        valid_sources = []
+        for src in legacy_sources:
+            if src in available_ids:
+                valid_sources.append(src)
+            else:
+                suggestion = _fuzzy_match_source(src, available_ids)
+                if suggestion:
+                    warnings.append(f"Note: Source '{src}' not found. Did you mean '{suggestion}'?")
+                else:
+                    warnings.append(f"Note: Source '{src}' not found.")
+        if not valid_sources and warnings:
+            warnings.append("Searching all sources instead.")
+            return None, warnings
+        return valid_sources if valid_sources else None, warnings
+
+    # Mode-based filtering
+    mode = (source_mode or "all").lower()
+    exclude_list = exclude or []
+    include_list = include or []
+
+    # Track contradictions (both excluded and included)
+    contradictions = set(exclude_list) & set(include_list)
+    for src in contradictions:
+        warnings.append(f"Note: '{src}' was both excluded and included - including it.")
+
+    if mode == "all":
+        # Start with all sources, then exclude
+        result_ids = set(available_ids)
+
+        # Validate and apply excludes
+        for src in exclude_list:
+            if src in contradictions:
+                continue  # Skip - will be added back by include
+            if src in available_ids:
+                result_ids.discard(src)
+            else:
+                suggestion = _fuzzy_match_source(src, available_ids)
+                if suggestion:
+                    warnings.append(f"Note: Source '{src}' not found in exclude list. Did you mean '{suggestion}'?")
+
+        # Apply includes (for contradiction resolution)
+        for src in include_list:
+            if src in available_ids:
+                result_ids.add(src)
+            else:
+                suggestion = _fuzzy_match_source(src, available_ids)
+                if suggestion:
+                    warnings.append(f"Note: Source '{src}' not found in include list. Did you mean '{suggestion}'?")
+
+        # If all sources remain, return None (no filter needed)
+        if result_ids == available_ids:
+            return None, warnings
+        return list(result_ids), warnings
+
+    elif mode == "none":
+        # Start with no sources, then include
+        result_ids = set()
+
+        for src in include_list:
+            if src in available_ids:
+                result_ids.add(src)
+            else:
+                suggestion = _fuzzy_match_source(src, available_ids)
+                if suggestion:
+                    warnings.append(f"Note: Source '{src}' not found. Did you mean '{suggestion}'?")
+
+        if not result_ids:
+            # No valid sources - fall back to all sources with warning
+            if warnings:
+                warnings.append("Searching all sources instead.")
+            return None, warnings
+
+        return list(result_ids), warnings
+
+    else:
+        # Invalid mode - treat as "all"
+        warnings.append(f"Note: Invalid source_mode '{source_mode}'. Using 'all'.")
+        return None, warnings
+
+
+def _fuzzy_match_source(typo: str, available_ids: set) -> Optional[str]:
+    """Find the closest matching source ID for a typo."""
+    matches = difflib.get_close_matches(typo, list(available_ids), n=1, cutoff=0.6)
+    return matches[0] if matches else None
 
 
 def search_articles(query: str, n_results: int = 10,
@@ -998,7 +1195,7 @@ async def chat(request: Request, body: ChatRequest):
     Respects connection mode setting (online_only, hybrid, offline_only).
     Rate limited to 10 requests per minute per IP.
     """
-    session_id = body.session_id or datetime.utcnow().isoformat()
+    session_id = body.session_id or datetime.now(timezone.utc).isoformat()
     message = body.message.strip()
 
     # Get connection mode
@@ -1103,7 +1300,7 @@ async def simple_chat(request: Request, body: SimpleQueryRequest):
         Response:
         {"response": "Here are some methods...", "session_id": "abc123"}
     """
-    session_id = body.session_id or datetime.utcnow().isoformat()
+    session_id = body.session_id or datetime.now(timezone.utc).isoformat()
     message = body.message.strip()
 
     if not message:
@@ -1127,21 +1324,34 @@ async def simple_chat(request: Request, body: SimpleQueryRequest):
     # Detect doc type preference and search using unified service
     preferred_doc_type = detect_doc_type_preference(message)
 
-    # Build source filter
+    # Resolve source filtering with new mode-based system
+    source_ids, filter_warnings = resolve_source_filter(
+        source_mode=body.source_mode,
+        exclude=body.exclude,
+        include=body.include,
+        legacy_sources=body.sources
+    )
+
+    # Handle no sources case
+    if source_ids is not None and len(source_ids) == 0:
+        warning_text = "\n".join(filter_warnings) if filter_warnings else ""
+        no_source_msg = "No sources selected to search. You can remove source filters to search all available knowledge, or check your include/exclude lists."
+        response_text = f"{warning_text}\n\n{no_source_msg}".strip() if warning_text else no_source_msg
+        return SimpleQueryResponse(
+            response=response_text,
+            session_id=session_id
+        )
+
+    # Build ChromaDB source filter
     source_filter = None
-    if body.sources is not None:
-        if len(body.sources) == 0:
-            articles = []
-        else:
-            source_filter = {"source": {"$in": body.sources}}
+    if source_ids is not None:
+        source_filter = {"source": {"$in": source_ids}}
 
     if any(phrase in message.lower() for phrase in ["more like", "similar to", "like #", "like number"]):
         articles = handle_similarity_query(message, session["last_results"])
         # Post-filter for similarity queries
-        if body.sources is not None and len(body.sources) > 0:
-            articles = [a for a in articles if a.get("metadata", {}).get("source") in body.sources]
-    elif body.sources is not None and len(body.sources) == 0:
-        articles = []  # No sources selected
+        if source_ids is not None:
+            articles = [a for a in articles if a.get("metadata", {}).get("source") in source_ids]
     else:
         articles = search_articles(message, n_results=15, source_filter=source_filter)
 
@@ -1158,6 +1368,11 @@ async def simple_chat(request: Request, body: SimpleQueryRequest):
 
     # Generate response using unified service
     response_text = generate_response(message, context, history)
+
+    # Prepend any warnings to the response
+    if filter_warnings:
+        warning_text = "\n".join(filter_warnings)
+        response_text = f"{warning_text}\n\n{response_text}"
 
     # Update history
     session["history"].append(HumanMessage(content=message))
@@ -1189,7 +1404,7 @@ async def stream_chat(request: Request, body: SimpleQueryRequest):
             }
         };
     """
-    session_id = body.session_id or datetime.utcnow().isoformat()
+    session_id = body.session_id or datetime.now(timezone.utc).isoformat()
     message = body.message.strip()
 
     if not message:
@@ -1213,22 +1428,35 @@ async def stream_chat(request: Request, body: SimpleQueryRequest):
     # Search for articles with source filter
     preferred_doc_type = detect_doc_type_preference(message)
 
-    # Build source filter
+    # Resolve source filtering with new mode-based system
+    source_ids, filter_warnings = resolve_source_filter(
+        source_mode=body.source_mode,
+        exclude=body.exclude,
+        include=body.include,
+        legacy_sources=body.sources
+    )
+
+    # Handle no sources case
+    if source_ids is not None and len(source_ids) == 0:
+        async def no_sources_response():
+            # Stream warnings first if any
+            for warning in filter_warnings:
+                yield f"data: {warning}\\n\n\n"
+            yield "data: \\n\n\n"
+            yield "data: No sources selected to search. You can remove source filters to search all available knowledge, or check your include/exclude lists.\n\n"
+            yield "data: [DONE]\n\n"
+        return StreamingResponse(no_sources_response(), media_type="text/event-stream")
+
+    # Build ChromaDB source filter
     source_filter = None
-    if body.sources is not None:
-        if len(body.sources) == 0:
-            # Empty list = no sources selected
-            articles = []
-        else:
-            source_filter = {"source": {"$in": body.sources}}
+    if source_ids is not None:
+        source_filter = {"source": {"$in": source_ids}}
 
     if any(phrase in message.lower() for phrase in ["more like", "similar to", "like #", "like number"]):
         articles = handle_similarity_query(message, session["last_results"])
         # Post-filter for similarity queries
-        if body.sources is not None and len(body.sources) > 0:
-            articles = [a for a in articles if a.get("metadata", {}).get("source") in body.sources]
-    elif body.sources is not None and len(body.sources) == 0:
-        articles = []  # No sources selected
+        if source_ids is not None:
+            articles = [a for a in articles if a.get("metadata", {}).get("source") in source_ids]
     else:
         articles = search_articles(message, n_results=15, source_filter=source_filter)
 
@@ -1242,6 +1470,11 @@ async def stream_chat(request: Request, body: SimpleQueryRequest):
     # Get AI service for streaming
     ai_service = get_ai_service()
 
+    # Capture warnings to prepend to stream
+    warning_prefix = ""
+    if filter_warnings:
+        warning_prefix = "\\n".join(filter_warnings) + "\\n\\n"
+
     async def generate():
         # Send articles first as JSON (prefixed with [ARTICLES])
         # Use appropriate URL based on context (online for Railway, local for offline)
@@ -1254,9 +1487,15 @@ async def stream_chat(request: Request, body: SimpleQueryRequest):
         } for a in articles])
         yield f"data: [ARTICLES]{articles_json}\n\n"
 
-        # Mode info available via /api/v1/connection-status endpoint if needed
+        # Send any source filter warnings at the start of the response
+        if warning_prefix:
+            yield f"data: {warning_prefix}\n\n"
 
         full_response = []
+        if warning_prefix:
+            # Include warnings in the recorded response
+            full_response.append(warning_prefix.replace("\\n", "\n"))
+
         try:
             for chunk in ai_service.generate_response_stream(message, context, history):
                 full_response.append(chunk)
@@ -1740,7 +1979,7 @@ async def cloud_submit(request: Request, submission: CloudSubmission):
         # Create submission record
         import uuid
         submission_id = str(uuid.uuid4())[:8]
-        timestamp = datetime.utcnow().isoformat()
+        timestamp = datetime.now(timezone.utc).isoformat()
 
         submission_data = {
             "id": submission_id,
