@@ -29,8 +29,13 @@ Disaster Clippy is an **offline-capable AI search assistant** for emergency prep
 ### For Quick Setup
 | Doc | When to Read |
 |-----|--------------|
-| [README.md](../README.md) | First time setup, API usage |
+| [README.md](../README.md) | First time setup, quick start |
 | [DEVELOPER.md](../DEVELOPER.md) | Dev environment, folder structure, env vars |
+
+### For External Integration
+| Doc | When to Read |
+|-----|--------------|
+| [api.md](api.md) | Embedding chat on other sites, source filtering, rate limits |
 
 ### For Understanding Architecture
 | Doc | When to Read |
@@ -76,6 +81,14 @@ Use this to find the right files and docs:
 ```
 Read: docs/ai-service.md
 Files: app.py, admin/ai_service.py, admin/connection_manager.py
+```
+
+### External API / Embedding on Other Sites
+```
+Read: docs/api.md
+Endpoints: /api/v1/chat, /api/v1/chat/stream, /api/v1/sources
+Files: app.py (SimpleQueryRequest, simple_chat, stream_chat)
+Widget: static/embed-widget.html
 ```
 
 ### Creating or Editing Sources
