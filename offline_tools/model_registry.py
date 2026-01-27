@@ -22,6 +22,7 @@ AVAILABLE_MODELS = {
         "min_ram_gb": 2,
         "huggingface_repo": "sentence-transformers/all-MiniLM-L6-v2",
         "files": [
+            "1_Pooling/config.json",
             "config.json",
             "tokenizer.json",
             "tokenizer_config.json",
@@ -41,6 +42,7 @@ AVAILABLE_MODELS = {
         "min_ram_gb": 4,
         "huggingface_repo": "sentence-transformers/all-mpnet-base-v2",
         "files": [
+            "1_Pooling/config.json",
             "config.json",
             "tokenizer.json",
             "tokenizer_config.json",
@@ -60,6 +62,7 @@ AVAILABLE_MODELS = {
         "min_ram_gb": 8,
         "huggingface_repo": "intfloat/e5-large-v2",
         "files": [
+            "1_Pooling/config.json",
             "config.json",
             "tokenizer.json",
             "tokenizer_config.json",
