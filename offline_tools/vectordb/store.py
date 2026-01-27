@@ -28,15 +28,19 @@ except ImportError:
     EmbeddingService = None
 
 
-def get_default_chroma_path(dimension: int = None) -> str:
+def get_default_chroma_path(dimension: int = None, language: str = "en") -> str:
     """
     Get default ChromaDB path from local_config or BACKUP_PATH env var.
 
     Args:
         dimension: Embedding dimension (384, 768, 1024, or 1536). If None, uses configured model.
+        language: Language code for localized sources (e.g., "es", "fr"). Default "en" uses standard path.
 
     Returns:
-        Path to the dimension-specific ChromaDB directory
+        Path to the dimension and language-specific ChromaDB directory.
+        Examples:
+            - get_default_chroma_path(768) -> "backup/chroma_db_768"
+            - get_default_chroma_path(768, "es") -> "backup/chroma_db_768_es"
     """
     # Auto-detect dimension based on configured embedding model
     if dimension is None:
@@ -70,7 +74,9 @@ def get_default_chroma_path(dimension: int = None) -> str:
     if not backup_path:
         backup_path = os.getenv("BACKUP_PATH", "data")
 
-    # Return dimension-specific path
+    # Return dimension and language-specific path
+    if language and language != "en":
+        return os.path.join(backup_path, f"chroma_db_{dimension}_{language}")
     return os.path.join(backup_path, f"chroma_db_{dimension}")
 
 

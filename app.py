@@ -351,6 +351,7 @@ class ChatRequest(BaseModel):
     message: str
     session_id: Optional[str] = None
     sources: Optional[List[str]] = None  # List of source IDs to filter by
+    search_language: Optional[str] = "en"  # Language for localized source search (e.g., "es")
 
 
 class ChatResponse(BaseModel):
@@ -375,6 +376,8 @@ class SimpleQueryRequest(BaseModel):
     source_mode: Optional[str] = None  # "all" (default) or "none"
     exclude: Optional[List[str]] = None  # Sources to exclude when mode="all"
     include: Optional[List[str]] = None  # Sources to include when mode="none"
+    # Language for localized source search (Phase 4)
+    search_language: Optional[str] = "en"  # e.g., "es" for Spanish localized sources
 
 
 class SimpleQueryResponse(BaseModel):
@@ -1081,7 +1084,8 @@ def _fuzzy_match_source(typo: str, available_ids: set) -> Optional[str]:
 
 
 def search_articles(query: str, n_results: int = 10,
-                   source_filter: dict = None, mode: str = None) -> list:
+                   source_filter: dict = None, mode: str = None,
+                   language: str = "en") -> list:
     """
     Search for articles using the unified AI service.
 
@@ -1095,6 +1099,7 @@ def search_articles(query: str, n_results: int = 10,
         n_results: Number of results
         source_filter: ChromaDB filter dict
         mode: Connection mode override (optional)
+        language: Language code for localized sources (e.g., "es" for Spanish)
 
     Returns:
         List of matching articles
@@ -1106,9 +1111,10 @@ def search_articles(query: str, n_results: int = 10,
     else:
         sync_mode_from_config()
 
-    # Use unified AI service
+    # Use unified AI service with language support
     ai_service = get_ai_service()
-    result = ai_service.search(query, n_results=n_results, source_filter=source_filter)
+    result = ai_service.search(query, n_results=n_results, source_filter=source_filter,
+                               language=language)
 
     return result.articles
 
@@ -1213,6 +1219,9 @@ async def chat(request: Request, body: ChatRequest):
     # Detect if user has a preference for doc type (articles, products, guides)
     preferred_doc_type = detect_doc_type_preference(message)
 
+    # Get search language (for localized sources like appropedia_es)
+    search_language = body.search_language or "en"
+
     # Check for "more like this" type queries
     if any(phrase in message.lower() for phrase in ["more like", "similar to", "like #", "like number"]):
         # Try to find which article they're referring to
@@ -1228,10 +1237,12 @@ async def chat(request: Request, body: ChatRequest):
             else:
                 source_filter = {"source": {"$in": body.sources}}
                 articles = search_articles(message, n_results=15,
-                                          source_filter=source_filter, mode=mode)
+                                          source_filter=source_filter, mode=mode,
+                                          language=search_language)
         else:
             articles = search_articles(message, n_results=15,
-                                       source_filter=source_filter, mode=mode)
+                                       source_filter=source_filter, mode=mode,
+                                       language=search_language)
 
     # Prioritize results by doc_type (guides by default, unless user asked for something else)
     articles = prioritize_results_by_doc_type(articles, preferred_doc_type)
@@ -1347,13 +1358,17 @@ async def simple_chat(request: Request, body: SimpleQueryRequest):
     if source_ids is not None:
         source_filter = {"source": {"$in": source_ids}}
 
+    # Get search language for localized sources
+    search_language = body.search_language or "en"
+
     if any(phrase in message.lower() for phrase in ["more like", "similar to", "like #", "like number"]):
         articles = handle_similarity_query(message, session["last_results"])
         # Post-filter for similarity queries
         if source_ids is not None:
             articles = [a for a in articles if a.get("metadata", {}).get("source") in source_ids]
     else:
-        articles = search_articles(message, n_results=15, source_filter=source_filter)
+        articles = search_articles(message, n_results=15, source_filter=source_filter,
+                                   language=search_language)
 
     # Prioritize and ensure source diversity
     articles = prioritize_results_by_doc_type(articles, preferred_doc_type)
@@ -1452,13 +1467,17 @@ async def stream_chat(request: Request, body: SimpleQueryRequest):
     if source_ids is not None:
         source_filter = {"source": {"$in": source_ids}}
 
+    # Get search language for localized sources
+    search_language = body.search_language or "en"
+
     if any(phrase in message.lower() for phrase in ["more like", "similar to", "like #", "like number"]):
         articles = handle_similarity_query(message, session["last_results"])
         # Post-filter for similarity queries
         if source_ids is not None:
             articles = [a for a in articles if a.get("metadata", {}).get("source") in source_ids]
     else:
-        articles = search_articles(message, n_results=15, source_filter=source_filter)
+        articles = search_articles(message, n_results=15, source_filter=source_filter,
+                                   language=search_language)
 
     articles = prioritize_results_by_doc_type(articles, preferred_doc_type)
     articles = ensure_source_diversity(articles, max_per_source=2, total_results=5)

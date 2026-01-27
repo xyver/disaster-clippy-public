@@ -11,12 +11,13 @@ from typing import Optional, List
 from pathlib import Path
 from datetime import datetime
 import json
+import os
 
 from offline_tools.schemas import (
     get_manifest_file, get_metadata_file, get_index_file,
     get_vectors_file, get_vectors_768_file, get_backup_manifest_file
 )
-from offline_tools.validation import SYSTEM_FOLDERS, _check_license_allowlist
+from offline_tools.validation import is_system_folder, _check_license_allowlist
 
 router = APIRouter(prefix="/api", tags=["Source Tools"])
 
@@ -158,6 +159,60 @@ def read_json_count_only(file_path: Path) -> dict:
         return {}
 
 
+def _get_orphan_file_path() -> Path:
+    """Get path to orphaned sources tracking file"""
+    config = get_local_config()
+    backup_folder = config.get_backup_folder()
+    if backup_folder:
+        return Path(backup_folder) / "_orphaned_sources.json"
+    return None
+
+
+def _add_to_orphaned_list(source_id: str, language: str = "en"):
+    """Add a source to the orphaned list for deferred ChromaDB cleanup"""
+    orphan_file = _get_orphan_file_path()
+    if not orphan_file:
+        return
+
+    orphans = {"sources": []}
+    if orphan_file.exists():
+        try:
+            with open(orphan_file, 'r', encoding='utf-8') as f:
+                orphans = json.load(f)
+        except Exception:
+            pass
+
+    # Add if not already in list
+    entry = {"source_id": source_id, "language": language, "deleted_at": datetime.utcnow().isoformat()}
+    existing_ids = [o.get("source_id") for o in orphans.get("sources", [])]
+    if source_id not in existing_ids:
+        orphans["sources"].append(entry)
+
+    with open(orphan_file, 'w', encoding='utf-8') as f:
+        json.dump(orphans, f, indent=2)
+
+
+def _get_orphaned_list() -> list:
+    """Get list of orphaned sources pending ChromaDB cleanup"""
+    orphan_file = _get_orphan_file_path()
+    if not orphan_file or not orphan_file.exists():
+        return []
+
+    try:
+        with open(orphan_file, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        return data.get("sources", [])
+    except Exception:
+        return []
+
+
+def _clear_orphaned_list():
+    """Clear the orphaned list after cleanup"""
+    orphan_file = _get_orphan_file_path()
+    if orphan_file and orphan_file.exists():
+        orphan_file.unlink()
+
+
 # =============================================================================
 # SOURCE LISTING & STATUS
 # =============================================================================
@@ -201,7 +256,7 @@ async def get_local_sources():
     all_source_ids = set(validated_sources.keys())
     for source_folder in backup_path.iterdir():
         if source_folder.is_dir() and not source_folder.name.startswith("_"):
-            if source_folder.name.lower() not in SYSTEM_FOLDERS:
+            if not is_system_folder(source_folder.name):
                 all_source_ids.add(source_folder.name)
 
     # Build source list from master.json (fast) + fallback for new sources
@@ -629,8 +684,71 @@ async def create_source(request: CreateSourceRequest):
                     "error": "ZIM file not found at specified path"
                 }
 
+        elif request.source_type == "pdf" and request.import_path:
+            # Handle PDF file/folder import - copy into source folder
+            import shutil
+
+            import_path = Path(request.import_path)
+            if import_path.is_absolute():
+                import_full_path = import_path
+            else:
+                import_full_path = Path(backup_folder) / request.import_path
+
+            pdf_copied = []
+            if import_full_path.exists():
+                if import_full_path.suffix.lower() == ".pdf":
+                    # Single PDF file - copy to source folder
+                    pdf_dest = source_path / import_full_path.name
+                    try:
+                        shutil.copy2(str(import_full_path), str(pdf_dest))
+                        pdf_copied.append(import_full_path.name)
+                    except Exception as copy_err:
+                        import_info = {
+                            "path": str(import_full_path),
+                            "error": f"Failed to copy PDF: {copy_err}"
+                        }
+
+                elif import_full_path.is_dir():
+                    # Folder of PDFs - copy all PDFs to source folder
+                    pdf_files = list(import_full_path.glob("*.pdf"))
+                    for pdf_file in pdf_files:
+                        pdf_dest = source_path / pdf_file.name
+                        try:
+                            shutil.copy2(str(pdf_file), str(pdf_dest))
+                            pdf_copied.append(pdf_file.name)
+                        except Exception as copy_err:
+                            print(f"Warning: Failed to copy {pdf_file.name}: {copy_err}")
+
+                if pdf_copied:
+                    total_size = sum((source_path / f).stat().st_size for f in pdf_copied)
+                    import_info = {
+                        "path": str(source_path),
+                        "original": str(import_full_path),
+                        "copied": True,
+                        "pdf_count": len(pdf_copied),
+                        "files": pdf_copied[:10],  # First 10 files
+                        "size_mb": round(total_size / (1024*1024), 2)
+                    }
+
+                    # Update manifest with PDF info
+                    source_config["pdf_count"] = len(pdf_copied)
+                    source_config["backup_type"] = "pdf"
+                    with open(manifest_file, 'w', encoding='utf-8') as f:
+                        json.dump(source_config, f, indent=2)
+                elif not import_info:
+                    import_info = {
+                        "path": str(import_full_path),
+                        "error": "No PDF files found at specified path"
+                    }
+            else:
+                import_info = {
+                    "path": str(import_full_path),
+                    "exists": False,
+                    "error": "Path not found"
+                }
+
         elif request.import_path:
-            # Non-ZIM import path handling (existing behavior)
+            # Generic import path handling (HTML, etc.)
             import_full_path = Path(backup_folder) / request.import_path
             if import_full_path.exists():
                 import_info = {"path": str(import_full_path), "exists": True}
@@ -1407,18 +1525,20 @@ async def reindex_source(request: ReindexRequest):
 # ADMIN MODE DETECTION
 # =============================================================================
 
-@router.get("/admin-mode")
-async def get_admin_mode():
+@router.get("/admin-capabilities")
+async def get_admin_capabilities():
     """
-    Detect if user is a global admin (can create both 1536 and 768 vectors)
-    or local admin (only works with local embeddings).
+    Get admin capabilities based on installed models and API keys.
 
-    Global admin detection:
+    Note: This is separate from admin MODE (local/global based on VECTOR_DB_MODE).
+    Capabilities determine what embeddings can be created.
+
+    Capability detection:
     - Has OPENAI_API_KEY set (can create 1536-dim embeddings)
-    - Or has GLOBAL_ADMIN=true in .env
+    - Has local embedding model installed (can create 768-dim embeddings)
 
     Returns:
-        is_global_admin: bool
+        is_global_admin: bool (deprecated - use /admin-mode instead)
         can_create_1536: bool (has OpenAI API key)
         can_create_local: bool (configured embedding model is installed)
         configured_model: dict with model info (id, display_name, dimension)
@@ -2140,21 +2260,15 @@ def _run_delete_job(source_id: str, delete_files: bool, progress_callback=None, 
         errors.append(f"Failed to remove from _master.json: {e}")
 
     if progress_callback:
-        progress_callback(40, f"Deleting vectors from ChromaDB (this may take a moment)...")
+        progress_callback(40, f"Marking source as orphaned in ChromaDB...")
 
-    # 4. Try to remove from local ChromaDB if it exists
-    deleted_count = 0
+    # 4. Add to orphaned list instead of slow ChromaDB delete
+    # ChromaDB cleanup can be done later via "Clean ChromaDB" button
     try:
-        from offline_tools.vectordb import get_vector_store
-        # Explicitly use mode="local" and read_only=True (delete doesn't need embeddings)
-        store = get_vector_store(mode="local", read_only=True)
-        # Note: metadata field is "source", not "source_id"
-        result = store.delete_by_source(source_id)
-        deleted_count = result.get("deleted_count", 0)
-        if deleted_count > 0:
-            deleted_items.append(f"ChromaDB entries ({deleted_count} docs)")
+        _add_to_orphaned_list(source_id)
+        deleted_items.append("Added to ChromaDB orphan list")
     except Exception as e:
-        errors.append(f"Failed to remove from ChromaDB: {e}")
+        errors.append(f"Failed to add to orphan list: {e}")
 
     if progress_callback:
         progress_callback(100, f"Deleted {source_id}")
@@ -2164,7 +2278,7 @@ def _run_delete_job(source_id: str, delete_files: bool, progress_callback=None, 
         "source_id": source_id,
         "deleted": deleted_items,
         "freed_mb": round(freed_mb, 2),
-        "deleted_vectors": deleted_count,
+        "chromadb_orphaned": True,  # Deferred cleanup via /clean-chromadb
         "errors": errors if errors else None,
         "message": f"Deleted {source_id}: {', '.join(deleted_items)}"
     }
@@ -2198,6 +2312,583 @@ async def delete_source(request: DeleteSourceRequest):
         }
     except Exception as e:
         raise HTTPException(500, f"Failed to start delete job: {e}")
+
+
+# =============================================================================
+# CHROMADB CLEANUP (Orphan Management)
+# =============================================================================
+
+@router.get("/chromadb-orphans")
+async def get_chromadb_orphans():
+    """
+    Get list of deleted sources that still have entries in ChromaDB.
+    These can be cleaned up with /clean-chromadb.
+    """
+    orphans = _get_orphaned_list()
+    return {
+        "orphans": orphans,
+        "count": len(orphans),
+        "message": f"{len(orphans)} sources pending ChromaDB cleanup" if orphans else "No orphaned sources"
+    }
+
+
+def _run_chromadb_cleanup_job(progress_callback=None, cancel_checker=None, job_id=None):
+    """Background job to clean up orphaned sources from ChromaDB"""
+    from offline_tools.vectordb import get_vector_store
+
+    orphans = _get_orphaned_list()
+    if not orphans:
+        return {"status": "success", "cleaned": 0, "message": "No orphans to clean"}
+
+    total = len(orphans)
+    cleaned = 0
+    errors = []
+
+    try:
+        store = get_vector_store(mode="local", read_only=True)
+
+        for i, orphan in enumerate(orphans):
+            if cancel_checker and cancel_checker():
+                return {"status": "cancelled", "cleaned": cleaned}
+
+            source_id = orphan.get("source_id")
+            if progress_callback:
+                progress_callback(int((i / total) * 100), f"Cleaning {source_id}...")
+
+            try:
+                store.delete_by_source(source_id)
+                cleaned += 1
+            except Exception as e:
+                errors.append(f"{source_id}: {e}")
+
+        # Clear the orphan list after successful cleanup
+        _clear_orphaned_list()
+
+        if progress_callback:
+            progress_callback(100, f"Cleaned {cleaned} sources")
+
+        return {
+            "status": "success" if not errors else "partial",
+            "cleaned": cleaned,
+            "errors": errors if errors else None,
+            "message": f"Cleaned {cleaned}/{total} orphaned sources from ChromaDB"
+        }
+
+    except Exception as e:
+        return {"status": "error", "cleaned": cleaned, "error": str(e)}
+
+
+@router.post("/clean-chromadb")
+async def clean_chromadb():
+    """
+    Clean up ChromaDB by removing entries for deleted sources.
+    Runs as a background job since this can be slow.
+    """
+    from admin.job_manager import get_job_manager
+
+    orphans = _get_orphaned_list()
+    if not orphans:
+        return {"status": "success", "message": "No orphaned sources to clean"}
+
+    manager = get_job_manager()
+
+    try:
+        job_id = manager.submit(
+            "chromadb_cleanup",
+            "cleanup",
+            _run_chromadb_cleanup_job
+        )
+
+        return {
+            "status": "queued",
+            "job_id": job_id,
+            "orphan_count": len(orphans),
+            "message": f"ChromaDB cleanup started for {len(orphans)} sources"
+        }
+    except Exception as e:
+        raise HTTPException(500, f"Failed to start cleanup job: {e}")
+
+
+# =============================================================================
+# PDF FILE TOOLS
+# =============================================================================
+
+class PDFImportRequest(BaseModel):
+    """Request model for PDF import with sectioned processing"""
+    source_id: str
+    processing_mode: str = "sectioned"  # sectioned, chunked, full
+    start_page: int = 1
+    end_page: int = 0  # 0 = all pages
+    chunk_size: int = 4000
+
+
+@router.post("/pdf/import")
+async def import_pdf_source(request: PDFImportRequest):
+    """
+    Import and process PDF files for a source.
+
+    This processes PDF files in the source folder using the specified mode:
+    - sectioned: Extracts sections with headers (best for building codes, manuals)
+    - chunked: Splits by character count (for unstructured PDFs)
+    - full: Keeps entire document as one chunk
+
+    Creates:
+    - _collection.json with document metadata
+    - _metadata.json with document list
+    - _index.json with full content for display
+    """
+    from admin.job_manager import get_job_manager
+
+    source_id = request.source_id.strip().lower()
+
+    # Validate source exists
+    config = get_local_config()
+    backup_folder = config.get_backup_folder()
+    source_path = Path(backup_folder) / source_id
+
+    if not source_path.exists():
+        raise HTTPException(404, f"Source folder not found: {source_id}")
+
+    # Find PDF files
+    pdf_files = list(source_path.glob("*.pdf"))
+    if not pdf_files:
+        raise HTTPException(400, f"No PDF files found in source folder: {source_id}")
+
+    def _run_pdf_import(source_id: str, processing_mode: str, start_page: int,
+                        end_page: int, chunk_size: int, progress_callback=None,
+                        cancel_checker=None, job_id=None):
+        """Process PDFs and create metadata/index files"""
+        import json
+        import hashlib
+        from datetime import datetime
+        from offline_tools.scraper.pdf import PDFScraper
+        from offline_tools.schemas import get_metadata_file, get_index_file, get_manifest_file
+
+        config = get_local_config()
+        backup_folder = config.get_backup_folder()
+        source_path = Path(backup_folder) / source_id
+
+        pdf_files = list(source_path.glob("*.pdf"))
+        total_pdfs = len(pdf_files)
+
+        if total_pdfs == 0:
+            return {"success": False, "error": "No PDF files found"}
+
+        # Create scraper
+        scraper = PDFScraper(source_name=source_id)
+
+        all_pages = []
+        documents = {}
+        collection_docs = {}
+
+        for i, pdf_path in enumerate(pdf_files):
+            if cancel_checker and cancel_checker():
+                return {"success": False, "error": "Cancelled", "processed": i}
+
+            if progress_callback:
+                progress_callback(i, total_pdfs, f"Processing {pdf_path.name}")
+
+            try:
+                # Process based on mode
+                if processing_mode == "sectioned":
+                    pages = scraper.process_file_sectioned(
+                        str(pdf_path),
+                        start_page=start_page,
+                        end_page=end_page if end_page > 0 else None
+                    )
+                elif processing_mode == "chunked":
+                    pages = scraper.process_file_chunked(
+                        str(pdf_path),
+                        chunk_size=chunk_size
+                    )
+                else:  # full
+                    page = scraper.process_file(str(pdf_path))
+                    pages = [page] if page else []
+
+                if not pages:
+                    print(f"Warning: No content extracted from {pdf_path.name}")
+                    continue
+
+                # Track document metadata for _collection.json
+                content_sample = pages[0].content[:1000] if pages else ""
+                content_hash = hashlib.md5(content_sample.encode()).hexdigest()[:12]
+
+                collection_docs[content_hash] = {
+                    "filename": pdf_path.name,
+                    "title": pages[0].title if pages else pdf_path.stem,
+                    "chunk_count": len(pages),
+                    "char_count": sum(len(p.content) for p in pages),
+                    "content_hash": content_hash,
+                    "added_at": datetime.now().isoformat()
+                }
+
+                # Add to main page list
+                all_pages.extend(pages)
+
+            except Exception as e:
+                print(f"Error processing {pdf_path.name}: {e}")
+                continue
+
+        if not all_pages:
+            return {"success": False, "error": "No content extracted from any PDFs"}
+
+        if progress_callback:
+            progress_callback(total_pdfs, total_pdfs, "Building metadata files...")
+
+        # Build documents dict for _metadata.json
+        for idx, page in enumerate(all_pages):
+            doc_id = hashlib.md5(page.url.encode()).hexdigest()[:12]
+            documents[doc_id] = {
+                "title": page.title,
+                "url": page.url,
+                "snippet": page.content[:500] if page.content else "",
+                "source_id": source_id,
+                "categories": page.categories
+            }
+
+        # Create _collection.json
+        collection_data = {
+            "collection": {
+                "collection_id": source_id,
+                "name": source_id.replace("_", " ").replace("-", " ").title(),
+                "description": f"PDF collection: {total_pdfs} document(s)",
+                "license": "Unknown",
+                "topics": [],
+                "created": datetime.now().isoformat(),
+                "updated": datetime.now().isoformat()
+            },
+            "documents": collection_docs,
+            "processing": {
+                "mode": processing_mode,
+                "start_page": start_page,
+                "end_page": end_page,
+                "chunk_size": chunk_size if processing_mode == "chunked" else None
+            }
+        }
+
+        collection_file = source_path / "_collection.json"
+        with open(collection_file, 'w', encoding='utf-8') as f:
+            json.dump(collection_data, f, indent=2, ensure_ascii=False)
+
+        # Create _metadata.json
+        metadata = {
+            "source_id": source_id,
+            "document_count": len(documents),
+            "documents": documents
+        }
+
+        metadata_file = source_path / get_metadata_file()
+        with open(metadata_file, 'w', encoding='utf-8') as f:
+            json.dump(metadata, f, indent=2, ensure_ascii=False)
+
+        # Create _index.json (full content for display)
+        index_data = {
+            "source_id": source_id,
+            "document_count": len(all_pages),
+            "documents": {}
+        }
+
+        for idx, page in enumerate(all_pages):
+            doc_id = hashlib.md5(page.url.encode()).hexdigest()[:12]
+            index_data["documents"][doc_id] = {
+                "title": page.title,
+                "url": page.url,
+                "content": page.content,
+                "source_id": source_id,
+                "categories": page.categories,
+                "content_hash": page.content_hash
+            }
+
+        index_file = source_path / get_index_file()
+        with open(index_file, 'w', encoding='utf-8') as f:
+            json.dump(index_data, f, indent=2, ensure_ascii=False)
+
+        # Update manifest
+        manifest_file = source_path / get_manifest_file()
+        manifest = {}
+        if manifest_file.exists():
+            try:
+                with open(manifest_file, 'r', encoding='utf-8') as f:
+                    manifest = json.load(f)
+            except Exception:
+                pass
+
+        manifest.update({
+            "source_id": source_id,
+            "backup_type": "pdf",
+            "total_docs": len(all_pages),
+            "pdf_count": total_pdfs,
+            "processing_mode": processing_mode,
+            "updated_at": datetime.now().isoformat()
+        })
+
+        with open(manifest_file, 'w', encoding='utf-8') as f:
+            json.dump(manifest, f, indent=2, ensure_ascii=False)
+
+        return {
+            "success": True,
+            "source_id": source_id,
+            "pdf_count": total_pdfs,
+            "document_count": len(all_pages),
+            "processing_mode": processing_mode,
+            "files_created": ["_collection.json", "_metadata.json", "_index.json", "_manifest.json"]
+        }
+
+    # Submit as background job
+    manager = get_job_manager()
+
+    try:
+        job_id = manager.submit(
+            "pdf_import",
+            source_id,
+            _run_pdf_import,
+            source_id,
+            request.processing_mode,
+            request.start_page,
+            request.end_page,
+            request.chunk_size
+        )
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+
+    return {
+        "status": "submitted",
+        "job_id": job_id,
+        "source_id": source_id,
+        "pdf_count": len(pdf_files),
+        "processing_mode": request.processing_mode,
+        "message": f"PDF import started for {source_id} ({len(pdf_files)} files)"
+    }
+
+
+class UploadPDFToR2Request(BaseModel):
+    source_id: str
+
+
+@router.post("/pdf/upload-to-r2")
+async def upload_pdf_to_r2(request: UploadPDFToR2Request):
+    """
+    Upload PDF files from a source folder to R2 backups.
+
+    REQUIRES: VECTOR_DB_MODE=global (Global Admin only)
+
+    This uploads the PDF files to R2 so they're accessible via public URL.
+    Also updates the manifest with the R2 base_url for correct link generation.
+    """
+    from dotenv import load_dotenv
+    load_dotenv()
+
+    # Check global admin mode
+    vector_db_mode = os.getenv("VECTOR_DB_MODE", "local")
+    if vector_db_mode != "global":
+        raise HTTPException(403, "This endpoint requires VECTOR_DB_MODE=global")
+
+    # Check R2_PUBLIC_URL is configured
+    r2_public_url = os.getenv("R2_PUBLIC_URL", "")
+    if not r2_public_url:
+        raise HTTPException(400, "R2_PUBLIC_URL not configured in environment")
+
+    source_id = request.source_id.strip().lower()
+
+    # Validate source exists
+    config = get_local_config()
+    backup_folder = config.get_backup_folder()
+    source_path = Path(backup_folder) / source_id
+
+    if not source_path.exists():
+        raise HTTPException(404, f"Source folder not found: {source_id}")
+
+    # Find PDF files
+    pdf_files = list(source_path.glob("*.pdf"))
+    if not pdf_files:
+        raise HTTPException(400, f"No PDF files found in source folder: {source_id}")
+
+    # Get R2 storage
+    try:
+        from offline_tools.cloud.r2 import get_r2_storage
+        storage = get_r2_storage()
+        if not storage.is_configured():
+            raise HTTPException(500, "R2 storage not configured")
+    except ImportError:
+        raise HTTPException(500, "R2 storage module not available")
+
+    # Upload each PDF to R2
+    uploaded_files = []
+    errors = []
+    total_size_mb = 0
+
+    for pdf_file in pdf_files:
+        remote_key = f"backups/{source_id}/{pdf_file.name}"
+        try:
+            success = storage.upload_file(str(pdf_file), remote_key)
+            if success:
+                size_mb = pdf_file.stat().st_size / (1024 * 1024)
+                uploaded_files.append({
+                    "filename": pdf_file.name,
+                    "remote_key": remote_key,
+                    "size_mb": round(size_mb, 2),
+                    "public_url": f"{r2_public_url.rstrip('/')}/{remote_key}"
+                })
+                total_size_mb += size_mb
+            else:
+                errors.append(f"Failed to upload {pdf_file.name}")
+        except Exception as e:
+            errors.append(f"{pdf_file.name}: {str(e)}")
+
+    if not uploaded_files:
+        raise HTTPException(500, f"No files uploaded. Errors: {errors}")
+
+    # Update manifest with R2 base_url
+    r2_base_url = f"{r2_public_url.rstrip('/')}/backups/{source_id}"
+    manifest_file = source_path / get_manifest_file()
+    manifest = {}
+
+    if manifest_file.exists():
+        try:
+            with open(manifest_file, 'r', encoding='utf-8') as f:
+                manifest = json.load(f)
+        except Exception:
+            pass
+
+    manifest["base_url"] = r2_base_url
+    manifest["r2_uploaded"] = True
+    manifest["r2_uploaded_at"] = datetime.now().isoformat()
+    manifest["r2_files"] = [f["filename"] for f in uploaded_files]
+
+    with open(manifest_file, 'w', encoding='utf-8') as f:
+        json.dump(manifest, f, indent=2, ensure_ascii=False)
+
+    return {
+        "status": "success",
+        "source_id": source_id,
+        "uploaded_count": len(uploaded_files),
+        "uploaded_files": uploaded_files,
+        "total_size_mb": round(total_size_mb, 2),
+        "base_url": r2_base_url,
+        "errors": errors if errors else None,
+        "message": f"Uploaded {len(uploaded_files)} PDF(s) to R2. Base URL set to {r2_base_url}"
+    }
+
+
+@router.get("/pdf/list")
+async def list_pdf_files():
+    """
+    List all PDF files and folders containing PDFs in the backup folder.
+
+    Used by the Create Source UI to populate the PDF file/folder selector.
+    Returns both individual PDFs and folders with PDF counts.
+    """
+    config = get_local_config()
+    backup_folder = config.get_backup_folder()
+
+    if not backup_folder:
+        return {"items": [], "error": "No backup folder configured"}
+
+    backup_path = Path(backup_folder)
+    if not backup_path.exists():
+        return {"items": [], "error": "Backup folder does not exist"}
+
+    items = []
+
+    # Scan backup folder for PDFs and folders containing PDFs
+    for item in backup_path.iterdir():
+        if item.name.startswith("_") or item.name.startswith("."):
+            continue
+
+        if item.is_file() and item.suffix.lower() == '.pdf':
+            # Individual PDF file at root level
+            size_mb = item.stat().st_size / (1024 * 1024)
+            items.append({
+                "type": "file",
+                "name": item.name,
+                "path": item.name,  # Relative path
+                "size_mb": round(size_mb, 1),
+                "suggested_id": item.stem.lower().replace(" ", "_").replace("-", "_")[:50]
+            })
+
+        elif item.is_dir():
+            # Check if folder contains PDFs (not already a source)
+            if is_system_folder(item.name):
+                continue
+
+            pdf_files = list(item.glob("*.pdf"))
+            if pdf_files:
+                total_size = sum(f.stat().st_size for f in pdf_files)
+                # Check if this is already a processed source
+                is_source = (item / "_manifest.json").exists()
+
+                items.append({
+                    "type": "folder",
+                    "name": item.name,
+                    "path": item.name,  # Relative path
+                    "pdf_count": len(pdf_files),
+                    "size_mb": round(total_size / (1024 * 1024), 1),
+                    "is_existing_source": is_source,
+                    "files": [f.name for f in pdf_files[:3]],  # Preview first 3
+                    "suggested_id": item.name.lower().replace(" ", "_").replace("-", "_")[:50]
+                })
+
+    # Sort: folders first, then files, alphabetically within each
+    items.sort(key=lambda x: (0 if x["type"] == "folder" else 1, x["name"].lower()))
+
+    return {
+        "items": items,
+        "backup_folder": backup_folder,
+        "total_pdfs": sum(1 for i in items if i["type"] == "file") + sum(i.get("pdf_count", 0) for i in items if i["type"] == "folder")
+    }
+
+
+@router.get("/available-pdf-sources")
+async def list_available_pdf_sources():
+    """
+    List sources that have PDF files ready for import.
+
+    Used by Job Builder's pdf_import source dropdown.
+    Shows sources with *.pdf files that haven't been processed yet.
+    """
+    config = get_local_config()
+    backup_folder = config.get_backup_folder()
+
+    if not backup_folder:
+        return {"sources": [], "error": "No backup folder configured"}
+
+    backup_path = Path(backup_folder)
+    if not backup_path.exists():
+        return {"sources": [], "error": "Backup folder does not exist"}
+
+    pdf_sources = []
+
+    for source_folder in backup_path.iterdir():
+        if not source_folder.is_dir():
+            continue
+        if source_folder.name.startswith("_") or source_folder.name.startswith("."):
+            continue
+        if is_system_folder(source_folder.name):
+            continue
+
+        # Check for PDF files
+        pdf_files = list(source_folder.glob("*.pdf"))
+        if not pdf_files:
+            continue
+
+        # Check if already processed (has _collection.json)
+        has_collection = (source_folder / "_collection.json").exists()
+        has_metadata = (source_folder / "_metadata.json").exists()
+
+        total_size = sum(f.stat().st_size for f in pdf_files)
+
+        pdf_sources.append({
+            "source_id": source_folder.name,
+            "pdf_count": len(pdf_files),
+            "size_mb": round(total_size / (1024 * 1024), 1),
+            "processed": has_collection and has_metadata,
+            "files": [f.name for f in pdf_files[:5]]  # First 5 filenames
+        })
+
+    return {
+        "sources": pdf_sources,
+        "total": len(pdf_sources)
+    }
 
 
 # =============================================================================
@@ -2532,7 +3223,7 @@ async def list_available_cloud_sources():
         if backup_path.exists():
             for source_folder in backup_path.iterdir():
                 if source_folder.is_dir() and not source_folder.name.startswith("_"):
-                    if source_folder.name.lower() not in SYSTEM_FOLDERS:
+                    if not is_system_folder(source_folder.name):
                         local_source_ids.add(source_folder.name.lower())
 
     # Filter out already-installed sources
@@ -2582,7 +3273,7 @@ async def list_available_zim_files():
     # Also scan source folders for .zim files (skip system folders)
     for source_folder in backup_path.iterdir():
         if source_folder.is_dir() and not source_folder.name.startswith("_"):
-            if source_folder.name.lower() not in SYSTEM_FOLDERS:
+            if not is_system_folder(source_folder.name):
                 for item in source_folder.glob("*.zim"):
                     size_mb = item.stat().st_size / (1024 * 1024)
                     zim_files.append({
@@ -2990,19 +3681,31 @@ async def test_source_links(source_id: str, test_base_url: Optional[str] = None)
     manifest_path = source_path / get_manifest_file()
     stored_base_url = ""
     source_type = "unknown"
+    backup_type = "unknown"
     is_zim_source = False
+    is_pdf_source = False
     if manifest_path.exists():
         try:
             with open(manifest_path, 'r', encoding='utf-8') as f:
                 manifest = json.load(f)
             stored_base_url = manifest.get("base_url", "")
             source_type = manifest.get("source_type", "unknown")
+            backup_type = manifest.get("backup_type", "unknown")
             is_zim_source = manifest.get("created_from") == "zim_import"
+            is_pdf_source = backup_type == "pdf" or source_type == "pdf"
         except Exception:
             pass
 
     # Use test_base_url if provided, otherwise use stored
     base_url = test_base_url if test_base_url else stored_base_url
+
+    # For PDF sources, auto-construct R2 public URL if no base_url set
+    r2_public_url = None
+    if is_pdf_source and not base_url:
+        r2_public_url = os.getenv("R2_PUBLIC_URL", "")
+        if r2_public_url:
+            # R2 public URL pattern: {R2_PUBLIC_URL}/backups/{source_id}/
+            base_url = f"{r2_public_url.rstrip('/')}/backups/{source_id}"
 
     # Load documents for sample - prefer _index.json (has actual indexed URLs)
     # Fall back to _metadata.json if index doesn't exist yet
@@ -3076,7 +3779,53 @@ async def test_source_links(source_id: str, test_base_url: Optional[str] = None)
         # For WARC-style ZIMs (multi-domain web archives), stored_url is already a full URL
 
         # Construct URL based on source type
-        if base_url and is_zim_source:
+        if is_pdf_source:
+            # PDF sources: URLs contain file:// paths with #page=N anchors
+            # Extract PDF filename and page number for testing
+            pdf_filename = ""
+            page_number = ""
+
+            if stored_url:
+                # Parse file://path/to/doc.pdf#page=5 format
+                if "#page=" in stored_url:
+                    url_part, page_part = stored_url.rsplit("#page=", 1)
+                    page_number = page_part
+                else:
+                    url_part = stored_url
+
+                # Extract filename from path
+                if "file://" in url_part:
+                    path_part = url_part.replace("file://", "")
+                    pdf_filename = path_part.split("/")[-1].split("\\")[-1]
+                elif "/" in url_part or "\\" in url_part:
+                    pdf_filename = url_part.split("/")[-1].split("\\")[-1]
+                else:
+                    pdf_filename = url_part
+
+            # Construct URL - if base_url provided, use it for online hosting
+            if base_url:
+                # Online PDF hosting: https://example.com/pdfs/doc.pdf#page=5
+                constructed_url = base_url.rstrip("/") + "/" + pdf_filename
+                if page_number:
+                    constructed_url += f"#page={page_number}"
+            else:
+                # Keep local file:// URL for offline testing
+                constructed_url = stored_url
+
+            sample_links.append({
+                "title": doc.get("title", "Unknown"),
+                "stored_url": stored_url,
+                "constructed_url": constructed_url,
+                "local_url": stored_url,  # For PDFs, stored_url IS the local URL
+                "pdf_filename": pdf_filename,
+                "page_number": page_number,
+                "is_online_url": constructed_url.startswith("http://") or constructed_url.startswith("https://"),
+                "is_local_url": constructed_url.startswith("file://"),
+                "url_type": "pdf"
+            })
+            continue  # Skip the rest of URL construction for PDFs
+
+        elif base_url and is_zim_source:
             # ZIM sources (MediaWiki): ALWAYS construct from TITLE
             # Don't trust stored_url - it may have been indexed with wrong URL format
             # Title: "120V Photovoltaic Microinverter" -> Wiki URL: "120V_Photovoltaic_Microinverter"
@@ -3127,17 +3876,39 @@ async def test_source_links(source_id: str, test_base_url: Optional[str] = None)
             "url_type": "online" if is_online_url else ("local" if is_local_url else "unknown")
         })
 
+    # Generate appropriate warning based on source type
+    if is_pdf_source:
+        if base_url:
+            if r2_public_url:
+                warning = "Using R2 public URL. Upload PDF to R2 backups folder before publishing."
+            else:
+                warning = None  # User has set up custom online PDF hosting
+        else:
+            warning = "PDF links use local file:// paths. Set R2_PUBLIC_URL in .env or set a custom base_url."
+    else:
+        warning = None if all(s.get("is_online_url", False) for s in sample_links) else \
+                  "Some URLs are local paths - online users won't be able to access them. Check base_url configuration."
+
     return {
         "source_id": source_id,
         "source_type": source_type,
+        "backup_type": backup_type,
+        "is_pdf_source": is_pdf_source,
         "base_url": base_url,
         "stored_base_url": stored_base_url,
+        "r2_public_url": r2_public_url if is_pdf_source else None,
+        "using_r2_public": bool(r2_public_url and is_pdf_source and not stored_base_url),
         "testing_custom_url": bool(test_base_url),
         "sample_count": len(sample_links),
         "sample_links": sample_links,
         "docs_source": docs_source,  # "index" or "metadata" - shows where URLs came from
-        "warning": None if all(s["is_online_url"] for s in sample_links) else
-                   "Some URLs are local paths - online users won't be able to access them. Check base_url configuration."
+        "warning": warning,
+        "pdf_info": {
+            "page_links_work": True,  # #page=N is standard PDF viewer syntax
+            "local_access": "PDF files can be opened directly with #page=N anchors",
+            "online_hosting": f"R2 public URL configured: {r2_public_url}" if r2_public_url else "Set R2_PUBLIC_URL or custom base_url",
+            "r2_path": f"backups/{source_id}/" if r2_public_url else None
+        } if is_pdf_source else None
     }
 
 

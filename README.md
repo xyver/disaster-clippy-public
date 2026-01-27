@@ -67,6 +67,54 @@ curl -X POST "https://disaster-clippy.up.railway.app/api/v1/chat" \
 
 ---
 
+## Installation Profiles
+
+Different requirements files for different use cases:
+
+| File | Size | Use Case |
+|------|------|----------|
+| `requirements.txt` | ~2GB+ | Full local admin with offline AI, translation, ZIM browsing |
+| `requirements-cloud.txt` | ~200MB | Cloud deployment (Railway) - chat only, no local ML |
+
+### Full Installation (requirements.txt)
+
+Includes everything for local administration and offline operation:
+- **ChromaDB** - Local vector database
+- **sentence-transformers** - Local embeddings (768-dim, no API needed)
+- **transformers + sentencepiece** - Translation models (~300MB per language)
+- **scikit-learn** - PCA for knowledge map visualization
+- **zimply-core** - ZIM file reading for offline Wikipedia/WikiHow
+- **beautifulsoup4 + lxml** - Web scraping
+
+Best for: Local admins, offline deployments, Raspberry Pi
+
+### Cloud Installation (requirements-cloud.txt)
+
+Minimal dependencies for hosted chat interface:
+- **Pinecone** - Cloud vector database (no local storage)
+- **langchain-openai/anthropic** - API-based embeddings and chat
+- **boto3** - R2 cloud storage for submissions
+
+Excludes: ChromaDB, sentence-transformers, transformers, zimply, scikit-learn
+
+Best for: Railway deployment, public chat instance, low-resource servers
+
+### Installing
+
+```bash
+# Full installation (local admin)
+pip install -r requirements.txt
+
+# Cloud deployment (Railway)
+pip install -r requirements-cloud.txt
+
+# Optional: GPU acceleration for translation (CUDA)
+pip uninstall torch -y
+pip install torch --index-url https://download.pytorch.org/whl/cu121
+```
+
+---
+
 ## Content Sources
 
 | Source | Topics |
