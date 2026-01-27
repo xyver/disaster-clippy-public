@@ -1386,8 +1386,8 @@ class SourceManager:
     def _generate_html_metadata(self, source_id: str, source_path: Path,
                                 progress_callback: Callable = None) -> Dict[str, Any]:
         """Generate metadata from HTML files using packager."""
-        from .schemas import get_metadata_file, get_backup_manifest_file
-        from .packager import generate_metadata_from_html, save_metadata
+        from .schemas import get_metadata_file
+        from .packager import generate_metadata_from_html
 
         pages_folder = source_path / "pages"
         if not pages_folder.exists():
@@ -1404,9 +1404,40 @@ class SourceManager:
             with open(metadata_file, 'w', encoding='utf-8') as f:
                 json.dump(metadata, f, indent=2)
 
+            # Calculate stats from metadata
+            doc_count = len(metadata.get("documents", {}))
+            total_chars = sum(
+                len(doc.get("snippet", "")) + len(doc.get("title", ""))
+                for doc in metadata.get("documents", {}).values()
+            )
+
+            # Update _manifest.json with metadata stats
+            manifest_file = source_path / "_manifest.json"
+            if manifest_file.exists():
+                try:
+                    with open(manifest_file, 'r', encoding='utf-8') as f:
+                        manifest = json.load(f)
+
+                    # Update manifest with metadata info
+                    manifest["has_metadata"] = True
+                    manifest["total_docs"] = doc_count
+                    manifest["total_chars"] = total_chars
+
+                    # Add schema version if missing
+                    if "schema_version" not in manifest:
+                        manifest["schema_version"] = 3
+
+                    with open(manifest_file, 'w', encoding='utf-8') as f:
+                        json.dump(manifest, f, indent=2)
+
+                    print(f"[metadata] Updated manifest: {doc_count} docs, {total_chars} chars")
+                except Exception as e:
+                    print(f"[metadata] Warning: Could not update manifest: {e}")
+
             return {
                 "success": True,
-                "document_count": len(metadata.get("documents", {})),
+                "document_count": doc_count,
+                "total_chars": total_chars,
                 "metadata_file": str(metadata_file)
             }
         except Exception as e:
@@ -1414,29 +1445,126 @@ class SourceManager:
 
     def _generate_pdf_metadata(self, source_id: str, source_path: Path,
                                progress_callback: Callable = None) -> Dict[str, Any]:
-        """Generate metadata from PDF collection."""
-        from .schemas import get_metadata_file
+        """
+        Generate metadata from PDF collection.
+
+        If _collection.json exists (PDF Import was run), uses that.
+        Otherwise, processes PDF files directly using sectioned extraction.
+        """
+        from .schemas import get_metadata_file, get_index_file
 
         collection_file = source_path / "_collection.json"
-        if not collection_file.exists():
-            return {"success": False, "error": "No _collection.json found", "document_count": 0}
 
-        try:
-            with open(collection_file, 'r', encoding='utf-8') as f:
-                collection = json.load(f)
+        # If _collection.json exists, use it (PDF Import was already run)
+        if collection_file.exists():
+            try:
+                with open(collection_file, 'r', encoding='utf-8') as f:
+                    collection = json.load(f)
 
-            documents = {}
-            source_docs = collection.get("documents", {})
+                documents = {}
+                source_docs = collection.get("documents", {})
 
-            for doc_id, doc_info in source_docs.items():
-                documents[doc_id] = {
-                    "title": doc_info.get("title", doc_id),
-                    "url": doc_info.get("url", ""),
-                    "snippet": doc_info.get("description", "")[:500],
+                for doc_id, doc_info in source_docs.items():
+                    documents[doc_id] = {
+                        "title": doc_info.get("title", doc_id),
+                        "url": doc_info.get("url", ""),
+                        "snippet": doc_info.get("description", "")[:500],
+                        "source_id": source_id,
+                        "pdf_path": doc_info.get("path", "")
+                    }
+
+                metadata_file = source_path / get_metadata_file()
+                metadata = {
                     "source_id": source_id,
-                    "pdf_path": doc_info.get("path", "")
+                    "document_count": len(documents),
+                    "documents": documents
                 }
 
+                with open(metadata_file, 'w', encoding='utf-8') as f:
+                    json.dump(metadata, f, indent=2)
+
+                return {
+                    "success": True,
+                    "document_count": len(documents),
+                    "metadata_file": str(metadata_file)
+                }
+            except Exception as e:
+                return {"success": False, "error": str(e), "document_count": 0}
+
+        # No _collection.json - process PDF files directly
+        pdf_files = list(source_path.glob("*.pdf"))
+        if not pdf_files:
+            return {"success": False, "error": "No PDF files found. Add PDF files to the source folder.", "document_count": 0}
+
+        # Process PDFs using sectioned extraction (same as PDF Import)
+        try:
+            from .scraper.pdf import PDFScraper
+
+            if progress_callback:
+                progress_callback(0, len(pdf_files), "Processing PDF files...")
+
+            scraper = PDFScraper(source_name=source_id)
+            all_pages = []
+            collection_docs = {}
+
+            for i, pdf_path in enumerate(pdf_files):
+                if progress_callback:
+                    progress_callback(i, len(pdf_files), f"Processing {pdf_path.name}")
+
+                # Use sectioned processing for structured documents
+                pages = scraper.process_file_sectioned(str(pdf_path))
+
+                if not pages:
+                    print(f"Warning: No content extracted from {pdf_path.name}")
+                    continue
+
+                # Track for _collection.json
+                content_hash = hashlib.md5(pages[0].content[:1000].encode()).hexdigest()[:12]
+                collection_docs[content_hash] = {
+                    "filename": pdf_path.name,
+                    "title": pages[0].title if pages else pdf_path.stem,
+                    "chunk_count": len(pages),
+                    "char_count": sum(len(p.content) for p in pages),
+                    "content_hash": content_hash
+                }
+
+                all_pages.extend(pages)
+
+            if not all_pages:
+                return {"success": False, "error": "No content could be extracted from PDF files", "document_count": 0}
+
+            if progress_callback:
+                progress_callback(len(pdf_files), len(pdf_files), "Building metadata files...")
+
+            # Build documents dict for _metadata.json
+            documents = {}
+            for page in all_pages:
+                doc_id = hashlib.md5(page.url.encode()).hexdigest()[:12]
+                documents[doc_id] = {
+                    "title": page.title,
+                    "url": page.url,
+                    "snippet": page.content[:500] if page.content else "",
+                    "source_id": source_id,
+                    "categories": page.categories
+                }
+
+            # Create _collection.json
+            from datetime import datetime
+            collection_data = {
+                "collection": {
+                    "collection_id": source_id,
+                    "name": source_id.replace("_", " ").replace("-", " ").title(),
+                    "description": f"PDF collection: {len(pdf_files)} document(s)",
+                    "created": datetime.now().isoformat()
+                },
+                "documents": collection_docs,
+                "processing": {"mode": "sectioned", "auto_generated": True}
+            }
+
+            with open(collection_file, 'w', encoding='utf-8') as f:
+                json.dump(collection_data, f, indent=2, ensure_ascii=False)
+
+            # Create _metadata.json
             metadata_file = source_path / get_metadata_file()
             metadata = {
                 "source_id": source_id,
@@ -1445,15 +1573,42 @@ class SourceManager:
             }
 
             with open(metadata_file, 'w', encoding='utf-8') as f:
-                json.dump(metadata, f, indent=2)
+                json.dump(metadata, f, indent=2, ensure_ascii=False)
+
+            # Create _index.json (full content for display)
+            index_data = {
+                "source_id": source_id,
+                "document_count": len(all_pages),
+                "documents": {}
+            }
+
+            for page in all_pages:
+                doc_id = hashlib.md5(page.url.encode()).hexdigest()[:12]
+                index_data["documents"][doc_id] = {
+                    "title": page.title,
+                    "url": page.url,
+                    "content": page.content,
+                    "source_id": source_id,
+                    "categories": page.categories,
+                    "content_hash": page.content_hash
+                }
+
+            index_file = source_path / get_index_file()
+            with open(index_file, 'w', encoding='utf-8') as f:
+                json.dump(index_data, f, indent=2, ensure_ascii=False)
 
             return {
                 "success": True,
-                "document_count": len(documents),
-                "metadata_file": str(metadata_file)
+                "document_count": len(all_pages),
+                "pdf_count": len(pdf_files),
+                "metadata_file": str(metadata_file),
+                "auto_processed": True,
+                "message": f"Processed {len(pdf_files)} PDF files into {len(all_pages)} sections"
             }
+
         except Exception as e:
-            return {"success": False, "error": str(e), "document_count": 0}
+            import traceback
+            return {"success": False, "error": f"PDF processing error: {e}", "traceback": traceback.format_exc(), "document_count": 0}
 
     # =========================================================================
     # INDEX OPERATIONS

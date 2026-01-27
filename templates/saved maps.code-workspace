@@ -1,0 +1,19 @@
+{
+	"folders": [
+		{
+			"name": "global map",
+			"path": "../../global map"
+		},
+		{
+			"name": "webtest",
+			"path": "../../webtest"
+		},
+		{
+			"name": "disaster-clippy-public",
+			"path": ".."
+		}
+	],
+	"settings": {
+		"liveServer.settings.multiRootWorkspaceName": "webtest"
+	}
+}

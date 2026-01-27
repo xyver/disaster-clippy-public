@@ -284,6 +284,17 @@ const SourceCard = (function() {
                         Edit
                     </button>
                 `);
+                // Add Localize button for local sources with backup
+                if (source.has_backup && !source.is_localization) {
+                    buttons.push(`
+                        <button class="source-card__btn source-card__btn--localize"
+                                data-action="localize"
+                                data-source-id="${source.source_id}"
+                                title="Create a translated version of this source">
+                            Localize
+                        </button>
+                    `);
+                }
                 if (source.is_cloud) {
                     buttons.push(`<span class="source-card__helper-text source-card__helper-text--success">(from cloud)</span>`);
                 }
@@ -424,6 +435,8 @@ const SourceCard = (function() {
                 handlers.onInstall(sourceId, includeBackup, btn);
             } else if (action === 'upload' && handlers.onUpload) {
                 handlers.onUpload(sourceId, btn);
+            } else if (action === 'localize' && handlers.onLocalize) {
+                handlers.onLocalize(sourceId, btn);
             }
         });
     }

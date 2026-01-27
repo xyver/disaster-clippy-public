@@ -1212,28 +1212,6 @@
     <script src="/admin/static/source-card.js"></script>
     <script src="/admin/static/admin-common.js"></script>
 
-    <script>
-        // Attach source card event handlers
-        function attachSourceCardHandlers() {
-            // Sources page handlers
-            SourceCard.attachHandlers(document.body, {
-                onEdit: function(sourceId) {
-                    window.location.href = '/useradmin/sources/tools?source=' + sourceId + '&step=2';
-                },
-                onInstall: function(sourceId, includeBackup, btn) {
-                    installSource(sourceId, includeBackup);
-                }
-            });
-        }
-
-        // Attach handlers after DOM is ready
-        if (document.readyState === 'loading') {
-            document.addEventListener('DOMContentLoaded', attachSourceCardHandlers);
-        } else {
-            attachSourceCardHandlers();
-        }
-    </script>
-
     <!-- Sync Mode Modal -->
     <div id="syncModeModal" class="modal-overlay">
         <div class="modal-content">
@@ -1254,11 +1232,228 @@
         </div>
     </div>
 
+    <!-- Localization Modal -->
+    <div id="localizeModal" class="modal-overlay">
+        <div class="modal-content">
+            <div class="modal-title">Localize Source</div>
+            <div class="modal-body">
+                <p>Create a fully translated version of <strong id="localizeSourceId"></strong></p>
+                <p style="font-size: 0.85rem; color: #888; margin-top: 0.5rem;">
+                    This will translate all content, regenerate embeddings, and create a language-specific search index.
+                </p>
+                <div id="localizeSizeEstimate" style="margin-top: 0.75rem; font-size: 0.85rem; color: #f9a825;"></div>
+
+                <div style="margin-top: 1rem;">
+                    <label style="font-size: 0.9rem; color: #888;">Select target language:</label>
+                    <div id="languageOptions" style="margin-top: 0.5rem;">
+                        <div class="loading">Loading installed languages...</div>
+                    </div>
+                </div>
+
+                <div id="localizeExisting" style="margin-top: 1rem; display: none;">
+                    <label style="font-size: 0.9rem; color: #4ecca3;">Existing localizations:</label>
+                    <div id="existingLocalizations" style="margin-top: 0.5rem; font-size: 0.85rem;"></div>
+                </div>
+            </div>
+            <div class="modal-actions">
+                <button class="btn-small btn-update" id="btnLocalizeCancel">Cancel</button>
+                <button class="btn-small btn-install" id="btnLocalizeStart" disabled>Select a language</button>
+            </div>
+        </div>
+    </div>
+
     <script>
         // Attach event listeners for modal buttons (CSP-compliant)
         document.getElementById('btnSyncCancel').addEventListener('click', closeSyncModal);
         document.getElementById('btnSyncUpdate').addEventListener('click', function() { proceedWithSync('update'); });
         document.getElementById('btnSyncReplace').addEventListener('click', function() { proceedWithSync('replace'); });
+
+        // Localization modal handlers
+        let pendingLocalizeSourceId = null;
+        let selectedLocalizeLang = null;
+
+        document.getElementById('btnLocalizeCancel').addEventListener('click', closeLocalizeModal);
+        document.getElementById('btnLocalizeStart').addEventListener('click', function() {
+            if (pendingLocalizeSourceId && selectedLocalizeLang) {
+                startLocalization(pendingLocalizeSourceId, selectedLocalizeLang);
+            }
+        });
+
+        async function openLocalizeModal(sourceId) {
+            pendingLocalizeSourceId = sourceId;
+            selectedLocalizeLang = null;
+
+            document.getElementById('localizeSourceId').textContent = sourceId;
+            document.getElementById('btnLocalizeStart').disabled = true;
+            document.getElementById('btnLocalizeStart').textContent = 'Select a language';
+            document.getElementById('languageOptions').innerHTML = '<div class="loading">Loading...</div>';
+            document.getElementById('localizeExisting').style.display = 'none';
+            document.getElementById('localizeSizeEstimate').textContent = '';
+
+            document.getElementById('localizeModal').classList.add('show');
+
+            try {
+                // Load available languages for localization
+                const langResp = await fetch('/useradmin/api/available-localization-languages');
+                const langData = await langResp.json();
+
+                // Load existing localizations for this source
+                const locResp = await fetch('/useradmin/api/localizations/' + sourceId);
+                const locData = await locResp.json();
+
+                // Load requirements to get size estimate
+                if (langData.languages && langData.languages.length > 0) {
+                    const reqResp = await fetch('/useradmin/api/localization-requirements/' + sourceId + '/' + langData.languages[0].code);
+                    const reqData = await reqResp.json();
+                    if (reqData.estimated_localized_size_mb) {
+                        document.getElementById('localizeSizeEstimate').textContent =
+                            'Estimated size: ~' + reqData.estimated_localized_size_mb + ' MB per language';
+                    }
+                }
+
+                // Render language options
+                if (!langData.languages || langData.languages.length === 0) {
+                    document.getElementById('languageOptions').innerHTML =
+                        '<div class="placeholder" style="padding: 1rem;">No translation models installed. <a href="#languages" style="color: #4ecca3;">Install a language pack</a> first.</div>';
+                } else {
+                    // Get already localized languages
+                    const existingLangs = new Set((locData.localizations || []).map(l => l.language));
+
+                    const optionsHtml = langData.languages.map(lang => {
+                        const isExisting = existingLangs.has(lang.code);
+                        const disabled = isExisting ? 'disabled' : '';
+                        const label = isExisting ? lang.name + ' (exists)' : lang.name;
+                        return `
+                            <label class="lang-option" style="display: block; margin: 0.5rem 0; cursor: ${isExisting ? 'not-allowed' : 'pointer'}; opacity: ${isExisting ? '0.5' : '1'};">
+                                <input type="radio" name="localizeLang" value="${lang.code}" ${disabled}
+                                       style="margin-right: 0.5rem;" onchange="selectLocalizeLang('${lang.code}', '${lang.name}')">
+                                <span>${label}</span>
+                                ${lang.native_name ? '<span style="color: #888; margin-left: 0.5rem;">(' + lang.native_name + ')</span>' : ''}
+                            </label>
+                        `;
+                    }).join('');
+                    document.getElementById('languageOptions').innerHTML = optionsHtml;
+                }
+
+                // Show existing localizations
+                if (locData.localizations && locData.localizations.length > 0) {
+                    document.getElementById('localizeExisting').style.display = 'block';
+                    const existingHtml = locData.localizations.map(loc => `
+                        <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.5rem 0; border-bottom: 1px solid #0f3460;">
+                            <span>
+                                <strong style="color: #4ecca3;">${loc.language_name || loc.language.toUpperCase()}</strong>
+                                <span style="color: #888; margin-left: 0.5rem;">${loc.document_count} docs, ${loc.size_mb} MB</span>
+                            </span>
+                            <button class="btn-small btn-danger" onclick="deleteLocalization('${sourceId}', '${loc.language}')" style="padding: 0.2rem 0.5rem;">Delete</button>
+                        </div>
+                    `).join('');
+                    document.getElementById('existingLocalizations').innerHTML = existingHtml;
+                }
+
+            } catch (e) {
+                document.getElementById('languageOptions').innerHTML =
+                    '<div class="placeholder" style="color: #e94560;">Error loading languages: ' + e.message + '</div>';
+            }
+        }
+
+        function selectLocalizeLang(langCode, langName) {
+            selectedLocalizeLang = langCode;
+            document.getElementById('btnLocalizeStart').disabled = false;
+            document.getElementById('btnLocalizeStart').textContent = 'Start Localization to ' + langName;
+        }
+
+        function closeLocalizeModal() {
+            document.getElementById('localizeModal').classList.remove('show');
+            pendingLocalizeSourceId = null;
+            selectedLocalizeLang = null;
+        }
+
+        async function startLocalization(sourceId, langCode) {
+            const btn = document.getElementById('btnLocalizeStart');
+            btn.disabled = true;
+            btn.textContent = 'Starting...';
+
+            try {
+                const response = await fetch('/useradmin/api/localize-source', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        source_id: sourceId,
+                        target_language: langCode
+                    })
+                });
+
+                const data = await response.json();
+
+                if (response.ok && data.status === 'submitted') {
+                    closeLocalizeModal();
+                    alert('Localization job started! This will take a while for large sources. Check the Jobs page for progress.');
+                    // Optionally poll for status or redirect to jobs page
+                } else if (response.status === 409) {
+                    alert('A localization job is already running for this source/language.');
+                    btn.disabled = false;
+                    btn.textContent = 'Start Localization';
+                } else {
+                    alert('Failed to start localization: ' + (data.detail || 'Unknown error'));
+                    btn.disabled = false;
+                    btn.textContent = 'Start Localization';
+                }
+            } catch (e) {
+                alert('Error: ' + e.message);
+                btn.disabled = false;
+                btn.textContent = 'Start Localization';
+            }
+        }
+
+        async function deleteLocalization(sourceId, langCode) {
+            if (!confirm('Delete the ' + langCode.toUpperCase() + ' localization of ' + sourceId + '? This cannot be undone.')) {
+                return;
+            }
+
+            try {
+                const response = await fetch('/useradmin/api/localizations/' + sourceId + '/' + langCode, {
+                    method: 'DELETE'
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    alert('Localization deleted successfully.');
+                    // Refresh the modal
+                    openLocalizeModal(sourceId);
+                    // Also refresh the sources list
+                    loadSources();
+                } else {
+                    alert('Failed to delete localization: ' + (data.detail || 'Unknown error'));
+                }
+            } catch (e) {
+                alert('Error: ' + e.message);
+            }
+        }
+    </script>
+
+    <script>
+        // Update source card handlers to include localize
+        function attachSourceCardHandlers() {
+            SourceCard.attachHandlers(document.body, {
+                onEdit: function(sourceId) {
+                    window.location.href = '/useradmin/sources/tools?source=' + sourceId + '&step=2';
+                },
+                onInstall: function(sourceId, includeBackup, btn) {
+                    installSource(sourceId, includeBackup);
+                },
+                onLocalize: function(sourceId, btn) {
+                    openLocalizeModal(sourceId);
+                }
+            });
+        }
+
+        // Re-attach handlers
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', attachSourceCardHandlers);
+        } else {
+            attachSourceCardHandlers();
+        }
     </script>
 </body>
 </html>

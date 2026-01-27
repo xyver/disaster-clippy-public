@@ -11,9 +11,10 @@ This document covers working with sources: creation, indexing, scraping, and the
 3. [Indexers](#indexers)
 4. [ZIM Tools](#zim-tools)
 5. [HTML Backup Scraper](#html-backup-scraper)
-6. [Tag System](#tag-system)
-7. [Source Processing Pipeline](#source-processing-pipeline)
-8. [File Structure](#file-structure)
+6. [PDF Processing](#pdf-processing)
+7. [Tag System](#tag-system)
+8. [Source Processing Pipeline](#source-processing-pipeline)
+9. [File Structure](#file-structure)
 
 ---
 
@@ -286,6 +287,77 @@ The HTML backup server (`admin/backup_server.py`) enables offline browsing of HT
 
 ---
 
+## PDF Processing
+
+The PDF pipeline supports building codes, technical manuals, and other structured documents.
+
+**File:** `offline_tools/scraper/pdf.py`
+
+### Processing Modes
+
+| Mode | Description | Best For |
+|------|-------------|----------|
+| **sectioned** | Preserves section headers and page references | Building codes, manuals with clear sections |
+| **chunked** | Splits by character count with overlap | Long documents without clear structure |
+| **full** | Keeps entire document as one chunk | Short documents, reference sheets |
+
+### Sectioned Extraction
+
+The `sectioned` mode is optimized for building codes and technical standards:
+
+- **Header Detection:** Identifies section headers (numbered patterns like "1.2.3", "Section 5", "Chapter 3")
+- **Page Numbers:** Each chunk includes page range for citations (e.g., "pp. 17-18")
+- **Section Preservation:** Content grouped by logical sections, not arbitrary character limits
+- **Title Generation:** Auto-generates titles from section headers
+
+**Example output:**
+```
+Section: 3.2.1 Roof Deck Attachment
+Pages: 17-18
+Content: Roof deck attachment shall follow...
+```
+
+### Page Range Filtering
+
+Skip front matter (TOC, title pages) and back matter (appendices, index):
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `start_page` | First page to process | 1 |
+| `end_page` | Last page to process (0 = all) | 0 |
+
+**Admin UI:** Set in Step 2 "PDF Import" job parameters
+
+**CLI:**
+```bash
+python cli/ingest.py pdf process my-source --sectioned --start-page 5 --end-page 100
+```
+
+### R2 Public URL Integration
+
+PDF citations need accessible URLs for online users. The system auto-constructs R2 public URLs:
+
+**Offline URL:** `/backup/source-id/document.pdf#page=17`
+**Online URL:** `https://pub-xxx.r2.dev/backups/source-id/document.pdf#page=17`
+
+The `#page=N` fragment enables direct navigation to the cited page in the browser.
+
+**Configuration:** Set `R2_PUBLIC_URL` in `.env`:
+```
+R2_PUBLIC_URL=https://pub-xxx.r2.dev
+```
+
+### PDF Offline Browsing
+
+PDFs are served from the backup folder for offline access:
+
+| Endpoint | Purpose |
+|----------|---------|
+| `/backup/{source_id}/{filename}.pdf` | Serve PDF file |
+| `/backup/{source_id}/{filename}.pdf#page=N` | Direct to specific page |
+
+---
+
 ## Tag System
 
 Sources can be tagged for categorization and search filtering. Tags are either:
@@ -357,7 +429,7 @@ To prevent overwriting issues, `_index.json` includes a `source_metadata_hash` f
 BACKUP_PATH/
 |-- _master.json                         # Master source index (optional)
 |-- _visualisation.json                  # 3D visualization data (generated)
-|-- my_wiki/                             # Source folder
+|-- my_wiki/                             # Source folder (HTML)
 |   |-- _manifest.json                   # Source config (identity + distribution)
 |   |-- _metadata.json                   # Document metadata (includes internal_links)
 |   |-- _index.json                      # Full content for display
@@ -366,6 +438,12 @@ BACKUP_PATH/
 |   |-- _validation_status.json          # Cached validation result
 |   |-- backup_manifest.json             # URL to file mapping
 |   |-- pages/                           # HTML backup content
+|-- fortified-2025/                      # Source folder (PDF)
+|   |-- _manifest.json                   # Source config (backup_type: "pdf")
+|   |-- _metadata.json                   # Sections/chunks extracted from PDFs
+|   |-- _index.json                      # Full section content
+|   |-- _vectors.json                    # Vector embeddings
+|   |-- 2025-FORTIFIED-Home-Standard.pdf # Original PDF file(s)
 |-- bitcoin.zim                          # ZIM files at backup root
 +-- chroma/                              # ChromaDB data
 ```
@@ -413,4 +491,4 @@ During metadata generation, internal links between documents are extracted and s
 
 ---
 
-*Last Updated: December 2025*
+*Last Updated: January 2026*

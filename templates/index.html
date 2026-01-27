@@ -472,6 +472,14 @@
     <div class="stats-bar">
         <span id="indexStats">Loading...</span>
         <div style="display: flex; align-items: center; gap: 1rem;">
+            <!-- Search Language selector for pre-localized sources (Phase 4) -->
+            <div id="searchLanguageSelector" style="display: none;">
+                <label for="searchLanguage" style="color: #9c6ccc; font-size: 0.85rem; margin-right: 0.5rem; font-weight: 500;">Search:</label>
+                <select id="searchLanguage" style="background: #16213e; border: 2px solid #9c6ccc; color: #e0e0e0; padding: 0.3rem 0.6rem; border-radius: 6px; font-size: 0.85rem; cursor: pointer; font-weight: 500;">
+                    <option value="en">English</option>
+                </select>
+            </div>
+            <!-- Runtime translation selector (Phase 1) -->
             <div id="languageSelector" style="display: none;">
                 <label for="articleLanguage" style="color: #4ecca3; font-size: 0.85rem; margin-right: 0.5rem; font-weight: 500;">Translate:</label>
                 <select id="articleLanguage" style="background: #16213e; border: 2px solid #4ecca3; color: #e0e0e0; padding: 0.3rem 0.6rem; border-radius: 6px; font-size: 0.85rem; cursor: pointer; font-weight: 500;">
@@ -540,7 +548,7 @@ What situation do you need help with?</div>
             })
             .catch(() => {}); // Silently fail if endpoint unavailable
 
-        // Language selector for article translation
+        // Language selector for article translation (Phase 1)
         async function loadLanguageSelector() {
             try {
                 console.log('[Language] Loading language selector...');
@@ -627,6 +635,92 @@ What situation do you need help with?</div>
                 console.error('[Language] Language selector error:', e);
             }
         }
+
+        // Search language selector for pre-localized sources (Phase 4)
+        async function loadSearchLanguageSelector() {
+            try {
+                console.log('[SearchLang] Loading search language selector...');
+                const response = await fetch('/useradmin/api/all-localized-sources');
+                const data = await response.json();
+                console.log('[SearchLang] Localized sources:', data);
+
+                const localizedSources = data.sources || [];
+                if (localizedSources.length === 0) {
+                    console.log('[SearchLang] No localized sources - hiding selector');
+                    return;
+                }
+
+                // Get unique languages from localized sources
+                const languageMap = new Map();
+                localizedSources.forEach(source => {
+                    if (source.language && source.language !== 'en') {
+                        if (!languageMap.has(source.language)) {
+                            languageMap.set(source.language, {
+                                code: source.language,
+                                name: source.language_name || source.language.toUpperCase(),
+                                sources: []
+                            });
+                        }
+                        languageMap.get(source.language).sources.push(source.source_id);
+                    }
+                });
+
+                if (languageMap.size === 0) {
+                    console.log('[SearchLang] No non-English localized sources');
+                    return;
+                }
+
+                // Show the selector
+                const selectorDiv = document.getElementById('searchLanguageSelector');
+                const select = document.getElementById('searchLanguage');
+
+                // Add languages to dropdown
+                languageMap.forEach((lang, code) => {
+                    const option = document.createElement('option');
+                    option.value = code;
+                    option.textContent = `${lang.name} (${lang.sources.length} sources)`;
+                    select.appendChild(option);
+                });
+
+                // Check stored preference
+                const storedLang = localStorage.getItem('searchLanguage') || 'en';
+                if (languageMap.has(storedLang)) {
+                    select.value = storedLang;
+                    // Visual feedback
+                    select.style.boxShadow = '0 0 8px rgba(156, 108, 204, 0.3)';
+                }
+
+                // Show selector
+                selectorDiv.style.display = 'flex';
+                selectorDiv.style.alignItems = 'center';
+                console.log('[SearchLang] Selector now visible');
+
+                // Handle language change
+                select.addEventListener('change', function() {
+                    const langCode = this.value;
+                    console.log('[SearchLang] Setting search language to:', langCode);
+
+                    // Store preference
+                    localStorage.setItem('searchLanguage', langCode);
+
+                    // Visual feedback
+                    if (langCode !== 'en') {
+                        this.style.boxShadow = '0 0 8px rgba(156, 108, 204, 0.3)';
+                    } else {
+                        this.style.boxShadow = 'none';
+                    }
+
+                    // The search routing will use this preference on next query
+                    // Could reload sources list here if needed
+                });
+
+            } catch (e) {
+                console.error('[SearchLang] Search language selector error:', e);
+            }
+        }
+
+        // Load both selectors
+        loadSearchLanguageSelector();
     </script>
 </body>
 </html>

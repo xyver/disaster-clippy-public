@@ -106,6 +106,33 @@ AVAILABLE_MODELS = {
         "tokens_per_sec": "5-10",
         "huggingface_repo": "TheBloke/Mistral-7B-Instruct-v0.2-GGUF",
         "filename": "mistral-7b-instruct-v0.2.Q4_K_M.gguf"
+    },
+    # Multilingual LLMs - Spanish/European Languages (from Barcelona Supercomputing Center)
+    "salamandra-2b-q4": {
+        "type": "llm",
+        "display_name": "Salamandra 2B Spanish (Q4)",
+        "description": "Native Spanish/Catalan - ideal for Spanish-only deployments",
+        "parameters": "2B",
+        "quantization": "Q4_K_M",
+        "size_mb": 1200,
+        "min_ram_gb": 3,
+        "tokens_per_sec": "15-25",
+        "language": "es",
+        "huggingface_repo": "BSC-LT/salamandraTA-2B-instruct-GGUF",
+        "filename": "salamandrata-2b-instruct-q4_k_m.gguf"
+    },
+    "salamandra-7b-q4": {
+        "type": "llm",
+        "display_name": "Salamandra 7B Spanish (Q4)",
+        "description": "High quality Spanish/Catalan - 35 European languages",
+        "parameters": "7B",
+        "quantization": "Q4_K_M",
+        "size_mb": 4500,
+        "min_ram_gb": 6,
+        "tokens_per_sec": "8-15",
+        "language": "es",
+        "huggingface_repo": "BSC-LT/salamandraTA-7B-instruct-GGUF",
+        "filename": "salamandrata-7b-instruct-q4_k_m.gguf"
     }
 }
 

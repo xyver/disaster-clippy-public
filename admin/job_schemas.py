@@ -90,6 +90,8 @@ JOB_SCHEMAS: Dict[str, JobSchema] = {
         params=[
             JobParam("language_filter", "language_code_select", "Language Filter", default="",
                      description="Filter out articles not in this language (leave blank for all)"),
+            JobParam("force_regenerate", "bool", "Force Regenerate", default=False,
+                     description="Delete existing metadata and regenerate from scratch"),
             JobParam("resume", "bool", "Resume", default=False,
                      description="Resume from checkpoint if available")
         ],
@@ -182,6 +184,35 @@ JOB_SCHEMAS: Dict[str, JobSchema] = {
         ],
         conflicts_with=["scrape", "metadata", "index_online", "index_offline",
                         "suggest_tags", "clear_vectors"]  # Can't chain after delete
+    ),
+
+    # -------------------------------------------------------------------------
+    # PDF JOBS
+    # -------------------------------------------------------------------------
+
+    "pdf_import": JobSchema(
+        job_type="pdf_import",
+        label="PDF Import",
+        description="Import PDF file: extract sections, create metadata and index (for building codes, manuals)",
+        category="content",
+        endpoint="/api/pdf/import",
+        weight=40,
+        requires_source=True,  # Needs source_id with PDF files already in folder
+        params=[
+            JobParam("processing_mode", "select", "Processing Mode", default="sectioned",
+                     options=["sectioned", "chunked", "full"],
+                     description="'sectioned' preserves headers (building codes), 'chunked' splits by size, 'full' keeps whole doc"),
+            JobParam("start_page", "int", "Start Page", default=1,
+                     min_value=1, max_value=1000,
+                     description="Page to start from (skip TOC, title pages)"),
+            JobParam("end_page", "int", "End Page", default=0,
+                     min_value=0, max_value=10000,
+                     description="Page to stop at (0 = process all pages)"),
+            JobParam("chunk_size", "int", "Chunk Size", default=4000,
+                     min_value=500, max_value=10000,
+                     description="Characters per chunk (for 'chunked' mode)")
+        ],
+        should_run_before=["index_online", "index_offline"]
     ),
 
     # -------------------------------------------------------------------------
@@ -307,6 +338,30 @@ JOB_SCHEMAS: Dict[str, JobSchema] = {
         ],
         should_run_after=["metadata"]
     ),
+
+    "localize_source": JobSchema(
+        job_type="localize_source",
+        label="Localize Source",
+        description="Create fully translated source variant with local embeddings (offline-ready)",
+        category="content",
+        endpoint="/api/localize-source",
+        weight=70,
+        params=[
+            JobParam("target_language", "language_select", "Target Language", required=True,
+                     description="Language to translate to (must have pack installed)"),
+            JobParam("dimension", "select", "Embedding Model", default="768 (MPNet - recommended)",
+                     options=["384 (MiniLM - fastest)", "768 (MPNet - recommended)", "1024 (E5-Large - best quality)"],
+                     description="Local embedding model to use"),
+            JobParam("batch_size", "select", "Batch Size", default="64",
+                     options=["32 (4-6GB VRAM)", "64 (8GB VRAM)", "128 (12GB+ VRAM)", "256 (24GB+ VRAM)"],
+                     description="Higher = faster but needs more GPU memory"),
+            JobParam("force_overwrite", "bool", "Force Overwrite", default=False,
+                     description="Delete existing localization and recreate"),
+            JobParam("resume", "bool", "Resume", default=True,
+                     description="Resume from checkpoint if available")
+        ],
+        should_run_after=["metadata", "index_offline"]
+    ),
 }
 
 
@@ -337,6 +392,15 @@ PREDEFINED_CHAINS: Dict[str, Dict[str, Any]] = {
             {"job_type": "zim_import", "weight": 40, "params": {"min_text_length": 100}},
             {"job_type": "metadata", "weight": 40, "params": {"resume": True}},
             {"job_type": "detect_base_url", "weight": 20, "params": {}},
+        ]
+    },
+
+    "pdf_prepare": {
+        "name": "Stage 1: PDF Import + Prepare",
+        "description": "Import PDF with section extraction (for building codes, manuals)",
+        "resumable": False,
+        "phases": [
+            {"job_type": "pdf_import", "weight": 100, "params": {"processing_mode": "sectioned"}},
         ]
     },
 

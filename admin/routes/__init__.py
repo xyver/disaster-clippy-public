@@ -10,6 +10,7 @@ from .packs import router as packs_router
 from .jobs import router as jobs_router
 from .job_builder import router as job_builder_router
 from .search_test import router as search_test_router
+from .localizations import router as localizations_router
 
 __all__ = [
     'sourcepacks_router',
@@ -17,5 +18,6 @@ __all__ = [
     'packs_router',
     'jobs_router',
     'job_builder_router',
-    'search_test_router'
+    'search_test_router',
+    'localizations_router'
 ]

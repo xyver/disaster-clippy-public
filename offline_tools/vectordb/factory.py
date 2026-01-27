@@ -69,16 +69,18 @@ def get_default_dimension() -> int:
     return 1536
 
 
-def get_chroma_path_for_dimension(dimension: int, base_path: str = None) -> str:
+def get_chroma_path_for_dimension(dimension: int, base_path: str = None, language: str = "en") -> str:
     """
-    Get the ChromaDB path for a specific dimension.
+    Get the ChromaDB path for a specific dimension and language.
 
     Args:
         dimension: Embedding dimension (384, 768, 1024, 1536, etc.)
         base_path: Base backup path (auto-detected if None)
+        language: Language code (e.g., "en", "es"). For non-English languages,
+                  returns path like chroma_db_768_es for localized sources.
 
     Returns:
-        Path to the dimension-specific ChromaDB directory (e.g., chroma_db_768)
+        Path to the dimension/language-specific ChromaDB directory
     """
     if base_path is None:
         try:
@@ -90,17 +92,24 @@ def get_chroma_path_for_dimension(dimension: int, base_path: str = None) -> str:
         if not base_path:
             base_path = os.getenv("BACKUP_PATH", "data")
 
-    # Dynamic path for any dimension
+    # Include language suffix for non-English languages
+    if language and language != "en":
+        return os.path.join(base_path, f"chroma_db_{dimension}_{language}")
+
+    # Default English path
     return os.path.join(base_path, f"chroma_db_{dimension}")
 
 
-def get_vector_store(mode: Optional[str] = None, dimension: Optional[int] = None, **kwargs):
+def get_vector_store(mode: Optional[str] = None, dimension: Optional[int] = None,
+                     language: str = "en", **kwargs):
     """
     Factory function to get the appropriate vector store.
 
     Args:
         mode: 'local', 'local_768', 'local_1536', 'pinecone', 'railway', or None
         dimension: Explicit dimension (768 or 1536). Overrides mode-based selection.
+        language: Language code for localized sources (e.g., "es" for Spanish).
+                  Uses language-specific ChromaDB path like chroma_db_768_es.
         **kwargs: Additional arguments passed to store constructor
 
     Returns:
@@ -133,10 +142,10 @@ def get_vector_store(mode: Optional[str] = None, dimension: Optional[int] = None
                 "ChromaDB is not installed. For cloud deployments, set VECTOR_DB_MODE=pinecone. "
                 "For local development, install with: pip install chromadb"
             )
-        # Get dimension-specific path
+        # Get dimension and language-specific path
         persist_dir = kwargs.pop("persist_dir", None)
         if persist_dir is None:
-            persist_dir = get_chroma_path_for_dimension(dimension or 1536)
+            persist_dir = get_chroma_path_for_dimension(dimension or 1536, language=language)
         return VectorStore(persist_dir=persist_dir, **kwargs)
 
     elif mode in ("pinecone", "global", "railway"):

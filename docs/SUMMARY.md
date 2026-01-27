@@ -16,6 +16,10 @@
 - Each source is verified for licensing (Creative Commons, public domain)
 - Sources can be browsed and filtered by topic
 
+https://craftresource.fandom.com/wiki/Plushie_Sewing_Patterns
+
+
+
 ### Offline Capability
 - Download source packs (ZIM archives, HTML backups) for offline use
 - Run entirely without internet using local vector database

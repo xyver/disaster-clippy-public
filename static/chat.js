@@ -139,6 +139,12 @@ async function sendMessage(message) {
             requestBody.sources = selectedSources;
         }
 
+        // Add search language for localized sources (Phase 4)
+        const searchLanguage = localStorage.getItem('searchLanguage') || 'en';
+        if (searchLanguage && searchLanguage !== 'en') {
+            requestBody.search_language = searchLanguage;
+        }
+
         // Use streaming endpoint
         const response = await fetch('/api/v1/chat/stream', {
             method: 'POST',

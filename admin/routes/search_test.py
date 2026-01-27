@@ -57,6 +57,21 @@ def get_source_manifest(source_id: str) -> Optional[Dict[str, Any]]:
         return None
 
 
+def get_parent_manifest(manifest: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """
+    For localized sources, get the parent source manifest.
+    Returns None if not a localization or parent not found.
+    """
+    if not manifest.get("is_localization"):
+        return None
+
+    parent_id = manifest.get("parent_source")
+    if not parent_id:
+        return None
+
+    return get_source_manifest(parent_id)
+
+
 def get_cached_zim(zim_path: str):
     """Get a cached ZIM file handle, opening if needed."""
     global _zim_cache

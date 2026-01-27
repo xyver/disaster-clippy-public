@@ -124,11 +124,6 @@
         {% with active_page='cloud' %}{% include '_nav.html' %}{% endwith %}
     </header>
 
-    <!-- Local Mode Warning Banner -->
-    <div id="localModeBanner" style="display: none; background: #e94560; color: white; padding: 0.75rem 2rem; text-align: center;">
-        <strong>Read-Only Mode:</strong> Cloud uploads require ADMIN_MODE=global. You can browse but not upload.
-    </div>
-
     <div class="container">
         <!-- Cloud Connection Status - Simplified for Local, Full for Global -->
         <div class="section">
@@ -149,6 +144,28 @@
                 <div class="status-card" id="pineconeStatus">
                     <div style="font-size: 0.8rem; color: #888; margin-bottom: 0.5rem;">Pinecone Vector DB</div>
                     <div class="loading">Checking connection...</div>
+                </div>
+            </div>
+
+            <!-- Remote Cache Invalidation (global admin only) -->
+            <div id="remoteCacheSection" style="display: none; margin-top: 1rem;">
+                <div class="status-card">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <div>
+                            <div style="font-size: 0.9rem; font-weight: 500; color: #ccc;">Remote Cache</div>
+                            <div style="font-size: 0.8rem; color: #888; margin-top: 0.25rem;">
+                                Force Railway/production to reload _master.json after publishing
+                            </div>
+                        </div>
+                        <div style="display: flex; gap: 0.5rem; align-items: center;">
+                            <input type="text" id="remoteUrl" placeholder="https://your-app.railway.app"
+                                   style="background: #0f3460; border: 1px solid #333; color: #ccc; padding: 0.4rem 0.6rem; border-radius: 4px; width: 250px; font-size: 0.85rem;">
+                            <button class="btn btn-secondary" id="btnInvalidateCache" style="white-space: nowrap;">
+                                Invalidate Cache
+                            </button>
+                        </div>
+                    </div>
+                    <div id="cacheInvalidateResult" style="display: none; margin-top: 0.75rem; padding: 0.5rem; border-radius: 4px; font-size: 0.85rem;"></div>
                 </div>
             </div>
         </div>
@@ -562,12 +579,6 @@
                 const data = await response.json();
                 isGlobalAdmin = data.is_global;
 
-                // Show warning banner if not in global mode
-                const banner = document.getElementById('localModeBanner');
-                if (banner) {
-                    banner.style.display = isGlobalAdmin ? 'none' : 'block';
-                }
-
                 // Disable upload buttons if not global admin
                 if (!isGlobalAdmin) {
                     document.querySelectorAll('.btn-primary').forEach(btn => {
@@ -607,8 +618,14 @@
                 connectionHeader.textContent = 'Cloud Connections';
                 simpleStatus.style.display = 'none';
                 fullGrid.style.display = 'grid';
+                document.getElementById('remoteCacheSection').style.display = 'block';
                 // Load Pinecone status only for global admin
                 checkPineconeStatus();
+                // Load saved remote URL
+                const savedUrl = localStorage.getItem('clippy_remote_url');
+                if (savedUrl) {
+                    document.getElementById('remoteUrl').value = savedUrl;
+                }
             } else {
                 // Local admin: show simple R2 status dot only
                 title.textContent = 'Cloud Storage';
@@ -675,6 +692,63 @@
         document.getElementById('btnCloudSyncCancel').addEventListener('click', closeSyncModal);
         document.getElementById('btnCloudSyncUpdate').addEventListener('click', function() { proceedWithSync('update'); });
         document.getElementById('btnCloudSyncReplace').addEventListener('click', function() { proceedWithSync('replace'); });
+
+        // Cache invalidation button
+        document.getElementById('btnInvalidateCache').addEventListener('click', async function() {
+            const urlInput = document.getElementById('remoteUrl');
+            const resultDiv = document.getElementById('cacheInvalidateResult');
+            let remoteUrl = urlInput.value.trim();
+
+            if (!remoteUrl) {
+                resultDiv.style.display = 'block';
+                resultDiv.style.background = '#5c2030';
+                resultDiv.style.color = '#e94560';
+                resultDiv.textContent = 'Please enter the remote server URL (e.g., https://your-app.railway.app)';
+                return;
+            }
+
+            // Ensure URL has protocol
+            if (!remoteUrl.startsWith('http://') && !remoteUrl.startsWith('https://')) {
+                remoteUrl = 'https://' + remoteUrl;
+                urlInput.value = remoteUrl;
+            }
+
+            // Save for next time
+            localStorage.setItem('clippy_remote_url', remoteUrl);
+
+            // Show loading state
+            this.disabled = true;
+            this.textContent = 'Invalidating...';
+            resultDiv.style.display = 'none';
+
+            try {
+                const response = await fetch(remoteUrl.replace(/\/$/, '') + '/useradmin/api/invalidate-cache', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+
+                const data = await response.json();
+
+                resultDiv.style.display = 'block';
+                if (data.success) {
+                    resultDiv.style.background = '#1a3d2e';
+                    resultDiv.style.color = '#4ecca3';
+                    resultDiv.textContent = 'Cache invalidated! New data will be loaded on next request.';
+                } else {
+                    resultDiv.style.background = '#3d2e00';
+                    resultDiv.style.color = '#f9a825';
+                    resultDiv.textContent = 'Partial success: ' + (data.errors || []).join(', ');
+                }
+            } catch (e) {
+                resultDiv.style.display = 'block';
+                resultDiv.style.background = '#5c2030';
+                resultDiv.style.color = '#e94560';
+                resultDiv.textContent = 'Error: ' + e.message + ' (Is the server running? Check CORS settings)';
+            } finally {
+                this.disabled = false;
+                this.textContent = 'Invalidate Cache';
+            }
+        });
     </script>
 </body>
 </html>

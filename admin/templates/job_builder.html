@@ -1054,6 +1054,7 @@
             const item = chain.find(c => c.id === id);
             if (item) {
                 item.params[name] = value;
+                console.log(`[JobBuilder] updateParam: ${name} = ${value}`, item.params);
             }
         }
 
@@ -1377,6 +1378,9 @@
                     job_type: c.job_type,
                     params: c.params
                 }));
+
+                // Debug: Log params being sent
+                console.log('[JobBuilder] Sending phases:', JSON.stringify(phases, null, 2));
 
                 // If "New Source" is selected, pass null - backend will get source from first job
                 const sourceToSend = selectedSource === '__new__' ? null : selectedSource;
