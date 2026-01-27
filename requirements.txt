@@ -24,6 +24,7 @@ httpx>=0.25.0
 # Utilities
 python-dotenv>=1.0.0
 pydantic>=2.0.0
+psutil>=7.2.1
 
 # Data processing / visualization
 numpy>=1.24.0
