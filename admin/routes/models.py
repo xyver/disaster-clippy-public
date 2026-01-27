@@ -200,6 +200,9 @@ def _download_embedding_model(model_id: str, progress_callback=None, cancel_chec
 
                 response.raise_for_status()
 
+                # Create any intermediate subdirectories if needed
+                local_path.parent.mkdir(parents=True, exist_ok=True)
+
                 with open(local_path, 'wb') as f:
                     for chunk in response.iter_bytes(chunk_size=8192):
                         f.write(chunk)
