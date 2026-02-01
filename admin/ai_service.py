@@ -124,7 +124,7 @@ class AIService:
             try:
                 if provider == "anthropic":
                     from langchain_anthropic import ChatAnthropic
-                    model = os.getenv("ANTHROPIC_MODEL", "claude-3-5-haiku-20241022")
+                    model = os.getenv("ANTHROPIC_MODEL", "claude-3-haiku-20240307")
                     self._llm = ChatAnthropic(
                         model=model,
                         temperature=0.7,
