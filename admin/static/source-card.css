@@ -23,7 +23,7 @@
 }
 
 .source-card--complete {
-    border-color: #4ecca3;
+    /* No special border - uses default, hover adds highlight */
 }
 
 .source-card--incomplete {
@@ -250,6 +250,15 @@
 
 .source-card__btn--edit:hover:not(:disabled) {
     background: #1a1a3e;
+}
+
+.source-card__btn--localize {
+    background: #3d2066;
+    color: #9c6ccc;
+}
+
+.source-card__btn--localize:hover:not(:disabled) {
+    background: #4d2a7a;
 }
 
 .source-card__btn--uploaded {

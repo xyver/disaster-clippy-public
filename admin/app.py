@@ -25,7 +25,7 @@ from offline_tools.packager import (
 
 # Schema file naming
 from offline_tools.schemas import get_manifest_file, get_metadata_file
-from offline_tools.validation import SYSTEM_FOLDERS
+from offline_tools.validation import is_system_folder
 
 
 # =============================================================================
@@ -115,6 +115,8 @@ from .routes.visualise import router as visualise_router
 from .routes.models import router as models_router
 from .routes.job_builder import router as job_builder_router
 from .routes.search_test import router as search_test_router
+from .routes.localizations import router as localizations_router
+from .backup_server import router as backup_router
 
 # Create router with public mode check - blocks all routes when VECTOR_DB_MODE=pinecone
 router = APIRouter(
@@ -130,6 +132,8 @@ router.include_router(visualise_router)
 router.include_router(models_router)
 router.include_router(job_builder_router)
 router.include_router(search_test_router)
+router.include_router(localizations_router)
+router.include_router(backup_router)
 
 
 # =============================================================================
@@ -710,7 +714,7 @@ async def get_status():
             from offline_tools.packager import read_json_header_only
             for source_folder in backup_path.iterdir():
                 if source_folder.is_dir() and not source_folder.name.startswith("_"):
-                    if source_folder.name.lower() in SYSTEM_FOLDERS:
+                    if is_system_folder(source_folder.name):
                         continue
                     manifest_file = source_folder / get_manifest_file()
                     if manifest_file.exists():

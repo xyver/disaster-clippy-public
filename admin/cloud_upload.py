@@ -19,7 +19,7 @@ from offline_tools.schemas import (
     get_manifest_file, get_metadata_file, get_index_file,
     get_vectors_file, get_vectors_768_file, get_backup_manifest_file
 )
-from offline_tools.validation import SYSTEM_FOLDERS
+from offline_tools.validation import is_system_folder
 
 router = APIRouter()
 
@@ -123,6 +123,45 @@ async def get_pinecone_status():
         }
 
 
+@router.post("/api/invalidate-cache")
+async def invalidate_cache():
+    """
+    Invalidate the R2 sources cache on this server.
+
+    Call this after publishing new data to R2 to force the server to
+    fetch fresh _master.json data instead of using cached values.
+
+    This is useful for Railway deployments where the cache persists
+    until the 1-hour TTL expires or the server restarts.
+
+    REQUIRES: VECTOR_DB_MODE=global (global admin only)
+    """
+    _require_global_admin()
+
+    invalidated = []
+    errors = []
+
+    # Invalidate PineconeStore cache
+    try:
+        from offline_tools.vectordb import get_vector_store
+        store = get_vector_store()
+        if hasattr(store, 'invalidate_sources_cache'):
+            store.invalidate_sources_cache()
+            invalidated.append("pinecone_r2_cache")
+    except Exception as e:
+        errors.append(f"PineconeStore: {str(e)}")
+
+    # Force reload of _master.json on next request
+    # (The cache is in-memory, so just invalidating PineconeStore is enough)
+
+    return {
+        "success": len(errors) == 0,
+        "invalidated": invalidated,
+        "errors": errors if errors else None,
+        "message": "Cache invalidated - new data will be fetched on next request" if not errors else "Partial invalidation"
+    }
+
+
 @router.get("/api/sources-for-upload")
 async def get_sources_for_upload():
     """
@@ -149,7 +188,7 @@ async def get_sources_for_upload():
             continue
         if source_folder.name.startswith("_"):
             continue
-        if source_folder.name.lower() in SYSTEM_FOLDERS:
+        if is_system_folder(source_folder.name):
             continue
 
         source_id = source_folder.name
@@ -826,6 +865,21 @@ def _run_publish_to_production(source_id: str, source_info: dict, sync_mode: str
         finally:
             if os.path.exists(tmp_path):
                 os.unlink(tmp_path)
+
+        # Also upload individual PDFs for public R2 URL access
+        r2_public_url = os.getenv("R2_PUBLIC_URL", "")
+        if r2_public_url:
+            if progress_callback:
+                progress_callback(22, "Uploading individual PDFs for public access...")
+            pdf_files = list(pdf_path.glob("*.pdf"))
+            for i, pdf_file in enumerate(pdf_files):
+                remote_key = f"{remote_folder}/{pdf_file.name}"
+                if storage.upload_file(str(pdf_file), remote_key):
+                    uploaded_files.append(pdf_file.name)
+                    total_size += pdf_file.stat().st_size / (1024*1024)
+                if progress_callback and len(pdf_files) > 0:
+                    percent = 22 + int((i / len(pdf_files)) * 3)  # 22-25%
+                    progress_callback(percent, f"Uploading PDFs... ({i+1}/{len(pdf_files)})")
     else:
         raise Exception(f"Unknown backup type: {backup_type}")
 
@@ -1318,6 +1372,158 @@ async def list_cloud_backups():
         return {"submissions": [], "error": "Storage module not available"}
     except Exception as e:
         return {"submissions": [], "error": str(e)}
+
+
+class AcceptSubmissionRequest(BaseModel):
+    submission_id: str  # e.g., "20241201_123456_builditsolar"
+    source_id: Optional[str] = None  # Override source_id if needed
+
+
+@router.post("/api/accept-submission")
+async def accept_submission(
+    request: AcceptSubmissionRequest,
+    _: bool = Depends(_require_global_admin)
+):
+    """
+    Accept a submission and move files from submissions/ to backups/ in R2.
+
+    REQUIRES: VECTOR_DB_MODE=global (Global Admin only)
+
+    Server-side copy in R2 - no download/upload needed.
+    Files are copied to backups/{source_id}/ then submission is marked approved.
+    """
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+        from offline_tools.cloud.r2 import get_r2_storage
+
+        storage = get_r2_storage()
+        if not storage.is_configured():
+            raise HTTPException(status_code=500, detail="R2 storage not configured")
+
+        submission_id = request.submission_id
+        # Extract source_id from submission_id (format: timestamp_source_id)
+        # e.g., "20241201_123456_builditsolar" -> "builditsolar"
+        parts = submission_id.split("_", 2)  # Split into max 3 parts
+        if len(parts) >= 3:
+            extracted_source_id = parts[2]  # Everything after timestamp
+        else:
+            extracted_source_id = submission_id
+
+        source_id = request.source_id or extracted_source_id
+
+        # List all files in the submission folder
+        submission_prefix = f"submissions/{submission_id}/"
+        files = storage.list_files(submission_prefix)
+
+        if not files:
+            raise HTTPException(status_code=404, detail=f"Submission '{submission_id}' not found or empty")
+
+        # Copy each file to backups/{source_id}/
+        copied_files = []
+        errors = []
+
+        for file_info in files:
+            source_key = file_info["key"]
+            filename = source_key.split("/")[-1]
+
+            # Determine destination filename
+            # Rename source-specific zips: builditsolar-pdf.zip -> keep as is
+            # Schema files: _manifest.json, _metadata.json, etc. -> keep as is
+            dest_key = f"backups/{source_id}/{filename}"
+
+            try:
+                # Server-side copy (no download needed)
+                success = storage.copy_file(source_key, dest_key)
+                if success:
+                    copied_files.append(filename)
+                else:
+                    errors.append(f"Failed to copy {filename}")
+            except Exception as e:
+                errors.append(f"{filename}: {str(e)}")
+
+        if not copied_files:
+            raise HTTPException(status_code=500, detail=f"No files copied. Errors: {errors}")
+
+        # Move submission folder to approved/ (or delete if preferred)
+        # For now, we'll delete the original files after successful copy
+        deleted_count = 0
+        for file_info in files:
+            try:
+                if storage.delete_file(file_info["key"]):
+                    deleted_count += 1
+            except:
+                pass  # Best effort cleanup
+
+        return {
+            "status": "success",
+            "source_id": source_id,
+            "submission_id": submission_id,
+            "copied_files": copied_files,
+            "copied_count": len(copied_files),
+            "deleted_from_submissions": deleted_count,
+            "errors": errors if errors else None,
+            "message": f"Accepted submission. {len(copied_files)} files moved to backups/{source_id}/"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class RejectSubmissionRequest(BaseModel):
+    submission_id: str
+    reason: Optional[str] = None
+
+
+@router.post("/api/reject-submission")
+async def reject_submission(
+    request: RejectSubmissionRequest,
+    _: bool = Depends(_require_global_admin)
+):
+    """
+    Reject a submission by deleting it from the submissions folder.
+
+    REQUIRES: VECTOR_DB_MODE=global (Global Admin only)
+    """
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+        from offline_tools.cloud.r2 import get_r2_storage
+
+        storage = get_r2_storage()
+        if not storage.is_configured():
+            raise HTTPException(status_code=500, detail="R2 storage not configured")
+
+        submission_id = request.submission_id
+        submission_prefix = f"submissions/{submission_id}/"
+        files = storage.list_files(submission_prefix)
+
+        if not files:
+            raise HTTPException(status_code=404, detail=f"Submission '{submission_id}' not found")
+
+        # Delete all files in the submission
+        deleted_count = 0
+        for file_info in files:
+            try:
+                if storage.delete_file(file_info["key"]):
+                    deleted_count += 1
+            except:
+                pass
+
+        return {
+            "status": "success",
+            "submission_id": submission_id,
+            "deleted_count": deleted_count,
+            "reason": request.reason,
+            "message": f"Rejected submission. {deleted_count} files deleted."
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/api/discover-novel-tags")

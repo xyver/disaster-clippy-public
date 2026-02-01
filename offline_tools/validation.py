@@ -1147,6 +1147,20 @@ SYSTEM_FOLDERS = {
     "tmp",
 }
 
+# Prefixes for system folders (language-specific ChromaDBs, etc.)
+SYSTEM_FOLDER_PREFIXES = ("chroma_db_",)
+
+
+def is_system_folder(folder_name: str) -> bool:
+    """Check if a folder should be excluded from source listing."""
+    name_lower = folder_name.lower()
+    if name_lower in SYSTEM_FOLDERS:
+        return True
+    for prefix in SYSTEM_FOLDER_PREFIXES:
+        if name_lower.startswith(prefix):
+            return True
+    return False
+
 
 def rebuild_master_from_sources(backup_folder: str) -> Dict[str, Any]:
     """
@@ -1170,7 +1184,7 @@ def rebuild_master_from_sources(backup_folder: str) -> Dict[str, Any]:
             continue
         if source_folder.name.startswith("_"):
             continue
-        if source_folder.name.lower() in SYSTEM_FOLDERS:
+        if is_system_folder(source_folder.name):
             continue
 
         source_id = source_folder.name

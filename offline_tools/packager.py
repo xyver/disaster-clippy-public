@@ -18,7 +18,7 @@ from .schemas import (
     get_vectors_file, get_backup_manifest_file, CURRENT_SCHEMA_VERSION,
     html_filename_to_url
 )
-from .validation import SYSTEM_FOLDERS
+from .validation import is_system_folder
 
 
 # =============================================================================
@@ -275,15 +275,19 @@ def detect_backup_status(source_id: str, backup_folder: Optional[Path] = None) -
             result["backup_size_mb"] = 1.0  # Default to 1MB if can't calculate
         return result
 
-    # Check PDF collection (_collection.json is the definitive marker)
+    # Check PDF files - either _collection.json exists (processed) or raw PDF files exist
     collection_file = source_folder / "_collection.json"
-    if collection_file.exists():
+    pdf_files = list(source_folder.glob("*.pdf"))
+
+    if collection_file.exists() or pdf_files:
         result["has_backup"] = True
         result["backup_type"] = "pdf"
         result["backup_path"] = str(source_folder)
+        result["pdf_processed"] = collection_file.exists()  # True if PDF Import has been run
+        result["pdf_count"] = len(pdf_files)
         # Fast size: just sum PDF files in top level
         try:
-            pdf_size = sum(f.stat().st_size for f in source_folder.glob("*.pdf"))
+            pdf_size = sum(f.stat().st_size for f in pdf_files)
             result["backup_size_mb"] = round(pdf_size / (1024*1024), 2)
         except Exception:
             pass
@@ -835,7 +839,7 @@ def sync_master_metadata() -> Dict[str, Any]:
             continue
         if item.name.startswith("_") or item.name.startswith("."):
             continue  # Skip special dirs like _master.json folder (if any)
-        if item.name.lower() in SYSTEM_FOLDERS:
+        if is_system_folder(item.name):
             continue  # Skip system folders
 
         source_id = item.name

@@ -755,6 +755,576 @@ class PDFScraper:
         return self.process_urls(list(pdf_urls)[:limit])
 
 
+    # ========================================================================
+    # PAGE-AWARE AND SECTION-BASED EXTRACTION (for building codes, manuals)
+    # ========================================================================
+
+    def _extract_pages_pymupdf(self, pdf_path: str) -> List[Dict]:
+        """
+        Extract text page-by-page using PyMuPDF, preserving page numbers.
+
+        Returns:
+            List of dicts: [{'page': 1, 'text': '...', 'char_count': N}, ...]
+        """
+        doc = fitz.open(pdf_path)
+        pages = []
+        for i, page in enumerate(doc):
+            text = page.get_text()
+            pages.append({
+                'page': i + 1,  # 1-indexed page numbers
+                'text': text,
+                'char_count': len(text)
+            })
+        doc.close()
+        return pages
+
+    def _extract_pages_pypdf(self, pdf_path: str) -> List[Dict]:
+        """
+        Extract text page-by-page using pypdf, preserving page numbers.
+        """
+        reader = PdfReader(pdf_path)
+        pages = []
+        for i, page in enumerate(reader.pages):
+            text = page.extract_text() or ""
+            pages.append({
+                'page': i + 1,
+                'text': text,
+                'char_count': len(text)
+            })
+        return pages
+
+    def _extract_pages(self, pdf_path: str) -> List[Dict]:
+        """Extract text page-by-page using available library."""
+        if HAS_PYMUPDF:
+            return self._extract_pages_pymupdf(pdf_path)
+        elif HAS_PYPDF:
+            return self._extract_pages_pypdf(pdf_path)
+        else:
+            raise RuntimeError("No PDF library available")
+
+    def _detect_section_headers(self, text: str, page_num: int) -> List[Dict]:
+        """
+        Detect section headers in text with their positions.
+
+        Handles patterns like:
+        - "1 Section Title" or "1.1 Subsection" (on same line)
+        - "1\nSection Title" (number on own line, title on next)
+        - "Section 1: Title"
+        - "CHAPTER 1"
+        - "A.1 Appendix section"
+
+        Returns:
+            List of dicts: [{'number': '1.1', 'title': 'Section Title',
+                           'level': 2, 'pos': 123, 'page': 1}, ...]
+        """
+        headers = []
+
+        # Skip patterns - common page headers/footers to ignore
+        skip_patterns = [
+            r'^\d{4}\s+FORTIFIED',  # "2025 FORTIFIED Home..."
+            r'^Page\s*\|',  # "Page | 5"
+            r'^\d+\s*$',  # Lone numbers (often page numbers)
+        ]
+
+        def should_skip(line: str) -> bool:
+            """Check if line matches skip patterns."""
+            for pattern in skip_patterns:
+                if re.match(pattern, line.strip(), re.IGNORECASE):
+                    return True
+            return False
+
+        def is_toc_title(title: str) -> bool:
+            """Check if title looks like a TOC entry (has dots followed by page number)."""
+            # Pattern: "Title ............. 5" or "Title ..... 10"
+            if re.search(r'\.{3,}\s*\d+\s*$', title):
+                return True
+            # Also check for very long runs of dots
+            if re.search(r'\.{10,}', title):
+                return True
+            return False
+
+        # Pattern 1: Numbered sections on same line: "1.2.3 Title"
+        # Must have proper section number followed by meaningful title
+        numbered_same_line = re.compile(
+            r'^[ \t]*'
+            r'(\d+(?:\.\d+)+)'  # Section number with at least one dot: 1.1, 1.2.3
+            r'[ \t]+'
+            r'([A-Z][A-Za-z][^\n]{2,80})'  # Title starting with caps, at least 4 chars
+            r'[ \t]*$',
+            re.MULTILINE
+        )
+
+        # Pattern 2: Top-level section number on own line, title on next line
+        # Common in FORTIFIED-style documents: "1\nProgram Overview"
+        numbered_split_line = re.compile(
+            r'^[ \t]*'
+            r'(\d+)'  # Just the number: 1, 2, 3
+            r'[ \t]*\n'  # End of line, newline
+            r'[ \t]*'
+            r'([A-Z][A-Za-z][^\n]{2,200})',  # Title on next line (capture more for TOC check)
+            re.MULTILINE
+        )
+
+        # Pattern 3: Subsection with split lines: "1.1\nSubsection Title"
+        subsection_split_line = re.compile(
+            r'^[ \t]*'
+            r'(\d+\.\d+(?:\.\d+)*)'  # Number with dots
+            r'[ \t]*\n'
+            r'[ \t]*'
+            r'([A-Z][A-Za-z][^\n]{2,200})',  # Capture more to check for TOC dots
+            re.MULTILINE
+        )
+
+        # Pattern 4: "Section X" or "Chapter X" style
+        named_pattern = re.compile(
+            r'^[ \t]*'
+            r'((?:Section|Chapter|Part|Appendix)\s+[\dA-Z]+(?:\.\d+)*)'
+            r'[:\.\s]+'
+            r'([A-Z][^\n]{3,80})?'
+            r'[ \t]*$',
+            re.MULTILINE | re.IGNORECASE
+        )
+
+        # Find numbered sections on same line (subsections)
+        for match in numbered_same_line.finditer(text):
+            number = match.group(1)
+            title = match.group(2).strip()
+            if should_skip(f"{number} {title}"):
+                continue
+            if is_toc_title(title):
+                continue
+            level = number.count('.') + 1
+            headers.append({
+                'number': number,
+                'title': title,
+                'level': level,
+                'pos': match.start(),
+                'page': page_num,
+                'full_header': f"{number} {title}"
+            })
+
+        # Find top-level numbered sections with split lines
+        for match in numbered_split_line.finditer(text):
+            number = match.group(1)
+            title_full = match.group(2).strip()
+            if should_skip(f"{number} {title_full}"):
+                continue
+            if is_toc_title(title_full):
+                continue
+            # Skip if number is too large (likely a year or other number)
+            if int(number) > 50:
+                continue
+            # Truncate title to reasonable length for storage
+            title = title_full[:80].strip()
+            headers.append({
+                'number': number,
+                'title': title,
+                'level': 1,
+                'pos': match.start(),
+                'page': page_num,
+                'full_header': f"{number} {title}"
+            })
+
+        # Find subsections with split lines
+        for match in subsection_split_line.finditer(text):
+            number = match.group(1)
+            title_full = match.group(2).strip()
+            if should_skip(f"{number} {title_full}"):
+                continue
+            if is_toc_title(title_full):
+                continue
+            # Truncate title to reasonable length for storage
+            title = title_full[:80].strip()
+            level = number.count('.') + 1
+            headers.append({
+                'number': number,
+                'title': title,
+                'level': level,
+                'pos': match.start(),
+                'page': page_num,
+                'full_header': f"{number} {title}"
+            })
+
+        # Find named sections (Section 1, Chapter 2, etc.)
+        for match in named_pattern.finditer(text):
+            number = match.group(1).strip()
+            title = (match.group(2) or "").strip()
+            if should_skip(f"{number} {title}"):
+                continue
+            level = 1
+            if '.' in number:
+                level = number.count('.') + 1
+            headers.append({
+                'number': number,
+                'title': title,
+                'level': level,
+                'pos': match.start(),
+                'page': page_num,
+                'full_header': f"{number}: {title}" if title else number
+            })
+
+        # Remove duplicates (same position)
+        seen_positions = set()
+        unique_headers = []
+        for h in headers:
+            if h['pos'] not in seen_positions:
+                seen_positions.add(h['pos'])
+                unique_headers.append(h)
+
+        # Sort by position
+        unique_headers.sort(key=lambda x: x['pos'])
+
+        return unique_headers
+
+    def _build_sections_from_pages(self, pages: List[Dict], min_section_chars: int = 200) -> List[Dict]:
+        """
+        Build section-based chunks from page data.
+
+        Each section includes:
+        - Section number/title
+        - Start/end page numbers
+        - Full text content
+        - Parent section path (for hierarchy)
+
+        Args:
+            pages: List of page dicts from _extract_pages
+            min_section_chars: Minimum characters for a section to be standalone
+
+        Returns:
+            List of section dicts with text, page ranges, and hierarchy info
+        """
+        # Create page lookup by page number
+        page_by_num = {p['page']: p for p in pages}
+
+        # First pass: collect all headers across all pages with their positions
+        all_headers = []
+        for page in pages:
+            page_headers = self._detect_section_headers(page['text'], page['page'])
+            for h in page_headers:
+                h['page_text'] = page['text']  # Keep reference to page text
+            all_headers.extend(page_headers)
+
+        # Sort by page number, then by position within page
+        all_headers.sort(key=lambda x: (x['page'], x['pos']))
+
+        # If no headers found, fall back to page-based chunking
+        if not all_headers:
+            return self._fallback_page_chunks(pages)
+
+        # Build sections by extracting text from start of each section
+        sections = []
+        section_stack = []  # Track current hierarchy
+
+        for i, header in enumerate(all_headers):
+            start_page = header['page']
+
+            # Determine end page (page before next section, or last page)
+            if i + 1 < len(all_headers):
+                next_header = all_headers[i + 1]
+                if next_header['page'] == start_page:
+                    # Next section on same page - extract only up to next section
+                    end_page = start_page
+                    # Extract text from this header to next header on same page
+                    page_text = header['page_text']
+                    start_pos = header['pos']
+                    end_pos = next_header['pos']
+                    section_text = page_text[start_pos:end_pos].strip()
+                else:
+                    # Next section on different page
+                    end_page = next_header['page'] - 1
+                    # Extract text: from header pos to end of start_page,
+                    # plus full text of pages between, up to (but not including) end_page+1
+                    parts = []
+                    # First page: from header position to end
+                    page_text = header['page_text']
+                    parts.append(page_text[header['pos']:].strip())
+                    # Middle pages (if any)
+                    for p in range(start_page + 1, end_page + 1):
+                        if p in page_by_num:
+                            parts.append(page_by_num[p]['text'].strip())
+                    section_text = '\n\n'.join(parts)
+            else:
+                # Last section - goes to end of document
+                end_page = pages[-1]['page']
+                parts = []
+                page_text = header['page_text']
+                parts.append(page_text[header['pos']:].strip())
+                for p in range(start_page + 1, end_page + 1):
+                    if p in page_by_num:
+                        parts.append(page_by_num[p]['text'].strip())
+                section_text = '\n\n'.join(parts)
+
+            # Skip very short sections (likely just headers)
+            if len(section_text) < min_section_chars:
+                continue
+
+            # Update section stack for hierarchy
+            level = header['level']
+            while section_stack and section_stack[-1]['level'] >= level:
+                section_stack.pop()
+            section_stack.append(header)
+
+            # Build section path
+            section_path = ' > '.join(h['full_header'] for h in section_stack)
+
+            sections.append({
+                'number': header['number'],
+                'title': header['title'],
+                'full_header': header['full_header'],
+                'level': header['level'],
+                'section_path': section_path,
+                'text': section_text,
+                'start_page': start_page,
+                'end_page': end_page,
+                'char_count': len(section_text)
+            })
+
+        return sections
+
+    def _fallback_page_chunks(self, pages: List[Dict], pages_per_chunk: int = 3) -> List[Dict]:
+        """
+        Fallback chunking when no sections detected - chunk by page groups.
+
+        Args:
+            pages: List of page dicts
+            pages_per_chunk: Number of pages per chunk
+
+        Returns:
+            List of section-like dicts
+        """
+        chunks = []
+        for i in range(0, len(pages), pages_per_chunk):
+            page_group = pages[i:i + pages_per_chunk]
+            text = "\n".join(p['text'] for p in page_group)
+            start_page = page_group[0]['page']
+            end_page = page_group[-1]['page']
+
+            chunks.append({
+                'number': '',
+                'title': f'Pages {start_page}-{end_page}',
+                'full_header': f'Pages {start_page}-{end_page}',
+                'level': 1,
+                'section_path': '',
+                'text': text,
+                'start_page': start_page,
+                'end_page': end_page,
+                'char_count': len(text)
+            })
+
+        return chunks
+
+    def _split_large_section(self, section: Dict, max_chars: int = 6000) -> List[Dict]:
+        """
+        Split a section that's too large into smaller chunks.
+
+        Tries to split on paragraph boundaries while preserving section metadata.
+        """
+        if section['char_count'] <= max_chars:
+            return [section]
+
+        text = section['text']
+        chunks = []
+
+        # Split on double newlines (paragraphs)
+        paragraphs = re.split(r'\n\s*\n', text)
+        current_chunk = ""
+        chunk_num = 1
+
+        for para in paragraphs:
+            if len(current_chunk) + len(para) <= max_chars:
+                current_chunk += "\n\n" + para if current_chunk else para
+            else:
+                if current_chunk:
+                    chunks.append({
+                        **section,
+                        'title': f"{section['title']} (Part {chunk_num})" if section['title'] else f"Part {chunk_num}",
+                        'full_header': f"{section['full_header']} (Part {chunk_num})",
+                        'text': current_chunk,
+                        'char_count': len(current_chunk)
+                    })
+                    chunk_num += 1
+                current_chunk = para
+
+        # Don't forget the last chunk
+        if current_chunk:
+            chunks.append({
+                **section,
+                'title': f"{section['title']} (Part {chunk_num})" if section['title'] else f"Part {chunk_num}",
+                'full_header': f"{section['full_header']} (Part {chunk_num})",
+                'text': current_chunk,
+                'char_count': len(current_chunk)
+            })
+
+        return chunks
+
+    def process_file_sectioned(self, file_path: str, url: Optional[str] = None,
+                                max_section_chars: int = 6000,
+                                min_section_chars: int = 200,
+                                start_page: int = 1,
+                                end_page: Optional[int] = None) -> List[ScrapedPage]:
+        """
+        Process a PDF with section-aware chunking and page number tracking.
+
+        This is the recommended method for building codes, manuals, and other
+        structured documents where section hierarchy and page citations matter.
+
+        Features:
+        - Detects section headers (1, 1.1, 1.1.1, Chapter 1, etc.)
+        - Preserves section hierarchy in metadata
+        - Tracks page numbers for each chunk
+        - Generates #page=N URLs for citations
+        - Splits large sections while preserving context
+
+        Args:
+            file_path: Path to the PDF file
+            url: Optional URL if downloaded from web (used as base for page URLs)
+            max_section_chars: Maximum characters per chunk (splits larger sections)
+            min_section_chars: Minimum characters for a standalone section
+            start_page: Page number to start processing from (skip TOC, title pages)
+            end_page: Optional page number to stop at (exclude appendices, index, etc.)
+
+        Returns:
+            List of ScrapedPage objects, one per section/chunk
+        """
+        path = Path(file_path)
+        if not path.exists():
+            print(f"File not found: {file_path}")
+            return []
+
+        if not path.suffix.lower() == '.pdf':
+            print(f"Not a PDF file: {file_path}")
+            return []
+
+        try:
+            # Extract pages with page numbers
+            all_pages = self._extract_pages(str(path))
+
+            # Filter to requested page range (skip TOC, title pages, appendices, etc.)
+            if end_page is None:
+                end_page = len(all_pages)
+            pages = [p for p in all_pages if start_page <= p['page'] <= end_page]
+
+            if start_page > 1 or end_page < len(all_pages):
+                print(f"Processing pages {start_page}-{end_page} of {len(all_pages)} total")
+
+            if not pages or sum(p['char_count'] for p in pages) < 100:
+                print(f"PDF has too little text: {file_path}")
+                return []
+
+            # Get metadata
+            metadata = self._extract_metadata(str(path))
+            base_title = metadata.get('title') or self._clean_filename_to_title(path.name)
+
+            # Build base URL
+            doc_url = url or f"file://{path.absolute()}"
+
+            # Get categories from metadata
+            categories = []
+            if metadata.get('keywords'):
+                categories = [k.strip() for k in metadata['keywords'].split(',')][:10]
+            if metadata.get('subject'):
+                categories.append(metadata['subject'])
+
+            # Build sections from pages
+            sections = self._build_sections_from_pages(pages, min_section_chars)
+
+            print(f"Detected {len(sections)} sections in {path.name}")
+
+            # Process sections into ScrapedPage objects
+            results = []
+            for section in sections:
+                # Split large sections
+                chunks = self._split_large_section(section, max_section_chars)
+
+                for chunk in chunks:
+                    # Build title with section info
+                    if chunk['number']:
+                        title = f"{base_title} - {chunk['number']} {chunk['title']}"
+                    elif chunk['title']:
+                        title = f"{base_title} - {chunk['title']}"
+                    else:
+                        title = f"{base_title} (Pages {chunk['start_page']}-{chunk['end_page']})"
+
+                    # Build URL with page reference
+                    # Use start page for the #page= fragment
+                    chunk_url = f"{doc_url}#page={chunk['start_page']}"
+
+                    # Build content with section path context
+                    content = chunk['text']
+                    if chunk['section_path'] and chunk['section_path'] != chunk['full_header']:
+                        # Add breadcrumb at top for context
+                        content = f"[{chunk['section_path']}]\n\n{content}"
+
+                    page = ScrapedPage(
+                        url=chunk_url,
+                        title=title,
+                        content=content,
+                        source=self.source_name,
+                        categories=categories[:10],
+                        last_modified=parse_pdf_date(metadata.get("creation_date")),
+                        content_hash=self._hash_content(content),
+                        scraped_at=datetime.utcnow().isoformat()
+                    )
+                    results.append(page)
+
+            print(f"Created {len(results)} chunks from {len(sections)} sections")
+            return results
+
+        except Exception as e:
+            print(f"Error processing PDF {file_path}: {e}")
+            import traceback
+            traceback.print_exc()
+            return []
+
+    def get_pdf_info(self, file_path: str, start_page: int = 1,
+                      end_page: Optional[int] = None) -> Dict:
+        """
+        Get summary info about a PDF without full processing.
+
+        Useful for previewing a PDF before deciding how to process it.
+
+        Args:
+            file_path: Path to the PDF file
+            start_page: Page to start analysis from (skip TOC, title pages)
+            end_page: Optional page to stop at
+
+        Returns:
+            Dict with page_count, total_chars, detected_sections, metadata
+        """
+        path = Path(file_path)
+        if not path.exists():
+            return {'error': f'File not found: {file_path}'}
+
+        try:
+            all_pages = self._extract_pages(str(path))
+            metadata = self._extract_metadata(str(path))
+
+            # Filter to requested page range
+            if end_page is None:
+                end_page = len(all_pages)
+            pages = [p for p in all_pages if start_page <= p['page'] <= end_page]
+
+            # Count sections in filtered range
+            all_headers = []
+            for page in pages:
+                headers = self._detect_section_headers(page['text'], page['page'])
+                all_headers.extend(headers)
+
+            return {
+                'file_name': path.name,
+                'total_pages': len(all_pages),
+                'analyzed_pages': len(pages),
+                'page_range': f"{start_page}-{end_page}",
+                'total_chars': sum(p['char_count'] for p in pages),
+                'detected_sections': len(all_headers),
+                'section_preview': all_headers[:20],  # First 20 sections
+                'metadata': metadata
+            }
+
+        except Exception as e:
+            return {'error': str(e)}
+
+
 def create_pdf_scraper(source_name: str = "pdf", **kwargs) -> PDFScraper:
     """Convenience function to create a PDF scraper"""
     return PDFScraper(source_name=source_name, **kwargs)

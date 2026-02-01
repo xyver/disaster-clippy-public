@@ -20,6 +20,46 @@ router = APIRouter(prefix="/api", tags=["Pack Management"])
 
 
 # =============================================================================
+# CACHE FOR R2 MASTER.JSON - Avoid downloading on every page load
+# =============================================================================
+
+_cloud_master_cache = {
+    "data": None,
+    "timestamp": 0,
+    "ttl": 300  # 5 minutes
+}
+
+
+def _get_cached_cloud_master(storage) -> dict:
+    """
+    Get _master.json from R2 with caching.
+    Returns cached data if still valid, otherwise downloads fresh copy.
+    """
+    import time
+    import tempfile
+
+    now = time.time()
+    cache = _cloud_master_cache
+
+    # Return cached data if still valid
+    if cache["data"] is not None and (now - cache["timestamp"]) < cache["ttl"]:
+        return cache["data"]
+
+    # Download fresh copy
+    tmp_path = Path(tempfile.gettempdir()) / "cloud_master.json"
+    if storage.download_file("backups/_master.json", str(tmp_path)):
+        try:
+            with open(tmp_path, 'r', encoding='utf-8') as f:
+                cache["data"] = json.load(f)
+                cache["timestamp"] = now
+                return cache["data"]
+        except Exception as e:
+            print(f"Failed to parse _master.json: {e}")
+
+    return {}
+
+
+# =============================================================================
 # HELPER FUNCTIONS
 # =============================================================================
 
@@ -195,16 +235,8 @@ async def get_cloud_sources():
         if not conn_status["connected"]:
             return {"sources": [], "connected": False, "error": conn_status.get("error", "Connection failed")}
 
-        # Try to load _master.json for source metadata
-        master_data = {}
-        import tempfile
-        tmp_path = Path(tempfile.gettempdir()) / "cloud_master.json"
-        if storage.download_file("backups/_master.json", str(tmp_path)):
-            try:
-                with open(tmp_path, 'r', encoding='utf-8') as f:
-                    master_data = json.load(f)
-            except Exception as e:
-                print(f"Failed to parse _master.json: {e}")
+        # Try to load _master.json for source metadata (cached)
+        master_data = _get_cached_cloud_master(storage)
 
         master_sources = master_data.get("sources", {})
         if master_sources:

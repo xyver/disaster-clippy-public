@@ -465,10 +465,29 @@ def get_job_function(job_type: str, source_id: str, params: Dict[str, Any]):
     if job_type == "metadata":
         def run_metadata(progress_callback=None, cancel_checker=None, job_id=None):
             from offline_tools.source_manager import SourceManager
+            from pathlib import Path
+            from admin.local_config import get_local_config
+
             manager = SourceManager()
+            force_regenerate = params.get("force_regenerate", False)
+
+            # If force_regenerate, delete existing metadata first
+            if force_regenerate:
+                if progress_callback:
+                    progress_callback(0, 100, "Deleting existing metadata...")
+                try:
+                    config = get_local_config()
+                    backup_folder = config.get_backup_folder()
+                    if backup_folder:
+                        metadata_file = Path(backup_folder) / source_id / "_metadata.json"
+                        if metadata_file.exists():
+                            metadata_file.unlink()
+                            print(f"[metadata] Deleted existing _metadata.json (force regenerate)")
+                except Exception as e:
+                    print(f"[metadata] Warning: Could not delete existing metadata: {e}")
 
             if progress_callback:
-                progress_callback(0, 100, "Generating metadata...")
+                progress_callback(5, 100, "Generating metadata...")
 
             # Language filter: subtract articles not in this language
             lang_filter = params.get("language_filter") or None
@@ -676,6 +695,78 @@ def get_job_function(job_type: str, source_id: str, params: Dict[str, Any]):
             return result
 
         return run_translate_source
+
+    elif job_type == "localize_source":
+        def run_localize_source(progress_callback=None, cancel_checker=None, job_id=None):
+            """
+            Create a fully localized source variant.
+            Translates all HTML, generates 768-dim embeddings, creates ChromaDB.
+            """
+            from offline_tools.source_localizer import localize_source
+
+            target_lang = params.get("target_language", "")
+            if not target_lang:
+                return {"success": False, "error": "No target language selected"}
+
+            # Parse dimension from dropdown (e.g., "768 (MPNet - recommended)" -> 768)
+            # and map to model name
+            dimension_str = str(params.get("dimension", "768"))
+            dimension = int(dimension_str.split()[0]) if dimension_str else 768
+            dimension_to_model = {
+                384: "all-MiniLM-L6-v2",
+                768: "all-mpnet-base-v2",
+                1024: "intfloat/e5-large-v2"
+            }
+            embedding_model = dimension_to_model.get(dimension, "all-mpnet-base-v2")
+
+            # Parse batch_size from dropdown (e.g., "64 (8GB VRAM)" -> 64)
+            batch_size_str = str(params.get("batch_size", "64"))
+            batch_size = int(batch_size_str.split()[0]) if batch_size_str else 64
+
+            force_overwrite = params.get("force_overwrite", False)
+            resume = params.get("resume", True)
+
+            # Validate requirements before starting
+            from offline_tools.source_localizer import validate_localization_requirements
+            requirements = validate_localization_requirements(source_id, target_lang, force_overwrite=force_overwrite)
+            if not requirements["can_localize"]:
+                issues = ", ".join(requirements.get("issues", [])) or "Unknown issue"
+                return {"success": False, "error": f"Cannot localize: {issues}"}
+
+            def update_progress(current, total, message):
+                if progress_callback:
+                    pct = int((current / total) * 100) if total > 0 else current
+                    progress_callback(pct, 100, message)
+
+            result = localize_source(
+                source_id=source_id,
+                target_lang=target_lang,
+                progress_callback=update_progress,
+                cancel_checker=cancel_checker,
+                job_id=job_id,
+                batch_size=batch_size,
+                resume=resume,
+                embedding_model=embedding_model,
+                force_overwrite=force_overwrite
+            )
+
+            if not result.success:
+                return {"success": False, "error": result.error or "Localization failed"}
+
+            return {
+                "success": True,
+                "source_id": result.source_id,
+                "target_lang": result.target_lang,
+                "localized_source_id": result.localized_source_id,
+                "documents_translated": result.documents_translated,
+                "html_files_translated": result.html_files_translated,
+                "embeddings_generated": result.embeddings_generated,
+                "resumed": result.resumed,
+                "warnings": result.warnings,
+                "message": f"Successfully localized {source_id} to {target_lang}"
+            }
+
+        return run_localize_source
 
     elif job_type == "scrape":
         def run_scrape(progress_callback=None, cancel_checker=None, job_id=None):

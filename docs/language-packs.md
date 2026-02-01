@@ -992,18 +992,43 @@ def view_article(source_id: str, article_id: str):
 - [ ] Mode switching in UI
 - [ ] Auto-recommend based on language count
 
-### Phase 7: Source Localization (Future - Phase 4)
+### Phase 7: Source Localization (IN PROGRESS - Phase 4)
 
-**Goal:** Local Admins can pre-translate entire sources, eliminating runtime translation.
+**Goal:** Create fully pre-translated source variants where users can chat entirely in their target language with no translation barrier.
 
-- [ ] `localize_source(source_id, target_language)` function
-- [ ] Translate all titles and content summaries in `_metadata.json`
+**Implementation Plan:** See `C:\Users\Bryan\.claude\plans\cached-meandering-eagle.md` for full details.
+
+**Core Tasks:**
+- [ ] `localize_source(source_id, target_language)` function in `offline_tools/source_localizer.py`
+- [ ] Translate all HTML files in pages/ folder
+- [ ] Translate titles in `_metadata.json`
+- [ ] Extract content for `_index.json` from translated HTML
 - [ ] Re-embed translated text (creates new `_vectors_768.json`)
 - [ ] Create `{source_id}_{lang}/` variant folder
-- [ ] Update local ChromaDB with localized entries
+- [ ] Create language-specific ChromaDB (`chroma_db_768_es/`, etc.)
 - [ ] "Localize to [Language]" button on source cards
-- [ ] Progress UI for batch translation
-- [ ] Multilingual LLM support (Aya 23, Suzume-Llama-3)
+- [ ] Progress UI for batch translation with checkpointing
+- [ ] Language selector on chat page
+- [ ] Search routing to localized sources
+- [ ] Multilingual LLM support (Salamandra 2B/7B for Spanish)
+
+**Files to Create:**
+- `offline_tools/source_localizer.py` - Core localization engine
+- `admin/routes/localizations.py` - API endpoints
+
+**Files to Modify:**
+- `offline_tools/vectordb/store.py` - Add language param for `chroma_db_768_{lang}`
+- `offline_tools/model_registry.py` - Add Salamandra 2B/7B LLM entries
+- `admin/routes/__init__.py` - Register localizations router
+- `admin/templates/sources.html` - Localize button, modal, badges
+- `templates/index.html` - Language selector dropdown
+- `app.py` - Search routing by language
+
+**Multilingual LLMs (Salamandra from BSC):**
+| Model | Size | HuggingFace Repo |
+|-------|------|------------------|
+| Salamandra-2B-Instruct | ~1.2GB (Q4) | BSC-LT/salamandraTA-2B-instruct-GGUF |
+| Salamandra-7B-Instruct | ~4.5GB (Q4) | BSC-LT/salamandraTA-7B-instruct-GGUF |
 
 **Why Phase 4?**
 - Phases 1-3: Runtime translation (works but slower)
@@ -1041,10 +1066,15 @@ def view_article(source_id: str, article_id: str):
 4. Green badge shows "Translated to Spanish" in corner
 5. Translations are cached for instant repeat visits
 
-**Next Steps**:
+**Next Steps (Current: Phase 4 In Progress)**:
 1. Phase 2 - Chat translation (query to English, response to user language)
 2. Phase 3 - NLLB universal model support (200 languages)
-3. Phase 4 - Source localization (pre-translate at index time, native language search)
+3. **Phase 4 - Source localization (IN PROGRESS)**
+   - Create source_localizer.py with localize_source() function
+   - Add Salamandra 2B/7B Spanish LLMs to model registry
+   - Language-specific ChromaDB (chroma_db_768_es/)
+   - Full HTML file translation for offline browsing
+   - Language selector on chat page
 
 ---
 

@@ -32,6 +32,18 @@ class TranslationService:
         self._model_lang_to_en = None  # For Phase 2
         self._tokenizer_lang_to_en = None  # For Phase 2
         self._model_loaded = False
+        self._device = None
+        self._gpu_count = 0
+        self._batch_size = self._get_batch_size()
+
+    def _get_batch_size(self) -> int:
+        """Get batch size from config (for UI configurability)"""
+        try:
+            from admin.local_config import get_local_config
+            config = get_local_config()
+            return config.get("translation.batch_size", 256)
+        except Exception:
+            return 256  # Default for GPU
 
     def _get_active_language(self) -> str:
         """Get active language from config"""
@@ -62,6 +74,7 @@ class TranslationService:
     def _load_model(self) -> bool:
         """
         Load the MarianMT model for translation.
+        Automatically uses GPU if available, including multi-GPU with DataParallel.
 
         Returns:
             True if model loaded successfully
@@ -73,8 +86,22 @@ class TranslationService:
             return False
 
         try:
+            import torch
             from transformers import MarianMTModel, MarianTokenizer
             from .language_registry import get_language_registry, AVAILABLE_LANGUAGE_PACKS
+
+            # Detect GPU/CUDA
+            if torch.cuda.is_available():
+                self._gpu_count = torch.cuda.device_count()
+                self._device = torch.device("cuda")
+                gpu_names = [torch.cuda.get_device_name(i) for i in range(self._gpu_count)]
+                print(f"[Translation] CUDA available: {self._gpu_count} GPU(s) detected")
+                for i, name in enumerate(gpu_names):
+                    vram = torch.cuda.get_device_properties(i).total_memory / 1024**3
+                    print(f"  GPU {i}: {name} ({vram:.1f} GB)")
+            else:
+                self._device = torch.device("cpu")
+                print("[Translation] CUDA not available, using CPU")
 
             registry = get_language_registry()
             pack_path = registry.get_pack_path(self.language)
@@ -94,11 +121,35 @@ class TranslationService:
             en_to_lang_path = pack_path / en_to_lang_name
 
             if en_to_lang_path.exists():
-                print(f"Loading translation model from {en_to_lang_path}...")
+                print(f"[Translation] Loading model from {en_to_lang_path}...")
                 self._tokenizer_en_to_lang = MarianTokenizer.from_pretrained(str(en_to_lang_path))
                 self._model_en_to_lang = MarianMTModel.from_pretrained(str(en_to_lang_path))
+
+                # Move model to GPU
+                self._model_en_to_lang = self._model_en_to_lang.to(self._device)
+
+                # Use half-precision (float16) only on GPUs with Tensor Cores (RTX 20xx+)
+                # Pascal (GTX 10xx) has compute capability 6.x - no tensor cores
+                # Turing+ (RTX 20xx+) has compute capability 7.5+ - has tensor cores
+                if self._device.type == "cuda":
+                    compute_cap = torch.cuda.get_device_capability(0)
+                    if compute_cap[0] >= 7 and compute_cap[1] >= 5:
+                        self._model_en_to_lang = self._model_en_to_lang.half()
+                        print(f"[Translation] Using float16 (GPU compute {compute_cap[0]}.{compute_cap[1]} has Tensor Cores)")
+                    else:
+                        print(f"[Translation] Using float32 (GPU compute {compute_cap[0]}.{compute_cap[1]} - no Tensor Cores)")
+
+                # Use DataParallel for multi-GPU
+                if self._gpu_count > 1:
+                    print(f"[Translation] Enabling DataParallel across {self._gpu_count} GPUs")
+                    self._model_en_to_lang = torch.nn.DataParallel(self._model_en_to_lang)
+
+                # Set to evaluation mode (faster inference)
+                self._model_en_to_lang.eval()
+
                 self._model_loaded = True
-                print(f"Translation model loaded for {self.language}")
+                device_str = f"GPU x{self._gpu_count}" if self._gpu_count > 0 else "CPU"
+                print(f"[Translation] Model loaded for {self.language} on {device_str}")
                 return True
             else:
                 print(f"Model path not found: {en_to_lang_path}")
@@ -110,6 +161,8 @@ class TranslationService:
             return False
         except Exception as e:
             print(f"Error loading translation model: {e}")
+            import traceback
+            traceback.print_exc()
             return False
 
     def _should_translate(self, text: str) -> bool:
@@ -172,6 +225,7 @@ class TranslationService:
     def translate_batch(self, texts: list) -> list:
         """
         Translate multiple texts in a single batch (much faster than individual calls).
+        Automatically uses GPU if available.
 
         Args:
             texts: List of English texts to translate
@@ -213,9 +267,21 @@ class TranslationService:
                 max_length=max_length
             )
 
+            # Move inputs to GPU if available
+            if self._device is not None:
+                inputs = {k: v.to(self._device) for k, v in inputs.items()}
+
+            # Get the actual model (unwrap DataParallel if needed)
+            model = self._model_en_to_lang
+            if hasattr(model, 'module'):
+                # DataParallel wraps the model in .module
+                generate_model = model.module
+            else:
+                generate_model = model
+
             # Disable gradient computation for faster inference
             with torch.no_grad():
-                outputs = self._model_en_to_lang.generate(
+                outputs = generate_model.generate(
                     **inputs,
                     max_new_tokens=256,  # Limit output length
                     num_beams=1,  # Greedy decoding (faster than beam search)
@@ -234,6 +300,8 @@ class TranslationService:
 
         except Exception as e:
             print(f"Batch translation error: {e}")
+            import traceback
+            traceback.print_exc()
             return texts
 
     def translate_html(self, html: str, article_id: str = None) -> str:
@@ -263,11 +331,32 @@ class TranslationService:
 
         try:
             from bs4 import BeautifulSoup
+            import time
 
-            soup = BeautifulSoup(html, 'html.parser')
+            t0 = time.time()
+            # Use lxml parser (5-10x faster than html.parser)
+            soup = BeautifulSoup(html, 'lxml')
 
-            # Tags to skip (don't translate code, scripts, etc.)
-            skip_tags = {'script', 'style', 'code', 'pre', 'kbd', 'var', 'noscript'}
+            # Tags to skip (don't translate code, scripts, metadata, etc.)
+            skip_tags = {'script', 'style', 'code', 'pre', 'kbd', 'var', 'noscript',
+                         'cite', 'sup', 'sub', 'nav', 'footer', 'header'}
+
+            # Classes to skip (references, navigation, metadata boxes)
+            skip_classes = {'reference', 'references', 'reflist', 'refbegin',
+                           'mw-editsection', 'mw-headline-anchor', 'cite-bracket',
+                           'toc', 'catlinks', 'navbox', 'sistersitebox',
+                           'mbox', 'ambox', 'metadata', 'noprint', 'plainlinks',
+                           'infobox', 'sidebar', 'vertical-navbox'}
+
+            def should_skip_element(elem):
+                """Check if element or any parent should be skipped"""
+                for parent in elem.parents:
+                    if parent.name in skip_tags:
+                        return True
+                    parent_classes = parent.get('class', [])
+                    if any(c in skip_classes for c in parent_classes):
+                        return True
+                return False
 
             # Collect all text nodes that need translation
             text_nodes = []
@@ -275,6 +364,9 @@ class TranslationService:
 
             for text_node in soup.find_all(string=True):
                 if text_node.parent.name in skip_tags:
+                    continue
+
+                if should_skip_element(text_node):
                     continue
 
                 original = str(text_node).strip()
@@ -286,19 +378,24 @@ class TranslationService:
             if not texts_to_translate:
                 return html
 
-            print(f"[Translation] Translating {len(texts_to_translate)} text segments...")
+            parse_time = time.time() - t0
+            print(f"[Translation] Parsed {len(texts_to_translate)} segments in {parse_time:.2f}s")
 
-            # Batch translate in smaller chunks for better progress visibility
-            batch_size = 16  # Smaller batches = faster per-batch, better progress
+            # Batch translate - configurable via translation.batch_size in settings
+            # GPU can handle 256+ with 8GB VRAM, CPU is memory-limited
+            batch_size = self._batch_size if self._gpu_count > 0 else min(self._batch_size, 64)
             all_translated = []
             total_batches = (len(texts_to_translate) + batch_size - 1) // batch_size
 
+            t1 = time.time()
             for i in range(0, len(texts_to_translate), batch_size):
                 batch_num = i // batch_size + 1
                 batch = texts_to_translate[i:i + batch_size]
-                print(f"[Translation] Batch {batch_num}/{total_batches} ({len(batch)} texts)...")
                 translated_batch = self.translate_batch(batch)
                 all_translated.extend(translated_batch)
+
+            translate_time = time.time() - t1
+            print(f"[Translation] Translated {len(texts_to_translate)} texts in {translate_time:.2f}s ({translate_time/len(texts_to_translate)*1000:.0f}ms/text)")
 
             # Replace text nodes with translations
             for text_node, translated in zip(text_nodes, all_translated):
