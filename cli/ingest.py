@@ -749,7 +749,15 @@ def cmd_pdf_process(args):
     for pdf_path in pdf_files:
         print(f"  Processing: {pdf_path.name}")
 
-        if args.chunked:
+        if args.sectioned:
+            # Section-aware chunking (for building codes, manuals)
+            # Preserves natural section breaks and page references
+            pages = scraper.process_file_sectioned(
+                str(pdf_path),
+                start_page=args.start_page,
+                end_page=args.end_page
+            )
+        elif args.chunked:
             pages = scraper.process_file_chunked(
                 str(pdf_path),
                 chunk_size=args.chunk_size,
@@ -933,9 +941,12 @@ Examples:
     # pdf process
     pdf_process = pdf_subparsers.add_parser("process", help="Process collection and add to vector DB")
     pdf_process.add_argument("collection", help="Collection ID to process")
-    pdf_process.add_argument("--chunked", action="store_true", help="Split large PDFs into chunks")
-    pdf_process.add_argument("--chunk-size", type=int, default=4000, help="Chunk size in chars")
-    pdf_process.add_argument("--overlap", type=int, default=200, help="Overlap between chunks")
+    pdf_process.add_argument("--chunked", action="store_true", help="Split large PDFs into chunks (character-based)")
+    pdf_process.add_argument("--sectioned", action="store_true", help="Split by document sections (for building codes, manuals)")
+    pdf_process.add_argument("--start-page", type=int, default=1, help="Page to start from (skip TOC, title pages)")
+    pdf_process.add_argument("--end-page", type=int, help="Page to stop at (exclude appendices, index)")
+    pdf_process.add_argument("--chunk-size", type=int, default=4000, help="Chunk size in chars (for --chunked)")
+    pdf_process.add_argument("--overlap", type=int, default=200, help="Overlap between chunks (for --chunked)")
     pdf_process.add_argument("--force", action="store_true", help="Re-process existing documents")
 
     args = parser.parse_args()

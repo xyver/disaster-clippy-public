@@ -77,10 +77,20 @@ def save_manifest(output_folder: Path, source_id: str, documents: List[Dict],
                 pass
 
         # Fields to preserve from existing file (user edits take precedence)
-        # CRITICAL: created_from and zim_path must be preserved for ZIM-imported sources
-        preserved = ["name", "description", "license", "license_verified",
-                     "attribution", "base_url", "tags", "created_at", "version",
-                     "language", "publisher", "created_from", "zim_path"]
+        # CRITICAL: Preserve all user-editable and validation fields
+        # These should NOT be overwritten during indexing - only explicit user action should change them
+        preserved = [
+            # Identity & metadata
+            "name", "description", "license", "license_verified", "license_notes",
+            "attribution", "base_url", "tags", "created_at", "version",
+            "language", "language_verified",
+            # Source origin info
+            "publisher", "created_from", "zim_path", "zim_metadata", "original_url",
+            # Validation status (must preserve - expensive to regenerate)
+            "links_verified_offline", "links_verified_online",
+            # Localization info
+            "is_localization", "parent_source_id", "localized_at"
+        ]
 
         # Calculate file sizes
         metadata_file = output_folder / get_metadata_file()
@@ -1396,9 +1406,15 @@ class PDFIndexer:
                     skipped += 1
                     continue
 
-                # Build URLs - use /pdf/ endpoint (browser-navigable with #page=N)
+                # Build URLs - use R2 public URL if configured, otherwise /pdf/ endpoint
                 pdf_filename = pdf_path.name
-                online_url = f"/pdf/{self.source_id}/{pdf_filename}"
+                r2_public_url = os.getenv("R2_PUBLIC_URL", "")
+                if r2_public_url:
+                    # R2 public hosting: full URL to PDF in backups folder
+                    online_url = f"{r2_public_url.rstrip('/')}/backups/{self.source_id}/{pdf_filename}"
+                else:
+                    # App-served PDFs via /pdf/ endpoint
+                    online_url = f"/pdf/{self.source_id}/{pdf_filename}"
                 local_url = f"file://{pdf_path}"
 
                 # Create chunks with page tracking and overlap

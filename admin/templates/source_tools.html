@@ -692,6 +692,17 @@
                         <div id="zimFileInfo" style="display: none; margin-top: 0.75rem; padding: 0.75rem; background: #0f3460; border-radius: 4px; font-size: 0.85rem;">
                         </div>
                     </div>
+                    <div class="form-group" id="pdfSelectorGroup" style="display: none;">
+                        <label>Select PDF File or Folder</label>
+                        <select id="pdfFileSelect" onchange="onPdfFileSelected()">
+                            <option value="">-- Loading PDF files... --</option>
+                        </select>
+                        <p style="font-size: 0.8rem; color: #888; margin-top: 0.25rem;">
+                            PDF files and folders found in your backup folder. Files will be copied into the source folder.
+                        </p>
+                        <div id="pdfFileInfo" style="display: none; margin-top: 0.75rem; padding: 0.75rem; background: #0f3460; border-radius: 4px; font-size: 0.85rem;">
+                        </div>
+                    </div>
                     <div class="tool-actions">
                         <button class="btn btn-primary" onclick="createNewSource()">Create Source</button>
                         <button class="btn btn-secondary" onclick="cancelNewSource()">Cancel</button>
@@ -864,6 +875,28 @@
                         </div>
                         <div class="tool-actions">
                             <button class="btn btn-warning" onclick="renameSource()">Rename Source</button>
+                        </div>
+                    </div>
+
+                    <!-- Upload to R2 Section (Global Admin + PDF only) -->
+                    <div class="tool-section global-admin-only" id="sectionUploadToR2" style="display: none;">
+                        <h3>Upload PDF to R2</h3>
+                        <p>Upload PDF files to R2 cloud storage for public access. This sets the base URL so online links work correctly.</p>
+
+                        <div id="r2UploadStatus" style="margin-bottom: 1rem;">
+                            <div id="r2NotUploaded" style="padding: 0.75rem; background: rgba(233, 69, 96, 0.1); border: 1px solid #e94560; border-radius: 4px;">
+                                <span style="color: #e94560;">PDF not uploaded to R2</span>
+                                <span style="color: #888; margin-left: 0.5rem;">- Online links will not work until uploaded</span>
+                            </div>
+                            <div id="r2Uploaded" style="display: none; padding: 0.75rem; background: rgba(78, 204, 163, 0.1); border: 1px solid #4ecca3; border-radius: 4px;">
+                                <span style="color: #4ecca3;">PDF uploaded to R2</span>
+                                <span id="r2BaseUrlDisplay" style="color: #888; margin-left: 0.5rem; font-size: 0.85rem;"></span>
+                            </div>
+                        </div>
+
+                        <div class="tool-actions">
+                            <button class="btn btn-primary" id="btnUploadToR2" onclick="uploadPdfToR2()">Upload to R2</button>
+                            <span id="r2UploadProgress" style="margin-left: 1rem; color: #888;"></span>
                         </div>
                     </div>
 
@@ -1712,6 +1745,7 @@
 
         // Source Type Selection
         let availableZimFiles = [];
+        let availablePdfItems = [];
 
         function selectSourceType(type) {
             selectedSourceType = type;
@@ -1728,12 +1762,18 @@
 
             // Show/hide type-specific fields
             document.getElementById('scrapeUrlGroup').style.display = type === 'scrape' ? 'block' : 'none';
-            document.getElementById('importPathGroup').style.display = (type === 'html' || type === 'pdf') ? 'block' : 'none';
+            document.getElementById('importPathGroup').style.display = type === 'html' ? 'block' : 'none';
             document.getElementById('zimSelectorGroup').style.display = type === 'zim' ? 'block' : 'none';
+            document.getElementById('pdfSelectorGroup').style.display = type === 'pdf' ? 'block' : 'none';
 
             // Load ZIM files when ZIM type is selected
             if (type === 'zim') {
                 loadAvailableZimFiles();
+            }
+
+            // Load PDF files when PDF type is selected
+            if (type === 'pdf') {
+                loadAvailablePdfFiles();
             }
         }
 
@@ -1828,6 +1868,94 @@
             }
         }
 
+        async function loadAvailablePdfFiles() {
+            const select = document.getElementById('pdfFileSelect');
+            const infoDiv = document.getElementById('pdfFileInfo');
+            select.innerHTML = '<option value="">-- Loading... --</option>';
+
+            try {
+                const response = await fetch('/useradmin/api/pdf/list');
+                const data = await response.json();
+
+                console.log('PDF list response:', data);
+
+                if (data.error) {
+                    select.innerHTML = '<option value="">-- Error: ' + data.error + ' --</option>';
+                    logOutput(`PDF list error: ${data.error}`, 'error');
+                    return;
+                }
+
+                availablePdfItems = data.items || [];
+
+                if (availablePdfItems.length === 0) {
+                    const folder = data.backup_folder || 'not configured';
+                    select.innerHTML = '<option value="">-- No PDF files found --</option>';
+                    logOutput(`No PDF files found in backup folder: ${folder}`, 'warning');
+                    if (infoDiv) {
+                        infoDiv.innerHTML = '<span style="color: #ff9800;">Backup folder: ' + folder + '<br>Place PDF files or folders containing PDFs here.</span>';
+                        infoDiv.style.display = 'block';
+                    }
+                    return;
+                }
+
+                select.innerHTML = '<option value="">-- Select a PDF file or folder --</option>';
+                availablePdfItems.forEach(item => {
+                    const option = document.createElement('option');
+                    option.value = item.path;
+                    if (item.type === 'folder') {
+                        option.textContent = `[Folder] ${item.name} (${item.pdf_count} PDFs, ${item.size_mb} MB)${item.is_existing_source ? ' [existing source]' : ''}`;
+                    } else {
+                        option.textContent = `${item.name} (${item.size_mb} MB)`;
+                    }
+                    select.appendChild(option);
+                });
+
+                logOutput(`Found ${data.total_pdfs} PDF file(s) in ${data.backup_folder}`, 'info');
+
+            } catch (e) {
+                select.innerHTML = '<option value="">-- Error loading PDF files --</option>';
+                logOutput(`Error loading PDF files: ${e.message}`, 'error');
+                console.error('PDF list error:', e);
+            }
+        }
+
+        function onPdfFileSelected() {
+            const select = document.getElementById('pdfFileSelect');
+            const infoDiv = document.getElementById('pdfFileInfo');
+            const selectedPath = select.value;
+
+            if (!selectedPath) {
+                infoDiv.style.display = 'none';
+                return;
+            }
+
+            const pdfItem = availablePdfItems.find(p => p.path === selectedPath);
+            if (pdfItem) {
+                // Auto-suggest source ID from filename/folder name
+                const sourceIdInput = document.getElementById('newSourceId');
+                if (!sourceIdInput.value && pdfItem.suggested_id) {
+                    sourceIdInput.value = pdfItem.suggested_id;
+                }
+
+                // Show item info
+                if (pdfItem.type === 'folder') {
+                    const fileList = pdfItem.files ? pdfItem.files.join(', ') : '';
+                    infoDiv.innerHTML = `
+                        <div style="color: #4ecca3;"><strong>Selected Folder:</strong> ${pdfItem.name}</div>
+                        <div style="color: #888; margin-top: 0.25rem;">${pdfItem.pdf_count} PDF files (${pdfItem.size_mb} MB total)</div>
+                        <div style="color: #888; font-size: 0.8rem; margin-top: 0.25rem;">Files: ${fileList}${pdfItem.pdf_count > 3 ? '...' : ''}</div>
+                        ${pdfItem.is_existing_source ? '<div style="color: #ff9800; margin-top: 0.5rem;">Note: This folder is already a source. Files will be copied to a new location.</div>' : ''}
+                    `;
+                } else {
+                    infoDiv.innerHTML = `
+                        <div style="color: #4ecca3;"><strong>Selected:</strong> ${pdfItem.name}</div>
+                        <div style="color: #888; margin-top: 0.25rem;">Size: ${pdfItem.size_mb} MB</div>
+                    `;
+                }
+                infoDiv.style.display = 'block';
+            }
+        }
+
         function cancelNewSource() {
             selectedSourceType = null;
             document.querySelectorAll('.source-type-card').forEach(card => {
@@ -1840,6 +1968,9 @@
             document.getElementById('zimFileSelect').value = '';
             document.getElementById('zimFileInfo').style.display = 'none';
             document.getElementById('zimSelectorGroup').style.display = 'none';
+            document.getElementById('pdfFileSelect').value = '';
+            document.getElementById('pdfFileInfo').style.display = 'none';
+            document.getElementById('pdfSelectorGroup').style.display = 'none';
         }
 
         async function createNewSource() {
@@ -1866,6 +1997,22 @@
                 }
                 logOutput(`Creating new source: ${sourceId} (ZIM)...`);
                 logOutput(`  ZIM file will be moved to source folder`, 'info');
+            } else if (selectedSourceType === 'pdf') {
+                const pdfSelect = document.getElementById('pdfFileSelect');
+                importPath = pdfSelect.value || null;
+                if (!importPath) {
+                    showToast('Please select a PDF file or folder', true);
+                    return;
+                }
+                const pdfItem = availablePdfItems.find(p => p.path === importPath);
+                if (pdfItem) {
+                    if (pdfItem.type === 'folder') {
+                        logOutput(`Creating new source: ${sourceId} (PDF folder with ${pdfItem.pdf_count} files)...`);
+                    } else {
+                        logOutput(`Creating new source: ${sourceId} (PDF file: ${pdfItem.name})...`);
+                    }
+                    logOutput(`  PDF files will be copied to source folder`, 'info');
+                }
             } else {
                 importPath = document.getElementById('importPath').value || null;
                 logOutput(`Creating new source: ${sourceId} (${selectedSourceType})...`);
@@ -2040,6 +2187,7 @@
                 updateScrapeSection();
                 updateWizardUI();
                 updateVectorStatus(currentSource.source_id);  // Check 768/1536 vector status
+                updateR2UploadSection();  // Show R2 upload section for global admin + PDF sources
 
                 // Show document count if source has documents
                 const docCount = currentSource.document_count || 0;
@@ -2404,7 +2552,14 @@
                 links_verified_online: document.getElementById('editLinksOnline').checked
             };
 
-            logOutput(`Saving link verification status for ${currentSource.source_id}...`);
+            // If marking online links as verified, also save the base_url if set
+            const baseUrlField = document.getElementById('editBaseUrl');
+            if (config.links_verified_online && baseUrlField && baseUrlField.value.trim()) {
+                config.base_url = baseUrlField.value.trim();
+                logOutput(`Saving link verification + base_url for ${currentSource.source_id}...`);
+            } else {
+                logOutput(`Saving link verification status for ${currentSource.source_id}...`);
+            }
 
             try {
                 const response = await fetch('/useradmin/api/update-source-config', {
@@ -2583,6 +2738,31 @@
                 statusSpan.textContent = '';
                 displayUrlSamples(urlSamples);
                 logOutput(`Loaded ${urlSamples.length} sample articles for URL detection`);
+
+                // Auto-populate base_url if empty and we can detect it from stored URLs
+                const baseUrlField = document.getElementById('editBaseUrl');
+                if (baseUrlField && !baseUrlField.value.trim()) {
+                    // Check if stored_base_url is set in response
+                    if (metaData.stored_base_url) {
+                        baseUrlField.value = metaData.stored_base_url;
+                        logOutput(`Auto-filled base URL from manifest: ${metaData.stored_base_url}`, 'info');
+                    } else {
+                        // Try to extract base URL from stored_url in sample links
+                        const sampleWithUrl = metaData.sample_links.find(s =>
+                            s.stored_url && (s.stored_url.startsWith('http://') || s.stored_url.startsWith('https://'))
+                        );
+                        if (sampleWithUrl) {
+                            try {
+                                const url = new URL(sampleWithUrl.stored_url);
+                                const detectedBase = url.origin + '/';
+                                baseUrlField.value = detectedBase;
+                                logOutput(`Auto-detected base URL from sample: ${detectedBase}`, 'info');
+                            } catch (e) {
+                                // Invalid URL, skip
+                            }
+                        }
+                    }
+                }
 
             } catch (e) {
                 statusSpan.textContent = 'Error';
@@ -3249,6 +3429,92 @@
             }
         }
 
+        // Show/hide R2 upload section based on global admin + PDF source
+        function updateR2UploadSection() {
+            const r2Section = document.getElementById('sectionUploadToR2');
+            if (!r2Section) return;
+
+            // Only show for global admin AND PDF sources
+            const isGlobal = adminMode && adminMode.is_global_admin;
+            const isPdf = currentSource && currentSource.backup_type === 'pdf';
+
+            if (isGlobal && isPdf) {
+                r2Section.style.display = 'block';
+
+                // Check if already uploaded to R2
+                const r2Uploaded = currentSource.r2_uploaded || false;
+                const baseUrl = currentSource.base_url || '';
+                const hasR2Url = baseUrl.includes('r2.dev') || baseUrl.includes('R2_PUBLIC');
+
+                if (r2Uploaded || hasR2Url) {
+                    document.getElementById('r2NotUploaded').style.display = 'none';
+                    document.getElementById('r2Uploaded').style.display = 'block';
+                    document.getElementById('r2BaseUrlDisplay').textContent = '- ' + baseUrl;
+                } else {
+                    document.getElementById('r2NotUploaded').style.display = 'block';
+                    document.getElementById('r2Uploaded').style.display = 'none';
+                }
+            } else {
+                r2Section.style.display = 'none';
+            }
+        }
+
+        // Upload PDF to R2 for public access
+        async function uploadPdfToR2() {
+            if (!currentSource) {
+                logOutput('No source selected', 'error');
+                return;
+            }
+
+            const btn = document.getElementById('btnUploadToR2');
+            const progress = document.getElementById('r2UploadProgress');
+
+            btn.disabled = true;
+            btn.textContent = 'Uploading...';
+            progress.textContent = 'Uploading PDF files to R2...';
+
+            try {
+                const response = await fetch('/useradmin/api/pdf/upload-to-r2', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ source_id: currentSource.source_id })
+                });
+
+                const data = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(data.detail || 'Upload failed');
+                }
+
+                logOutput(`Uploaded ${data.uploaded_count} PDF(s) to R2`, 'success');
+                logOutput(`Base URL set to: ${data.base_url}`, 'info');
+
+                // Update UI
+                document.getElementById('r2NotUploaded').style.display = 'none';
+                document.getElementById('r2Uploaded').style.display = 'block';
+                document.getElementById('r2BaseUrlDisplay').textContent = '- ' + data.base_url;
+
+                // Update currentSource
+                currentSource.base_url = data.base_url;
+                currentSource.r2_uploaded = true;
+
+                // Update the selected source URL display
+                const urlDisplay = document.getElementById('selectedSourceUrl');
+                if (urlDisplay) urlDisplay.textContent = data.base_url;
+
+                progress.textContent = 'Upload complete!';
+                progress.style.color = '#4ecca3';
+
+            } catch (error) {
+                logOutput('R2 upload failed: ' + error.message, 'error');
+                progress.textContent = 'Upload failed: ' + error.message;
+                progress.style.color = '#e94560';
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Upload to R2';
+            }
+        }
+
         // Checkpoint modal state
         let pendingCheckpointJobType = null;
         let pendingCheckpointSourceId = null;
@@ -3540,7 +3806,8 @@
 
         async function loadAdminMode() {
             try {
-                const response = await fetch('/useradmin/api/admin-mode');
+                // Fetch capabilities (embedding support, etc.) - separate from mode
+                const response = await fetch('/useradmin/api/admin-capabilities');
                 adminMode = await response.json();
 
                 // These elements may not exist in all views - check before using
@@ -4454,32 +4721,54 @@
 
             batch.forEach((link, idx) => {
                 const onlineUrl = link.is_online_url ? (link.constructed_url || link.stored_url) : null;
+                const isPdfLink = link.url_type === 'pdf';
 
-                // Construct offline filename from local_url (authoritative source for actual filename)
-                // local_url format: /backup/source_id/filename.html
-                let offlineFilename = '';
-                if (link.local_url) {
-                    // Extract filename from local_url path - this is always the actual file on disk
-                    offlineFilename = link.local_url.split('/').pop();
-                } else if (link.article_name) {
-                    // Fallback to article_name for legacy support
-                    offlineFilename = link.article_name.endsWith('.html') ? link.article_name : link.article_name + '.html';
+                // PDF sources: handle differently with page numbers
+                if (isPdfLink) {
+                    const pdfFilename = link.pdf_filename || '';
+                    const pageNum = link.page_number || '';
+                    const pageFragment = pageNum ? `#page=${pageNum}` : '';
+
+                    // Offline: serve PDF from local backup folder
+                    const offlineUrl = `/useradmin/backup/${currentSource.source_id}/${encodeURIComponent(pdfFilename)}${pageFragment}`;
+
+                    html += `<tr style="border-bottom: 1px solid #222;">
+                        <td style="padding: 0.25rem; max-width: 250px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${link.title}">${link.title}</td>
+                        <td style="padding: 0.25rem; text-align: center;">
+                            <a href="${offlineUrl}" target="_blank" style="color: #4fc3f7;">Page ${pageNum || '1'}</a>
+                        </td>
+                        <td style="padding: 0.25rem; text-align: center;">
+                            ${onlineUrl ? `<a href="${onlineUrl}" target="_blank" style="color: #4ecca3;">Open</a>` : '<span style="color: #666;">-</span>'}
+                        </td>
+                    </tr>`;
                 } else {
-                    // Last resort - try to get filename from stored_url
-                    offlineFilename = link.stored_url.split('/').pop();
+                    // Non-PDF sources (ZIM, HTML): existing handling unchanged
+                    // Construct offline filename from local_url (authoritative source for actual filename)
+                    // local_url format: /backup/source_id/filename.html
+                    let offlineFilename = '';
+                    if (link.local_url) {
+                        // Extract filename from local_url path - this is always the actual file on disk
+                        offlineFilename = link.local_url.split('/').pop();
+                    } else if (link.article_name) {
+                        // Fallback to article_name for legacy support
+                        offlineFilename = link.article_name.endsWith('.html') ? link.article_name : link.article_name + '.html';
+                    } else {
+                        // Last resort - try to get filename from stored_url
+                        offlineFilename = link.stored_url.split('/').pop();
+                    }
+
+                    const offlineUrl = `/useradmin/search-test/content/${currentSource.source_id}/${encodeURIComponent(offlineFilename)}`;
+
+                    html += `<tr style="border-bottom: 1px solid #222;">
+                        <td style="padding: 0.25rem; max-width: 250px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${link.title}">${link.title}</td>
+                        <td style="padding: 0.25rem; text-align: center;">
+                            <a href="#" onclick="previewOffline('${offlineUrl}', '${offlineFilename}'); return false;" style="color: #4fc3f7;">Preview</a>
+                        </td>
+                        <td style="padding: 0.25rem; text-align: center;">
+                            ${onlineUrl ? `<a href="${onlineUrl}" target="_blank" style="color: #4ecca3;">Open</a>` : '<span style="color: #666;">-</span>'}
+                        </td>
+                    </tr>`;
                 }
-
-                const offlineUrl = `/useradmin/search-test/content/${currentSource.source_id}/${encodeURIComponent(offlineFilename)}`;
-
-                html += `<tr style="border-bottom: 1px solid #222;">
-                    <td style="padding: 0.25rem; max-width: 250px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${link.title}">${link.title}</td>
-                    <td style="padding: 0.25rem; text-align: center;">
-                        <a href="#" onclick="previewOffline('${offlineUrl}', '${offlineFilename}'); return false;" style="color: #4fc3f7;">Preview</a>
-                    </td>
-                    <td style="padding: 0.25rem; text-align: center;">
-                        ${onlineUrl ? `<a href="${onlineUrl}" target="_blank" style="color: #4ecca3;">Open</a>` : '<span style="color: #666;">-</span>'}
-                    </td>
-                </tr>`;
             });
 
             html += '</table>';

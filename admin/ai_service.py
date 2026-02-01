@@ -72,16 +72,18 @@ class AIService:
         except Exception:
             return 768  # Safe fallback
 
-    def _get_vector_store(self, dimension: int = None):
+    def _get_vector_store(self, dimension: int = None, language: str = "en"):
         """
-        Lazy load vector store for specific dimension.
+        Lazy load vector store for specific dimension and language.
 
         Args:
             dimension: Embedding dimension (384, 768, 1024, 1536).
                       If None, uses configured embedding model's dimension.
+            language: Language code (e.g., "en", "es"). Uses language-specific
+                      ChromaDB for localized sources (e.g., chroma_db_768_es).
 
         Returns:
-            VectorStore instance for the specified dimension
+            VectorStore instance for the specified dimension and language
         """
         from offline_tools.vectordb import get_vector_store as create_vector_store
 
@@ -95,15 +97,20 @@ class AIService:
             else:
                 dimension = 1536  # Online uses OpenAI embeddings
 
-        # Cache stores by dimension for reuse
-        if dimension not in self._vector_stores:
+        # Cache key includes both dimension and language
+        cache_key = (dimension, language)
+
+        # Cache stores by dimension and language for reuse
+        if cache_key not in self._vector_stores:
             if dimension == 1536:
                 mode = os.getenv("VECTOR_DB_MODE", "local")
             else:
                 mode = "local"
-            self._vector_stores[dimension] = create_vector_store(mode=mode, dimension=dimension)
+            self._vector_stores[cache_key] = create_vector_store(
+                mode=mode, dimension=dimension, language=language
+            )
 
-        return self._vector_stores[dimension]
+        return self._vector_stores[cache_key]
 
     def _get_fallback_store(self):
         """Get the offline store for fallback (uses configured embedding dimension)"""
@@ -146,7 +153,8 @@ class AIService:
 
     def search(self, query: str, n_results: int = 10,
                source_filter: Optional[Dict[str, Any]] = None,
-               force_method: Optional[SearchMethod] = None) -> SearchResult:
+               force_method: Optional[SearchMethod] = None,
+               language: str = "en") -> SearchResult:
         """
         Unified search function.
 
@@ -161,6 +169,7 @@ class AIService:
             n_results: Number of results to return
             source_filter: Optional filter dict (ChromaDB format)
             force_method: Override automatic method selection
+            language: Language code for localized sources (e.g., "es" for Spanish)
 
         Returns:
             SearchResult with articles and metadata
@@ -187,19 +196,28 @@ class AIService:
         offline_config = get_local_config()
         offline_mode = offline_config.get_offline_mode()
 
-        # Determine which store(s) to use based on mode
+        # Determine which store(s) to use based on mode and language
+        # For non-English languages, use the localized ChromaDB (e.g., chroma_db_768_es)
         if offline_mode == "offline_only":
             # Offline only - use configured local embedding dimension
-            store = self._get_vector_store(dimension=self._get_offline_dimension())
+            store = self._get_vector_store(dimension=self._get_offline_dimension(), language=language)
             method = force_method or SearchMethod.LOCAL_SEMANTIC
         elif offline_mode == "online_only":
-            # Online only - use 1536-dim store
-            store = self._get_vector_store(dimension=1536)
-            method = force_method or (SearchMethod.KEYWORD if not conn.should_try_online() else SearchMethod.SEMANTIC)
+            # Online only - use 1536-dim store (localized sources use 768-dim)
+            if language != "en":
+                store = self._get_vector_store(dimension=768, language=language)
+                method = force_method or SearchMethod.LOCAL_SEMANTIC
+            else:
+                store = self._get_vector_store(dimension=1536, language=language)
+                method = force_method or (SearchMethod.KEYWORD if not conn.should_try_online() else SearchMethod.SEMANTIC)
         else:
-            # Hybrid mode - try 1536 first, fallback to local
-            store = self._get_vector_store(dimension=1536)
-            method = force_method or (SearchMethod.KEYWORD if not conn.should_try_online() else SearchMethod.SEMANTIC)
+            # Hybrid mode - for localized sources, use local 768-dim; otherwise try 1536 first
+            if language != "en":
+                store = self._get_vector_store(dimension=768, language=language)
+                method = force_method or SearchMethod.LOCAL_SEMANTIC
+            else:
+                store = self._get_vector_store(dimension=1536, language=language)
+                method = force_method or (SearchMethod.KEYWORD if not conn.should_try_online() else SearchMethod.SEMANTIC)
 
         # Execute search with fallback chain
         if method == SearchMethod.LOCAL_SEMANTIC:
