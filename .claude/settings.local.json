@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//c/Users/bryan/webtest/docs/**)",
+      "Read(//c/Users/bryan/webtest/src/pages/user/**)",
+      "Read(//c/Users/bryan/webtest/src/components/**)",
+      "Bash(dir /b \"C:\\\\Users\\\\bryan\\\\webtest\")",
+      "Read(//c/Users/bryan/webtest/clippy_core/**)",
+      "Bash(supabase migration new:*)",
+      "Bash(dir:*)"
+    ],
+    "additionalDirectories": [
+      "C:\\Users\\bryan\\webtest"
+    ]
+  }
+}
