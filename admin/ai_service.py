@@ -11,9 +11,12 @@ online and offline modes use the same interface.
 """
 
 import os
+import logging
 from typing import List, Dict, Any, Optional, Generator
 from dataclasses import dataclass
 from enum import Enum
+
+logger = logging.getLogger(__name__)
 
 
 class SearchMethod(Enum):
@@ -146,7 +149,7 @@ class AIService:
                         max_tokens=1024
                     )
             except Exception as e:
-                print(f"Failed to initialize LLM: {e}")
+                logger.error("Failed to initialize LLM: %s", e)
                 self._llm = None
 
         return self._llm
@@ -187,7 +190,7 @@ class AIService:
                 return result
             # Fallback to local on proxy failure if hybrid mode
             if conn.get_mode() == "hybrid":
-                print("Proxy search failed, falling back to local search")
+                logger.warning("Proxy search failed, falling back to local search")
             else:
                 return result  # Return error in online_only mode
 
@@ -230,7 +233,7 @@ class AIService:
                     query=query
                 )
             except Exception as e:
-                print(f"Local semantic search failed: {e}")
+                logger.warning("Local semantic search failed: %s", e)
                 # Fallback to keyword search
                 try:
                     articles = store.search_offline(query, n_results=n_results, filter=source_filter)
@@ -258,12 +261,12 @@ class AIService:
                     query=query
                 )
             except Exception as e:
-                print(f"Semantic search failed: {e}")
+                logger.warning("Semantic search failed: %s", e)
                 conn.on_api_failure(e)
 
                 # In hybrid mode, fallback to local search
                 if offline_mode == "hybrid":
-                    print(f"Falling back to local {self._get_offline_dimension()}-dim search...")
+                    logger.info("Falling back to local %d-dim search...", self._get_offline_dimension())
                     try:
                         fallback_store = self._get_fallback_store()
                         articles = fallback_store.search(query, n_results=n_results, filter=source_filter)
@@ -273,7 +276,7 @@ class AIService:
                             query=query
                         )
                     except Exception as e2:
-                        print(f"Local fallback search also failed: {e2}")
+                        logger.warning("Local fallback search also failed: %s", e2)
                         method = SearchMethod.KEYWORD  # Final fallback to keyword
                 else:
                     return SearchResult(
@@ -365,7 +368,7 @@ class AIService:
             )
 
         except Exception as e:
-            print(f"Proxy search error: {e}")
+            logger.error("Proxy search error: %s", e)
             return SearchResult(
                 articles=[],
                 method=SearchMethod.SEMANTIC,
@@ -451,7 +454,7 @@ class AIService:
                 method=ResponseMethod.CLOUD_LLM
             )
         except Exception as e:
-            print(f"Cloud LLM error: {e}")
+            logger.error("Cloud LLM error: %s", e)
             return None
 
     def _try_local_llm(self, query: str, context: str, history: list) -> Optional[ResponseResult]:
@@ -503,7 +506,7 @@ Based on these search results, help the user find what they need."""
             runtime = get_llama_runtime()
 
             if not runtime.is_available():
-                print(f"llama.cpp not available: {runtime.get_status().get('error', 'Unknown error')}")
+                logger.warning("llama.cpp not available: %s", runtime.get_status().get('error', 'Unknown error'))
                 return None
 
             response = runtime.chat(messages, system_prompt=system)
@@ -515,7 +518,7 @@ Based on these search results, help the user find what they need."""
 
             return None
         except Exception as e:
-            print(f"llama.cpp error: {e}")
+            logger.error("llama.cpp error: %s", e)
             return None
 
     def _try_ollama(self, messages: list, system: str) -> Optional[ResponseResult]:
@@ -533,7 +536,7 @@ Based on these search results, help the user find what they need."""
 
             return None
         except Exception as e:
-            print(f"Ollama error: {e}")
+            logger.error("Ollama error: %s", e)
             return None
 
     def _generate_simple_response(self, query: str, context: str) -> ResponseResult:
@@ -643,7 +646,7 @@ Based on these search results, help the user find what they need. If the results
                 if yielded_anything:
                     return
             except Exception as e:
-                print(f"Cloud streaming failed: {e}")
+                logger.error("Cloud streaming failed: %s", e)
                 conn.on_api_failure(e)
                 # Fall through to local if hybrid mode
 
@@ -656,7 +659,7 @@ Based on these search results, help the user find what they need. If the results
                 if yielded_anything:
                     return
             except Exception as e:
-                print(f"Local streaming failed: {e}")
+                logger.error("Local streaming failed: %s", e)
 
         # Final fallback: simple response (no LLM)
         if not yielded_anything:
@@ -687,7 +690,7 @@ Based on these search results, help the user find what they need. If the results
             self._get_connection_manager().on_api_success()
 
         except Exception as e:
-            print(f"Streaming error: {e}")
+            logger.error("Streaming error: %s", e)
             self._get_connection_manager().on_api_failure(e)
             yield f"Error generating response: {str(e)}"
 
@@ -706,7 +709,7 @@ Based on these search results, help the user find what they need. If the results
         config = get_local_config()
         runtime = config.get_llm_runtime()
 
-        print(f"[AI] Local LLM mode - runtime: {runtime}")
+        logger.debug("Local LLM mode - runtime: %s", runtime)
 
         system = self._get_system_prompt("offline")
 
@@ -728,24 +731,22 @@ Based on these search results, help the user find what they need."""
 
         # Try llama.cpp first if configured
         if runtime == "llama.cpp":
-            print("[AI] Trying llama.cpp...")
+            logger.debug("Trying llama.cpp...")
             chunk_count = 0
             try:
                 for chunk in self._stream_llama_cpp(messages, system):
                     chunk_count += 1
-                    print(f"[AI] Got chunk {chunk_count}: {len(chunk)} chars")
+                    logger.debug("Got chunk %d: %d chars", chunk_count, len(chunk))
                     yield chunk
-                print(f"[AI] llama.cpp finished, yielded {chunk_count} chunks")
+                logger.debug("llama.cpp finished, yielded %d chunks", chunk_count)
                 if chunk_count > 0:
                     return
             except Exception as e:
-                print(f"[AI] llama.cpp error: {e}")
-                import traceback
-                traceback.print_exc()
+                logger.error("llama.cpp streaming error: %s", e, exc_info=True)
 
         # Try Ollama as fallback or if configured
         if config.is_ollama_enabled() or runtime == "ollama":
-            print("[AI] Trying Ollama...")
+            logger.debug("Trying Ollama...")
             chunk_count = 0
             try:
                 for chunk in self._stream_ollama(messages, system):
@@ -754,10 +755,10 @@ Based on these search results, help the user find what they need."""
                 if chunk_count > 0:
                     return
             except Exception as e:
-                print(f"[AI] Ollama error: {e}")
+                logger.error("Ollama streaming error: %s", e)
 
         # No local LLM available - let caller handle fallback
-        print("[AI] No local LLM produced output")
+        logger.warning("No local LLM produced output")
 
     def _stream_llama_cpp(self, messages: list, system: str) -> Generator[str, None, None]:
         """
@@ -768,20 +769,20 @@ Based on these search results, help the user find what they need."""
         """
         from offline_tools.llama_runtime import get_llama_runtime
 
-        print("[AI] Getting llama.cpp runtime...")
+        logger.debug("Getting llama.cpp runtime...")
         runtime = get_llama_runtime()
 
         if not runtime.is_available():
             error_msg = runtime.get_status().get('error', 'Unknown error')
-            print(f"[AI] llama.cpp not available: {error_msg}")
+            logger.warning("llama.cpp not available: %s", error_msg)
             yield f"Local LLM not available: {error_msg}"
             return
 
-        print("[AI] Generating response with llama.cpp (non-streaming)...")
+        logger.debug("Generating response with llama.cpp (non-streaming)...")
         try:
             # Use non-streaming for reliability
             response = runtime.chat(messages, system_prompt=system, max_tokens=1024)
-            print(f"[AI] Response generated: {len(response)} chars")
+            logger.debug("Response generated: %d chars", len(response))
 
             if response:
                 yield response
@@ -789,7 +790,7 @@ Based on these search results, help the user find what they need."""
                 yield "I found some relevant articles above. Let me know if you need more specific information."
 
         except Exception as e:
-            print(f"[AI] llama.cpp generation error: {e}")
+            logger.error("llama.cpp generation error: %s", e)
             yield f"Error generating response: {str(e)}"
 
     def _stream_ollama(self, messages: list, system: str) -> Generator[str, None, None]:
@@ -798,14 +799,14 @@ Based on these search results, help the user find what they need."""
         config = get_local_config()
 
         if not config.is_ollama_enabled():
-            print("Local LLM: Ollama not enabled in config")
+            logger.info("Local LLM: Ollama not enabled in config")
             return
 
         from admin.ollama_manager import get_ollama_manager
         ollama = get_ollama_manager()
 
         if not ollama.is_running() and not ollama.is_installed():
-            print("Local LLM: Ollama not installed or running")
+            logger.info("Local LLM: Ollama not installed or running")
             return
 
         for chunk in ollama.chat_stream(messages, system=system):
