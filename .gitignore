@@ -44,6 +44,7 @@ desktop.ini
 local_settings.json
 chroma/
 data/
+backups/
 *.db
 
 # =============================================================================
