@@ -168,6 +168,7 @@ The system automatically tries port 8001. Or kill the process using port 8000.
 
 ### Working with Sources
 - [Source Tools](docs/source-tools.md) - SourceManager, indexers, scrapers, tags
+- [Video ZIM Handoff](docs/video-zim-analysis-handoff.md) - Contributed video transcription/topic toolkit + integration options
 - [Validation](docs/validation.md) - Permission gates, validation tiers, human verification
 
 ### Operations
