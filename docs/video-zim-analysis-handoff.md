@@ -1,6 +1,6 @@
 # Video ZIM Analysis Handoff
 
-This document describes the tooling contributed from `video_zim_batch` and how to integrate it into Disaster Clippy.
+This document describes the tooling contributed from `dc_integration` and how to integrate it into Disaster Clippy.
 
 ## What Was Added
 
