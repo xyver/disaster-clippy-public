@@ -344,7 +344,7 @@ class MediaWikiScraper(BaseScraper):
         # Build URL
         page_url = self._title_to_url(page_title)
 
-        # If API extract is empty/short, fall back to HTML parsing
+        # If API extract is empty/short, fall back to HTML parsing, then parse API
         internal_links = []
         if len(content) < 100:
             html_result = self._scrape_page_html(page_url)
@@ -355,7 +355,15 @@ class MediaWikiScraper(BaseScraper):
                     categories = html_result.get("categories", [])
                 internal_links = html_result.get("internal_links", [])
             else:
-                return None  # Skip if both methods fail
+                # Final fallback: use action=parse API (works on JS-rendered wikis like Fandom)
+                parse_result = self._scrape_page_parse_api(page_title)
+                if parse_result:
+                    content = parse_result["content"]
+                    if not categories:
+                        categories = parse_result.get("categories", [])
+                    internal_links = parse_result.get("internal_links", [])
+                else:
+                    return None  # Skip if all methods fail
         else:
             # API gave us content, but we still need links from HTML
             html_result = self._scrape_page_html(page_url)
@@ -437,6 +445,69 @@ class MediaWikiScraper(BaseScraper):
 
         # Extract internal links
         internal_links = self._extract_internal_links(content_div)
+
+        return {
+            "content": content,
+            "categories": categories,
+            "internal_links": internal_links
+        }
+
+    def _scrape_page_parse_api(self, title: str) -> Optional[Dict]:
+        """
+        Fallback content extraction using action=parse API.
+        Works on JS-rendered wikis (like Fandom) where TextExtracts and
+        direct HTML scraping both fail.
+        Returns dict with 'content', 'categories', and 'internal_links' keys.
+        """
+        from bs4 import BeautifulSoup as BS
+
+        data = self._api_request({
+            "action": "parse",
+            "page": title,
+            "prop": "text|categories|links",
+        })
+        if not data or "parse" not in data:
+            return None
+
+        parse = data["parse"]
+
+        # Extract text from rendered HTML
+        html = parse.get("text", {}).get("*", "")
+        if not html:
+            return None
+
+        soup = BS(html, "lxml")
+
+        # Remove unwanted elements
+        for tag in soup.find_all(["script", "style", "nav", "aside"]):
+            tag.decompose()
+        for tag in soup.find_all(
+            ["div", "span", "table"],
+            class_=lambda x: x and any(
+                c in str(x).lower() for c in [
+                    "navbox", "infobox", "toc", "mbox", "noprint",
+                    "mw-editsection", "reference", "reflist"
+                ]
+            )
+        ):
+            tag.decompose()
+
+        content = soup.get_text(separator="\n", strip=True)
+
+        # Extract categories
+        categories = []
+        for cat in parse.get("categories", []):
+            cat_name = cat.get("*", "")
+            if cat_name:
+                categories.append(cat_name)
+
+        # Extract internal links
+        internal_links = []
+        for link in parse.get("links", []):
+            if link.get("ns") == 0 and link.get("exists") is not None:
+                link_title = link.get("*", "")
+                if link_title:
+                    internal_links.append(f"/wiki/{link_title.replace(' ', '_')}")
 
         return {
             "content": content,
