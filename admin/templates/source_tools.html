@@ -880,23 +880,40 @@
 
                     <!-- Upload to R2 Section (Global Admin + PDF only) -->
                     <div class="tool-section global-admin-only" id="sectionUploadToR2" style="display: none;">
-                        <h3>Upload PDF to R2</h3>
-                        <p>Upload PDF files to R2 cloud storage for public access. This sets the base URL so online links work correctly.</p>
+                        <h3>PDF Cloud Storage</h3>
+                        <p>Upload PDF to R2, or paste a custom URL if hosted elsewhere. This sets the base URL for online links.</p>
 
                         <div id="r2UploadStatus" style="margin-bottom: 1rem;">
                             <div id="r2NotUploaded" style="padding: 0.75rem; background: rgba(233, 69, 96, 0.1); border: 1px solid #e94560; border-radius: 4px;">
-                                <span style="color: #e94560;">PDF not uploaded to R2</span>
-                                <span style="color: #888; margin-left: 0.5rem;">- Online links will not work until uploaded</span>
+                                <span style="color: #e94560;">PDF base URL not set</span>
+                                <span style="color: #888; margin-left: 0.5rem;">- Online links will not work until configured</span>
                             </div>
                             <div id="r2Uploaded" style="display: none; padding: 0.75rem; background: rgba(78, 204, 163, 0.1); border: 1px solid #4ecca3; border-radius: 4px;">
-                                <span style="color: #4ecca3;">PDF uploaded to R2</span>
+                                <span style="color: #4ecca3;">PDF base URL configured</span>
                                 <span id="r2BaseUrlDisplay" style="color: #888; margin-left: 0.5rem; font-size: 0.85rem;"></span>
                             </div>
                         </div>
 
-                        <div class="tool-actions">
-                            <button class="btn btn-primary" id="btnUploadToR2" onclick="uploadPdfToR2()">Upload to R2</button>
-                            <span id="r2UploadProgress" style="margin-left: 1rem; color: #888;"></span>
+                        <!-- Option 1: Upload to default R2 -->
+                        <div style="margin-bottom: 1rem;">
+                            <div style="font-size: 0.9rem; color: #ccc; margin-bottom: 0.5rem;">Option 1: Upload to Disaster Clippy R2</div>
+                            <div class="tool-actions" style="margin-bottom: 0;">
+                                <button class="btn btn-primary" id="btnUploadToR2" onclick="uploadPdfToR2()">Upload to R2</button>
+                                <span id="r2UploadProgress" style="margin-left: 1rem; color: #888;"></span>
+                            </div>
+                        </div>
+
+                        <!-- Option 2: Custom URL -->
+                        <div style="border-top: 1px solid #333; padding-top: 1rem;">
+                            <div style="font-size: 0.9rem; color: #ccc; margin-bottom: 0.5rem;">Option 2: Use custom R2/CDN URL</div>
+                            <div style="display: flex; gap: 0.5rem; align-items: center;">
+                                <input type="text" id="customPdfBaseUrl" placeholder="https://your-bucket.r2.dev/path/to/folder/"
+                                       style="flex: 1; font-family: monospace; font-size: 0.85rem;">
+                                <button class="btn btn-secondary" onclick="saveCustomPdfUrl()">Use This URL</button>
+                            </div>
+                            <p style="font-size: 0.75rem; color: #666; margin-top: 0.5rem;">
+                                Enter the public URL where your PDF is hosted. The PDF filename will be appended automatically.
+                            </p>
                         </div>
                     </div>
 
@@ -1724,15 +1741,19 @@
 
             // Update visibility of source-dependent content
             const hasSource = currentSource !== null;
-            document.getElementById('noSourceSelected2').style.display = hasSource ? 'none' : 'block';
-            document.getElementById('configForm').style.display = hasSource ? 'block' : 'none';
-            document.getElementById('noSourceSelected3').style.display = hasSource ? 'none' : 'block';
-            document.getElementById('indexTools').style.display = hasSource ? 'block' : 'none';
-            document.getElementById('noSourceSelected4').style.display = hasSource ? 'none' : 'block';
-            document.getElementById('indexContent').style.display = hasSource ? 'block' : 'none';
-            document.getElementById('noSourceSelected5').style.display = hasSource ? 'none' : 'block';
-            document.getElementById('validateTools').style.display = hasSource ? 'block' : 'none';
-            document.getElementById('dangerZoneSection').style.display = hasSource ? 'block' : 'none';
+            const setDisplay = (id, show) => {
+                const el = document.getElementById(id);
+                if (el) el.style.display = show ? 'block' : 'none';
+            };
+            setDisplay('noSourceSelected2', !hasSource);
+            setDisplay('configForm', hasSource);
+            setDisplay('noSourceSelected3', !hasSource);
+            setDisplay('indexTools', hasSource);
+            setDisplay('noSourceSelected4', !hasSource);
+            setDisplay('indexContent', hasSource);
+            setDisplay('noSourceSelected5', !hasSource);
+            setDisplay('validateTools', hasSource);
+            setDisplay('dangerZoneSection', hasSource);
 
             // Enable/disable step 1 next button
             document.getElementById('step1Next').disabled = !hasSource;
@@ -3441,18 +3462,24 @@
             if (isGlobal && isPdf) {
                 r2Section.style.display = 'block';
 
-                // Check if already uploaded to R2
-                const r2Uploaded = currentSource.r2_uploaded || false;
+                // Check if base URL is already configured (either R2 upload or custom URL)
                 const baseUrl = currentSource.base_url || '';
-                const hasR2Url = baseUrl.includes('r2.dev') || baseUrl.includes('R2_PUBLIC');
+                const hasBaseUrl = baseUrl.startsWith('http://') || baseUrl.startsWith('https://');
 
-                if (r2Uploaded || hasR2Url) {
-                    document.getElementById('r2NotUploaded').style.display = 'none';
-                    document.getElementById('r2Uploaded').style.display = 'block';
-                    document.getElementById('r2BaseUrlDisplay').textContent = '- ' + baseUrl;
+                const r2NotUploaded = document.getElementById('r2NotUploaded');
+                const r2Uploaded = document.getElementById('r2Uploaded');
+                const r2BaseUrlDisplay = document.getElementById('r2BaseUrlDisplay');
+                const customPdfBaseUrl = document.getElementById('customPdfBaseUrl');
+
+                if (hasBaseUrl) {
+                    if (r2NotUploaded) r2NotUploaded.style.display = 'none';
+                    if (r2Uploaded) r2Uploaded.style.display = 'block';
+                    if (r2BaseUrlDisplay) r2BaseUrlDisplay.textContent = '- ' + baseUrl;
+                    // Pre-fill custom URL field with current value for easy editing
+                    if (customPdfBaseUrl) customPdfBaseUrl.placeholder = baseUrl;
                 } else {
-                    document.getElementById('r2NotUploaded').style.display = 'block';
-                    document.getElementById('r2Uploaded').style.display = 'none';
+                    if (r2NotUploaded) r2NotUploaded.style.display = 'block';
+                    if (r2Uploaded) r2Uploaded.style.display = 'none';
                 }
             } else {
                 r2Section.style.display = 'none';
@@ -3468,6 +3495,11 @@
 
             const btn = document.getElementById('btnUploadToR2');
             const progress = document.getElementById('r2UploadProgress');
+
+            if (!btn || !progress) {
+                logOutput('R2 upload UI elements not found', 'error');
+                return;
+            }
 
             btn.disabled = true;
             btn.textContent = 'Uploading...';
@@ -3490,9 +3522,12 @@
                 logOutput(`Base URL set to: ${data.base_url}`, 'info');
 
                 // Update UI
-                document.getElementById('r2NotUploaded').style.display = 'none';
-                document.getElementById('r2Uploaded').style.display = 'block';
-                document.getElementById('r2BaseUrlDisplay').textContent = '- ' + data.base_url;
+                const r2NotUploaded = document.getElementById('r2NotUploaded');
+                const r2Uploaded = document.getElementById('r2Uploaded');
+                const r2BaseUrlDisplay = document.getElementById('r2BaseUrlDisplay');
+                if (r2NotUploaded) r2NotUploaded.style.display = 'none';
+                if (r2Uploaded) r2Uploaded.style.display = 'block';
+                if (r2BaseUrlDisplay) r2BaseUrlDisplay.textContent = '- ' + data.base_url;
 
                 // Update currentSource
                 currentSource.base_url = data.base_url;
@@ -3512,6 +3547,83 @@
             } finally {
                 btn.disabled = false;
                 btn.textContent = 'Upload to R2';
+            }
+        }
+
+        // Save custom PDF base URL (for PDFs hosted elsewhere)
+        async function saveCustomPdfUrl() {
+            if (!currentSource) {
+                logOutput('No source selected', 'error');
+                return;
+            }
+
+            const urlInput = document.getElementById('customPdfBaseUrl');
+            if (!urlInput) {
+                logOutput('Custom URL input not found', 'error');
+                return;
+            }
+
+            let customUrl = urlInput.value.trim();
+
+            if (!customUrl) {
+                logOutput('Please enter a custom URL', 'error');
+                return;
+            }
+
+            // Ensure URL ends with /
+            if (!customUrl.endsWith('/')) {
+                customUrl += '/';
+            }
+
+            // Ensure URL has protocol
+            if (!customUrl.startsWith('http://') && !customUrl.startsWith('https://')) {
+                customUrl = 'https://' + customUrl;
+            }
+
+            logOutput(`Setting custom PDF base URL: ${customUrl}`, 'info');
+
+            try {
+                const response = await fetch('/useradmin/api/update-source-config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        source_id: currentSource.source_id,
+                        base_url: customUrl
+                    })
+                });
+
+                const data = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(data.detail || 'Failed to save URL');
+                }
+
+                logOutput('Custom PDF base URL saved', 'success');
+
+                // Update UI
+                const r2NotUploaded = document.getElementById('r2NotUploaded');
+                const r2Uploaded = document.getElementById('r2Uploaded');
+                const r2BaseUrlDisplay = document.getElementById('r2BaseUrlDisplay');
+                if (r2NotUploaded) r2NotUploaded.style.display = 'none';
+                if (r2Uploaded) r2Uploaded.style.display = 'block';
+                if (r2BaseUrlDisplay) r2BaseUrlDisplay.textContent = '- ' + customUrl;
+
+                // Update currentSource
+                currentSource.base_url = customUrl;
+
+                // Update the selected source URL display
+                const urlDisplay = document.getElementById('selectedSourceUrl');
+                if (urlDisplay) urlDisplay.textContent = customUrl;
+
+                // Also update Step 3 base URL field
+                const baseUrlField = document.getElementById('editBaseUrl');
+                if (baseUrlField) baseUrlField.value = customUrl;
+
+                // Clear the input
+                urlInput.value = '';
+
+            } catch (error) {
+                logOutput('Failed to save custom URL: ' + error.message, 'error');
             }
         }
 
