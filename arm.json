@@ -1,0 +1,6 @@
+{
+  "name": "disaster_clippy_public",
+  "shoulders": ["dc_integration"],
+  "status": "active",
+  "description": "Upstream disaster-clippy codebase used as a full arm implementation."
+}

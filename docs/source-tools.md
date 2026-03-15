@@ -127,6 +127,14 @@ All indexers use `VectorStore.add_documents_incremental()`:
 
 ## ZIM Tools
 
+### Video ZIM Toolkit (Contributed)
+
+For video-heavy ZIM archives, a standalone toolkit is available:
+- `offline_tools/video_analysis.py`
+
+Handoff and integration guidance:
+- `docs/video-zim-analysis-handoff.md`
+
 ### ZIM Metadata Extraction
 
 When indexing ZIM files, metadata is automatically extracted from the ZIM header fields:
