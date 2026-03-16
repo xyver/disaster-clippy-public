@@ -1,14 +1,32 @@
 # Disaster Clippy - AI Assistant Context
 
-**Read this first.** This document helps you quickly understand the project and find the right documentation for whatever feature you're working on.
+Read this first when orienting to the repo.
+
+This document is meant to help quickly answer:
+
+- what the project is now
+- how the docs are organized
+- which layer owns which kind of work
 
 ---
 
-## What This Project Does (30 seconds)
+## What This Project Is
 
-Disaster Clippy is an **offline-capable AI search assistant** for emergency preparedness content. Users ask questions in natural language, the system searches curated sources (wikis, guides, PDFs), and returns answers with citations.
+Disaster Clippy is an offline-capable preparedness knowledge system built around:
 
-**Key concept:** Everything is designed to work **without internet** - on a Raspberry Pi in a disaster scenario.
+- conversational search
+- source packs
+- hosted and local runtime paths
+- advanced local admin/source tooling
+
+It is no longer best described as just a single local/global app.
+
+The project now needs to be understood as four related surfaces:
+
+1. hosted public app
+2. product and catalog site
+3. local runtime
+4. advanced local admin toolkit
 
 ---
 
@@ -16,226 +34,154 @@ Disaster Clippy is an **offline-capable AI search assistant** for emergency prep
 
 | Term | Meaning |
 |------|---------|
-| **Source** | A collection of documents (e.g., "appropedia", "wikihow-zim") |
-| **BACKUP_PATH** | Local folder containing all sources and ChromaDB |
-| **Local Admin** | User running their own instance, creates/manages sources |
-| **Global Admin** | Maintainer of official cloud sources (Pinecone + R2) |
-| **ZIM** | Compressed offline archive format (Wikipedia, WikiHow, etc.) |
+| **Source** | A collection of documents or media-derived text under one source ID |
+| **Source Pack** | The distributable unit of knowledge selection and installation |
+| **BACKUP_PATH** | Local folder where source-owned data and local artifacts live |
+| **Local Runtime** | Self-hosted or offline-capable user install |
+| **Advanced Local Admin** | Local source creation, validation, translation, and processing tools |
+| **Global / Hosted Runtime** | Shared public hosted app and maintainer cloud context |
+| **ZIM** | Compressed offline archive format |
 
 ---
 
-## Documentation Map
+## Best Docs To Read First
 
-### For Quick Setup
-| Doc | When to Read |
-|-----|--------------|
-| [README.md](../README.md) | First time setup, quick start |
-| [DEVELOPER.md](../DEVELOPER.md) | Dev environment, folder structure, env vars |
+### Product and Deployment Direction
 
-### For External Integration
-| Doc | When to Read |
-|-----|--------------|
-| [api.md](api.md) | Embedding chat on other sites, source filtering, rate limits |
+| Doc | Why it matters |
+|-----|----------------|
+| [deployment.md](deployment.md) | The clearest current statement of hosted vs local vs private-shell direction |
+| [architecture.md](architecture.md) | Layering, runtime roles, and repo boundaries |
+| [clippy-core-extraction.md](clippy-core-extraction.md) | Future portable-core seam |
 
-### For Understanding Architecture
-| Doc | When to Read |
-|-----|--------------|
-| [architecture.md](architecture.md) | Modes (local/global), security, data flow, offline design |
-| [ai-service.md](ai-service.md) | Search pipeline, connection states, LLM integration |
+### Working with Sources
 
-### For Working with Sources
-| Doc | When to Read |
-|-----|--------------|
-| [source-tools.md](source-tools.md) | Creating sources, indexers, scrapers, ZIM tools |
-| [validation.md](validation.md) | can_submit/can_publish gates, status boxes, human verification |
+| Doc | Why it matters |
+|-----|----------------|
+| [source-tools.md](source-tools.md) | Source creation and processing workflows |
+| [validation.md](validation.md) | Readiness and release gates |
+| [source-pack-release-policy.md](source-pack-release-policy.md) | Pack publishing expectations |
 
-### For Background Jobs
-| Doc | When to Read |
-|-----|--------------|
-| [jobs.md](jobs.md) | Job types, checkpoints, resume, job builder UI |
+### Language, Video, and Processing Pipelines
 
-### For Deployment
-| Doc | When to Read |
-|-----|--------------|
-| [deployment.md](deployment.md) | Self-hosted, RPi5, air-gapped, personal cloud backup |
-| [admin-guide.md](admin-guide.md) | Admin panel usage, CLI tools, troubleshooting |
+| Doc | Why it matters |
+|-----|----------------|
+| [language-packs.md](language-packs.md) | Translation direction |
+| [video_processing.md](video_processing.md) | Video transcript pipeline |
+| [video_processing_plan.md](video_processing_plan.md) | Build plan and storage model |
+| [document-type-weighting.md](document-type-weighting.md) | PDF behavior, document classification, relevance |
 
-### For Features
-| Doc | When to Read |
-|-----|--------------|
-| [language-packs.md](language-packs.md) | Translation system, MarianMT models |
-| [document-type-weighting.md](document-type-weighting.md) | Document classification, search weighting, PDF handling |
+### Runtime and User-Facing Behavior
 
-### For Planning
-| Doc | When to Read |
-|-----|--------------|
-| [ROADMAP.md](../ROADMAP.md) | What's done, what's in progress, future plans |
+| Doc | Why it matters |
+|-----|----------------|
+| [ai-service.md](ai-service.md) | Search and response path |
+| [api.md](api.md) | External API surface |
+| [admin-guide.md](admin-guide.md) | Current local admin usage |
+| [jobs.md](jobs.md) | Background work and checkpoints |
 
 ---
 
-## What Are You Working On?
+## Working Area Map
 
-Use this to find the right files and docs:
+### Hosted App / Public Runtime
 
-### Chat / Search / AI Responses
-```
-Read: docs/ai-service.md
-Files: app.py, admin/ai_service.py, admin/connection_manager.py
-```
+Read:
 
-### External API / Embedding on Other Sites
-```
-Read: docs/api.md
-Endpoints: /api/v1/chat, /api/v1/chat/stream, /api/v1/sources
-Files: app.py (SimpleQueryRequest, simple_chat, stream_chat)
-Widget: static/embed-widget.html
-```
+- `app.py`
+- `admin/ai_service.py`
+- `docs/api.md`
+- `docs/deployment.md`
 
-### Creating or Editing Sources
-```
-Read: docs/source-tools.md, docs/validation.md
-Files: offline_tools/source_manager.py, offline_tools/indexer.py
-UI: admin/templates/source_tools.html
-```
+### Local Admin and Source Tools
 
-### Background Jobs / Long Operations
-```
-Read: docs/jobs.md
-Files: admin/job_manager.py, admin/routes/source_tools.py
-UI: admin/templates/jobs.html
-```
+Read:
 
-### ZIM Files (Wikipedia, WikiHow, etc.)
-```
-Read: docs/source-tools.md (ZIM Tools section)
-Files: offline_tools/indexer.py (ZIMIndexer), admin/zim_server.py
-CLI: cli/zim_inspect.py
-```
+- `admin/app.py`
+- `admin/routes/source_tools.py`
+- `admin/job_manager.py`
+- `docs/source-tools.md`
+- `docs/admin-guide.md`
 
-### HTML Scraping / Backups
-```
-Read: docs/source-tools.md (HTML Backup Scraper section)
-Files: offline_tools/backup/html.py, offline_tools/indexer.py (HTMLBackupIndexer)
-```
+### Source Processing
 
-### Validation / Status Boxes
-```
-Read: docs/validation.md
-Files: offline_tools/validation.py
-```
+Read:
 
-### Cloud Storage / R2 / Pinecone
-```
-Read: docs/deployment.md, docs/architecture.md
-Files: offline_tools/cloud/r2.py, offline_tools/vectordb/pinecone_store.py
-```
+- `offline_tools/source_manager.py`
+- `offline_tools/indexer.py`
+- `offline_tools/validation.py`
+- `docs/validation.md`
 
-### Offline Mode / Local LLM
-```
-Read: docs/architecture.md (Offline Architecture section)
-Files: admin/ai_service.py, admin/ollama_manager.py
-```
+### Translation and Language Packs
 
-### Translation / Language Packs
-```
-Read: docs/language-packs.md
-Files: offline_tools/translation.py, offline_tools/language_registry.py
-UI: admin/templates/sources.html (Languages tab)
-```
+Read:
 
-### Admin Panel UI
-```
-Read: docs/admin-guide.md
-Files: admin/app.py, admin/routes/*.py, admin/templates/*.html
-```
+- `offline_tools/translation.py`
+- `offline_tools/language_registry.py`
+- `docs/language-packs.md`
 
-### 3D Visualization / Knowledge Map
-```
-Read: docs/admin-guide.md (Knowledge Map section)
-Files: admin/routes/visualise.py, admin/templates/visualise.html
-```
+### Video Processing
 
-### PDF Sources / Document Collections
-```
-Read: docs/document-type-weighting.md (PDF Document Challenges section)
-Files: offline_tools/indexer.py (PDFIndexer class)
-       offline_tools/pdf_collections.py (collection management)
-       admin/pdf_server.py (serving PDFs with #page=N navigation)
-```
+Read:
 
-### OCR for Scanned PDFs (Planned)
-```
-Read: ../ROADMAP.md (OCR for Scanned PDFs section)
-Tools: OCRmyPDF, Tesseract, pdftoppm (poppler-utils)
-Status: Preprocessing pipeline planned, not yet implemented
-```
+- `offline_tools/video_analysis.py`
+- `offline_tools/transcript_acquisition.py`
+- `offline_tools/youtube_transcript.py`
+- `docs/video_processing.md`
+- `docs/video_processing_plan.md`
 
-### Document Type Weighting / Search Relevance
-```
-Read: docs/document-type-weighting.md
-Files: offline_tools/document_classifier.py (classification)
-       app.py (detect_doc_type_preference, prioritize_results_by_doc_type)
-```
+### Future Portable Core Direction
+
+Read:
+
+- `docs/clippy-core-extraction.md`
 
 ---
 
-## Key Files (Quick Reference)
+## Repo and Workspace Direction
 
-| File | Purpose |
-|------|---------|
-| `app.py` | Main chat API, FastAPI routes |
-| `admin/ai_service.py` | Search + response generation |
-| `admin/job_manager.py` | Background job queue |
-| `admin/connection_manager.py` | Online/offline detection |
-| `offline_tools/source_manager.py` | Source creation pipeline |
-| `offline_tools/indexer.py` | HTML/ZIM/PDF indexers |
-| `offline_tools/validation.py` | Validation gates |
-| `offline_tools/vectordb/store.py` | ChromaDB operations |
-| `local_settings.json` | User configuration |
+The core repo here is the public engine.
 
----
+The broader workspace direction is:
 
-## Folder Structure (Simplified)
-
-```
+```text
 disaster-clippy/
-|-- app.py                    # Chat API
-|-- local_settings.json       # User config
-|-- cli/                      # Command-line tools
-|-- admin/                    # Admin panel + APIs
-|   |-- routes/               # API endpoints
-|   |-- templates/            # UI pages
-|-- offline_tools/            # Core logic
-|   |-- vectordb/             # ChromaDB/Pinecone
-|   |-- scraper/              # Web scrapers
-|   |-- cloud/                # R2 storage
-|-- docs/                     # Documentation
++-- disaster-clippy-public/
++-- disaster-clippy-private/
 ```
 
----
+Where:
 
-## Current Status (v0.9)
-
-**Recently completed:** PDF page-aware indexing with #page=N URLs, validation system, job builder, connection states, personal cloud backup, HTML scraper integration, language packs phase 1
-
-**In progress:** Search result diversity tuning, pipeline testing
-
-**Planned (high priority):** OCR preprocessing for scanned PDFs
-
-**See:** [ROADMAP.md](../ROADMAP.md) for full status
+- public repo owns runtime, local tooling, and public docs
+- private repo owns the `.com` site and future control-plane shell
 
 ---
 
-## Environment Variables (Essential)
+## Current Priorities
 
-| Variable | Purpose |
-|----------|---------|
-| `OPENAI_API_KEY` | Embeddings + chat (or use EMBEDDING_MODE=local) |
-| `VECTOR_DB_MODE` | `local` (default), `pinecone`, or `global` |
-| `BACKUP_PATH` | Where sources live (default: ./backups) |
+Current architectural priorities are roughly:
 
-**Full list:** [DEVELOPER.md](../DEVELOPER.md#environment-variables)
+- unify hosted/local/product-site language across docs
+- strengthen source pack model and catalog thinking
+- build the `.com` side as a product site first
+- keep source creation local-first
+- continue video transcript and translation pipeline work
+- add OCR support for scanned PDFs later
 
 ---
 
-*Last Updated: December 2025*
+## If You Are Updating the Website Copy
+
+Use these as the main source of truth:
+
+- [deployment.md](deployment.md)
+- [architecture.md](architecture.md)
+- [source-tools.md](source-tools.md)
+- [language-packs.md](language-packs.md)
+- [video_processing.md](video_processing.md)
+
+Avoid relying only on older phrasing in `README.md` history or legacy local/global wording.
+
+---
+
+*Updated: March 15, 2026*

@@ -1,11 +1,14 @@
 {
-	"folders": [
-		{
-			"path": "."
-		},
-		{
-			"path": "../disaster-clippy-public"
-		}
-	],
-	"settings": {}
+    "folders":  [
+                    {
+                        "path":  "."
+                    },
+                    {
+                        "path":  "../disaster-clippy-private",
+                        "path":  "../disaster-clippy-public"
+                    }
+                ],
+    "settings":  {
+
+                 }
 }
