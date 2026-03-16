@@ -1,107 +1,97 @@
 # Disaster Clippy - Executive Summary
 
-**What it is:** An AI-powered search assistant for disaster preparedness, DIY guides, and humanitarian resources. Users ask questions in plain language and get answers sourced from curated, verified content.
+Disaster Clippy is a preparedness knowledge system built around conversational search, source packs, and offline-capable local deployments.
+
+It is best understood as four related product surfaces:
+
+1. hosted public app
+2. product and catalog site
+3. local runtime
+4. advanced local admin/source creation toolkit
 
 ---
 
-## Core Features
+## Core Idea
 
-### Chat Interface
-- Natural language Q&A about disaster preparedness, survival skills, medical guides, and DIY projects
-- Answers include source citations with links to original content
-- Works online (cloud) or offline (local database)
+Users ask practical questions in plain language and get grounded answers from curated preparedness and resilience material.
 
-### Source Library
-- Curated collection of open-source guides (Appropedia, Practical Action, medical references)
-- Each source is verified for licensing (Creative Commons, public domain)
-- Sources can be browsed and filtered by topic
+The project is designed so that this experience can work:
 
-### Offline Capability
-- Download source packs (ZIM archives, HTML backups) for offline use
-- Run entirely without internet using local vector database
-- Hybrid mode: local sources + cloud fallback
-
-### Admin Panel Option for Advanced Users
-- 5-step Source Tools wizard for creating/editing sources
-- Status boxes show validation state (Config, Backup, Metadata, Embeddings, License)
-- Configure which sources to search
-- Add personal documents (PDFs, saved websites)
-- Submit new sources for community review
+- in a hosted app
+- in a self-hosted local install
+- on constrained offline hardware
+- with selected knowledge packs carried locally
 
 ---
 
-## How It Works
+## What Makes It Different
 
-1. **User asks a question** in the chat interface
-2. **AI searches** the vector database for relevant content chunks
-3. **LLM synthesizes** an answer from the retrieved content
-4. **Sources are cited** so users can verify and read more
+### Source Packs
 
----
+Knowledge is packaged into source packs so users can:
 
-## User Types
+- see what content they are using
+- choose what to install or sync
+- move the same pack choices between hosted and local use
 
-| User | What They Do |
-|------|--------------|
-| End User | Ask questions, get answers |
-| Local Admin | Run their own instance, add personal sources |
-| Global Admin | Curate official sources, manage cloud infrastructure |
+### Offline-First Direction
 
----
+The system is meant to remain useful even when internet access is unreliable or absent.
 
-## Current State (v0.9 Pre-release)
+### Advanced Admin Stays Local
 
-**What Works Now:**
-- Chat interface with source citations and filtering
-- 10+ curated sources (Appropedia, Wikipedia, medical guides, disaster prep)
-- Admin panel with 5-step Source Tools wizard
-- Three connection modes: Online Only, Hybrid (recommended), Offline Only
-- Knowledge Map 3D visualization showing document relationships
-- ZIM/HTML/PDF file support with metadata extraction
-- Web scrapers for adding new sources (MediaWiki, static sites, PDF)
-- Personal cloud backup (connect your own S3/R2/Backblaze storage)
-- Job management with checkpoint/resume for interrupted tasks
-- Source validation with status indicators
-- Download pre-packaged source packs
-- Public cloud deployment (Railway) + local self-hosting options
-
-**Currently:**
-- Final testing and polish for v1.0 release
+Source creation, scraping, indexing, translation, video processing, and future OCR workflows are treated as advanced local tooling, not a public hosted workflow.
 
 ---
 
-## Roadmap Highlights
+## Main User Paths
 
-### Next (v1.0 Official Release)
-- Stable release with comprehensive testing
-- Expanded source library (more medical, survival, DIY guides)
-- Performance optimizations for large ZIM files
-- Improved mobile experience
+### Hosted User
 
-### Future (v2.0+)
-- Community contributions and source submissions
-- Mobile app with offline-first capability
-- Enhanced visualizations and analytics
-- Multi-language interface support
+- opens the public app
+- searches and chats immediately
+- may later sign in and connect a pack/profile selection
 
----
+### Local Runtime User
 
-## Links
+- installs the system locally
+- uses selected packs offline
+- can pair it with local embeddings and local LLMs
 
-- Public Repository: https://github.com/xyver/disaster-clippy-public
-- Live Demo: https://disaster-clippy.up.railway.app/
+### Advanced Local Admin
 
----
+- creates or curates sources
+- runs validation and indexing
+- manages translation/video/OCR workflows
 
-## Related Documentation
+### Maintainer / Global Operator
 
-| Document | Purpose |
-|----------|---------|
-| [README.md](README.md) | Quick start and project overview |
-| [DEVELOPER.md](DEVELOPER.md) | Technical details and CLI tools |
-| [CONTEXT.md](CONTEXT.md) | Architecture (AI onboarding) |
-| [ROADMAP.md](ROADMAP.md) | Future plans and testing |
+- manages official packs and cloud infrastructure
+- operates the hosted/control-plane side
 
 ---
 
-*Last Updated: December 10, 2025*
+## Current Direction
+
+The project is moving toward a clearer split between:
+
+- public repo: runtime, local tooling, open engine
+- private repo: `.com` site, control plane, account/update layer
+
+This keeps the core engine open and reusable while allowing a richer hosted product shell around it.
+
+---
+
+## Best Documents For Orientation
+
+- [`README.md`](../README.md)
+- [`deployment.md`](deployment.md)
+- [`architecture.md`](architecture.md)
+- [`source-tools.md`](source-tools.md)
+- [`language-packs.md`](language-packs.md)
+- [`video_processing.md`](video_processing.md)
+- [`clippy-core-extraction.md`](clippy-core-extraction.md)
+
+---
+
+*Updated: March 15, 2026*

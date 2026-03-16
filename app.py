@@ -1244,15 +1244,11 @@ async def chat(request: Request, body: ChatRequest):
                                        source_filter=source_filter, mode=mode,
                                        language=search_language)
 
-    # Prioritize results by doc_type (guides by default, unless user asked for something else)
-    articles = prioritize_results_by_doc_type(articles, preferred_doc_type)
-
     # Filter by sources if specified (post-filter for similarity queries)
     if body.sources is not None and len(body.sources) > 0:
         articles = [a for a in articles if a.get("metadata", {}).get("source") in body.sources]
 
-    # Ensure source diversity (max 2 per source, then backfill)
-    articles = ensure_source_diversity(articles, max_per_source=2, total_results=5)
+    articles = prepare_articles_for_chat(message, articles, preferred_doc_type)
 
     # Store results for follow-up queries
     session["last_results"] = articles
@@ -1263,8 +1259,12 @@ async def chat(request: Request, body: ChatRequest):
     # Build conversation history (last 10 exchanges)
     history = session["history"][-20:]  # 20 messages = 10 exchanges
 
-    # Generate response using appropriate method based on connection mode
-    response_text = generate_response(message, context, history, mode)
+    clarifying_response = build_clarifying_response(message)
+    if clarifying_response and not articles:
+        response_text = clarifying_response
+    else:
+        # Generate response using appropriate method based on connection mode
+        response_text = generate_response(message, context, history, mode)
 
     # Update history
     session["history"].append(HumanMessage(content=message))
@@ -1370,9 +1370,7 @@ async def simple_chat(request: Request, body: SimpleQueryRequest):
         articles = search_articles(message, n_results=15, source_filter=source_filter,
                                    language=search_language)
 
-    # Prioritize and ensure source diversity
-    articles = prioritize_results_by_doc_type(articles, preferred_doc_type)
-    articles = ensure_source_diversity(articles, max_per_source=2, total_results=5)
+    articles = prepare_articles_for_chat(message, articles, preferred_doc_type)
     session["last_results"] = articles
 
     # Format context for LLM
@@ -1381,8 +1379,12 @@ async def simple_chat(request: Request, body: SimpleQueryRequest):
     # Build conversation history
     history = session["history"][-20:]
 
-    # Generate response using unified service
-    response_text = generate_response(message, context, history)
+    clarifying_response = build_clarifying_response(message)
+    if clarifying_response and not articles:
+        response_text = clarifying_response
+    else:
+        # Generate response using unified service
+        response_text = generate_response(message, context, history)
 
     # Prepend any warnings to the response
     if filter_warnings:
@@ -1479,12 +1481,13 @@ async def stream_chat(request: Request, body: SimpleQueryRequest):
         articles = search_articles(message, n_results=15, source_filter=source_filter,
                                    language=search_language)
 
-    articles = prioritize_results_by_doc_type(articles, preferred_doc_type)
-    articles = ensure_source_diversity(articles, max_per_source=2, total_results=5)
+    articles = prepare_articles_for_chat(message, articles, preferred_doc_type)
     session["last_results"] = articles
 
     context = format_articles_for_context(articles)
     history = session["history"][-20:]
+
+    clarifying_response = build_clarifying_response(message)
 
     # Get AI service for streaming
     ai_service = get_ai_service()
@@ -1516,11 +1519,16 @@ async def stream_chat(request: Request, body: SimpleQueryRequest):
             full_response.append(warning_prefix.replace("\\n", "\n"))
 
         try:
-            for chunk in ai_service.generate_response_stream(message, context, history):
-                full_response.append(chunk)
-                # Escape any newlines in the chunk for SSE format
-                safe_chunk = chunk.replace("\n", "\\n")
+            if clarifying_response and not articles:
+                full_response.append(clarifying_response)
+                safe_chunk = clarifying_response.replace("\n", "\\n")
                 yield f"data: {safe_chunk}\n\n"
+            else:
+                for chunk in ai_service.generate_response_stream(message, context, history):
+                    full_response.append(chunk)
+                    # Escape any newlines in the chunk for SSE format
+                    safe_chunk = chunk.replace("\n", "\\n")
+                    yield f"data: {safe_chunk}\n\n"
 
             # Signal completion
             yield "data: [DONE]\n\n"
@@ -2375,6 +2383,115 @@ def detect_doc_type_preference(message: str) -> Optional[str]:
 
     # No explicit preference - will default to prioritizing guides
     return None
+
+
+def is_generic_help_query(message: str) -> bool:
+    """
+    Detect very broad help/distress prompts that need clarification more than retrieval.
+    """
+    normalized = " ".join(message.lower().split())
+    generic_phrases = {
+        "help",
+        "help me",
+        "i need help",
+        "need help",
+        "please help",
+        "emergency",
+        "i need assistance",
+        "assist me",
+        "what do i do",
+        "can you help",
+    }
+    if normalized in generic_phrases:
+        return True
+
+    tokens = re.findall(r"[a-z0-9']+", normalized)
+    if len(tokens) <= 3 and any(token in {"help", "emergency", "assistance"} for token in tokens):
+        return True
+
+    return False
+
+
+def is_binaryish_article(article: dict) -> bool:
+    """
+    Filter out obviously non-texty artifacts such as raw media/binary dumps.
+    """
+    metadata = article.get("metadata", {})
+    title = (metadata.get("title", "") or "").lower()
+    url = (metadata.get("url", "") or "").lower()
+    content = article.get("content", "") or ""
+    content_sample = content[:400]
+
+    binary_extensions = (
+        ".avi", ".mp4", ".mov", ".wmv", ".webm", ".mp3",
+        ".ppt", ".pptx", ".xls", ".xlsx", ".zip", ".exe",
+    )
+    if any(title.endswith(ext) or url.endswith(ext) for ext in binary_extensions):
+        return True
+
+    replacement_chars = content_sample.count("\ufffd")
+    nonprintable_chars = sum(1 for ch in content_sample if ord(ch) < 32 and ch not in "\n\r\t")
+    if content_sample and (replacement_chars >= 3 or nonprintable_chars >= 8):
+        return True
+
+    return False
+
+
+def filter_articles_for_quality(query: str, articles: List[dict]) -> List[dict]:
+    """
+    Remove weak or junky matches before showing them to users.
+    """
+    if not articles:
+        return []
+
+    filtered = [article for article in articles if not is_binaryish_article(article)]
+    if not filtered:
+        return []
+
+    generic_help = is_generic_help_query(query)
+    min_score = 0.33 if generic_help else 0.18
+
+    strong_matches = [
+        article for article in filtered
+        if article.get("original_score", article.get("score", 0)) >= min_score
+    ]
+
+    if generic_help:
+        return strong_matches
+
+    if strong_matches:
+        return strong_matches
+
+    top_score = filtered[0].get("original_score", filtered[0].get("score", 0))
+    if top_score < 0.12:
+        return []
+
+    return filtered
+
+
+def prepare_articles_for_chat(query: str, articles: List[dict],
+                              preferred_doc_type: Optional[str]) -> List[dict]:
+    """
+    Shared post-processing for chat article lists.
+    """
+    articles = prioritize_results_by_doc_type(articles, preferred_doc_type)
+    articles = filter_articles_for_quality(query, articles)
+    articles = ensure_source_diversity(articles, max_per_source=2, total_results=5)
+    return articles
+
+
+def build_clarifying_response(query: str) -> Optional[str]:
+    """
+    Return a direct clarification prompt for extremely broad help queries.
+    """
+    if not is_generic_help_query(query):
+        return None
+
+    return (
+        "I can help, but I need a little more detail so I can point you to the right guidance. "
+        "Tell me what kind of help you need, like water, food, shelter, power, sanitation, "
+        "medical, communication, evacuation, or something else."
+    )
 
 
 # Cache for source base_urls

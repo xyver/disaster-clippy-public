@@ -1,6 +1,6 @@
 # QA Testing Guide
 
-This folder contains quality assurance assets for testing Disaster Clippy question-answer performance.
+This folder contains quality assurance assets for testing Disaster Clippy as a product family, not just a single chat endpoint.
 
 It now includes a lightweight runnable API suite in addition to the planning notes:
 
@@ -8,6 +8,7 @@ It now includes a lightweight runnable API suite in addition to the planning not
 QA/
   README.md
   run_api_qa.py
+  product_surfaces.md
   datasets/
     api_contract_cases_v1.json
     questions_v1.json
@@ -30,22 +31,31 @@ QA/
   - Basic endpoint contract cases for source filtering and session-safe API behavior
 - `rubrics/grounded_answer_rubric.md`
   - Manual review rubric for checking groundedness, actionability, and safety
+- `product_surfaces.md`
+  - Product-surface QA framing for hosted app, local runtime, advanced local admin, and the public site
 
 ## Goals
 
-- Verify that search returns relevant documents for real user questions
+- Verify that hosted search returns relevant documents for real user questions
 - Verify that responses stay grounded in retrieved context
 - Verify source filtering and mode behavior do not regress
+- Verify the project’s main user surfaces stay coherent:
+  - hosted app
+  - local runtime
+  - advanced local admin
+  - future source-pack/catalog surfaces
 - Build a repeatable process for manual and automated QA
 
 ## Recommended QA Suite
 
-Use 4 complementary test tracks:
+Use 6 complementary test tracks:
 
 1. Retrieval QA
 2. Grounded Answer QA
 3. API Contract QA
 4. Mode Regression QA
+5. Product Surface QA
+6. Pack and Catalog QA
 
 ## 1) Retrieval QA
 
@@ -111,6 +121,49 @@ Compare:
 - Fallback behavior in hybrid/offline scenarios
 - Latency (optional, if you want performance baselines)
 
+## 5) Product Surface QA
+
+Purpose: Make sure Disaster Clippy still makes sense as a multi-surface product.
+
+Test these surfaces separately:
+
+- Hosted public app
+  - users can ask useful questions immediately
+  - app does not expose advanced admin workflows
+- Local runtime
+  - install assumptions are still valid
+  - offline-first behavior remains first-class
+- Advanced local admin
+  - source creation, validation, translation, video processing, and future OCR workflows remain local-first
+- Product/catalog site
+  - language matches the real architecture
+  - hosted vs local vs admin distinctions are clear
+
+Checks to include:
+
+- terminology consistency across docs and site pages
+- no accidental leakage of maintainer-only concepts into the normal hosted path
+- no misleading claims about hosted source creation
+
+## 6) Pack and Catalog QA
+
+Purpose: Treat source packs as a first-class release unit.
+
+Checks to include:
+
+- pack names and source IDs remain stable
+- pack descriptions match actual content
+- source pack docs and UI remain consistent with runtime behavior
+- hosted and local surfaces describe the same pack model
+- future catalog/profile/update manifests remain backwards-compatible
+
+Suggested future metrics:
+
+- pack profile completeness
+- license metadata completeness
+- freshness/update-history coverage
+- installability and artifact integrity
+
 ## Quick Start
 
 Run against a local app:
@@ -133,6 +186,19 @@ Useful flags:
 - `--reports-dir QA/reports`
 
 The script exits non-zero when checks fail, so it can later be used in CI or a deployment smoke test.
+
+Current scope of `run_api_qa.py`:
+
+- hosted/local API contract checks
+- representative retrieval smoke checks
+- session continuity checks
+
+Not yet covered automatically:
+
+- rendered site copy and docs QA
+- pack catalog QA
+- local admin workflow regression
+- local/offline end-to-end validation
 
 ## Quick Start (Manual Baseline)
 
@@ -162,6 +228,16 @@ The script exits non-zero when checks fail, so it can later be used in CI or a d
 - No critical groundedness/safety failures in sampled questions
 - Source filtering behavior passes all contract checks
 - No major quality regressions across connection modes
+- No major language drift between product docs, site pages, and runtime behavior
+- No pack-model regressions in the public-facing explanation of hosted vs local use
+
+## Near-Term Build Order
+
+1. Expand `run_api_qa.py` into a clearer hosted/local regression harness.
+2. Add a small site/docs QA pass for public wording and broken route checks.
+3. Add pack/catalog QA fixtures as the site and control-plane model hardens.
+4. Add local admin workflow smoke checks for source tools, translation, and video prep.
+5. Later, add deeper offline-node validation for Raspberry Pi or air-gapped scenarios.
 
 ## Ideal LLM for Disaster Clippy
 
