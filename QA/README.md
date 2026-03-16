@@ -2,6 +2,35 @@
 
 This folder contains quality assurance assets for testing Disaster Clippy question-answer performance.
 
+It now includes a lightweight runnable API suite in addition to the planning notes:
+
+```text
+QA/
+  README.md
+  run_api_qa.py
+  datasets/
+    api_contract_cases_v1.json
+    questions_v1.json
+  rubrics/
+    grounded_answer_rubric.md
+  reports/
+    README.md
+```
+
+## What Exists Now
+
+- `run_api_qa.py`
+  - Runs API contract checks against `/api/v1/chat`, `/api/v1/chat/stream`, and `/api/v1/sources`
+  - Runs a representative retrieval-style question set
+  - Runs a basic session continuity check
+  - Writes JSON and Markdown reports into `QA/reports/`
+- `datasets/questions_v1.json`
+  - First-pass representative question dataset for retrieval and answer smoke testing
+- `datasets/api_contract_cases_v1.json`
+  - Basic endpoint contract cases for source filtering and session-safe API behavior
+- `rubrics/grounded_answer_rubric.md`
+  - Manual review rubric for checking groundedness, actionability, and safety
+
 ## Goals
 
 - Verify that search returns relevant documents for real user questions
@@ -82,28 +111,36 @@ Compare:
 - Fallback behavior in hybrid/offline scenarios
 - Latency (optional, if you want performance baselines)
 
-## Folder Structure
+## Quick Start
 
-Suggested structure as the suite grows:
+Run against a local app:
 
-```text
-QA/
-  README.md
-  datasets/
-    questions_v1.json
-  rubrics/
-    grounded_answer_rubric.md
-  reports/
-    2026-03-08_manual_baseline.md
+```powershell
+python QA/run_api_qa.py --base-url http://127.0.0.1:8000
 ```
+
+Run against the deployed app:
+
+```powershell
+python QA/run_api_qa.py --base-url https://disaster-clippy.up.railway.app --verify-ssl
+```
+
+Useful flags:
+
+- `--skip-contract`
+- `--skip-retrieval`
+- `--skip-session`
+- `--reports-dir QA/reports`
+
+The script exits non-zero when checks fail, so it can later be used in CI or a deployment smoke test.
 
 ## Quick Start (Manual Baseline)
 
-1. Create `QA/datasets/questions_v1.json` with 20 representative questions.
-2. Run each question through `/api/v1/chat`.
-3. Score retrieval and answer quality with the rubric above.
-4. Record failures and edge cases in `QA/reports/<date>_manual_baseline.md`.
-5. Re-run the same set after search/prompt/indexing changes.
+1. Run `python QA/run_api_qa.py --base-url <target>`.
+2. Sample failures and borderline passes from the generated report.
+3. Score answer quality with `rubrics/grounded_answer_rubric.md`.
+4. Record important edge cases in `QA/reports/<date>_manual_baseline.md`.
+5. Re-run the same set after search, prompt, indexing, or deployment changes.
 
 ## Example Question Dataset Schema
 

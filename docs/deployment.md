@@ -1,375 +1,376 @@
 # Deployment Guide
 
-This document covers deployment scenarios, cloud storage configuration, and vector database setup.
+Canonical reference for how Disaster Clippy is intended to be deployed, distributed, and split across public and private surfaces.
+
+This document replaces the older deployment note that was focused mainly on infrastructure scenarios. The project now needs a clearer product/runtime model.
 
 ---
 
-## Table of Contents
+## Overview
 
-1. [Deployment Scenarios](#deployment-scenarios)
-2. [Personal Cloud Backup](#personal-cloud-backup)
-3. [R2 Cloud Storage](#r2-cloud-storage)
-4. [Vector Database Configuration](#vector-database-configuration)
-5. [Environment Variables](#environment-variables)
+Disaster Clippy is no longer just "a FastAPI app you can run locally."
+
+It now needs to support four related surfaces:
+
+1. Hosted public app
+2. Marketing and catalog site
+3. Downloadable offline/local runtime
+4. Downloadable advanced local admin/source-creation toolkit
+
+These are all the same project family, but they are not the same deployment target.
 
 ---
 
-## Deployment Scenarios
+## Runtime Modes
 
-Disaster Clippy supports multiple deployment scenarios to fit different use cases and infrastructure setups.
+The codebase already has three runtime roles in [`admin/app.py`](/C:/Users/Bryan/Desktop/disaster-clippy-public/admin/app.py#L35):
 
-### Scenario 1: Self-Hosted Web Server with Personal Cloud
+| Mode | Purpose | Typical deployment |
+|------|---------|--------------------|
+| `local` | Full local admin with local storage and local source creation | desktop install, laptop, server, Raspberry Pi |
+| `pinecone` | Hosted public runtime with admin UI blocked | public app / hosted `.io` |
+| `global` | Maintainer/global-admin runtime with shared cloud write access | maintainer machine or private ops environment |
 
-**Use Case:** You have your own web server (VPS, dedicated server, etc.) and want to host Disaster Clippy with your own cloud storage for backups.
+These should be treated as intentional product/runtime modes, not temporary flags.
 
-**Setup:**
+---
 
-```bash
-# On your web server
-git clone https://github.com/yourusername/disaster-clippy-public.git
-cd disaster-clippy-public
-pip install -r requirements.txt
+## Public and Private Split
 
-# Configure .env
-VECTOR_DB_MODE=local          # Use ChromaDB (no Pinecone needed)
-BACKUP_PATH=/var/www/backups  # Your server storage location
-OPENAI_API_KEY=your_key       # Or use EMBEDDING_MODE=local with Ollama
+Disaster Clippy should be understood as a sibling workspace with separate repos:
 
-# Run the app
-python app.py
+```text
+disaster-clippy/
+├── public/
+└── private/
 ```
 
-**What you get:**
-- Full admin UI at yourdomain.com/useradmin/
-- Chat interface at yourdomain.com
-- Sources stored locally in `/var/www/backups`
-- Personal cloud sync for backup/restore
-- Can download source packs from official R2 or create your own
+### `public/`
+
+Owns:
+
+- core application runtime
+- offline/local install
+- local admin panel
+- source creation and validation tools
+- source pack consumption
+- shared documentation
+- portable architecture targets like `clippy_core`
+
+This repo should remain the main product engine.
+
+### `private/`
+
+Owns:
+
+- `.com` marketing/product site
+- account and profile layer
+- update/control-plane services
+- hosted operational tooling
+- optional billing/donations/entitlements if ever added
+- private operational docs
+
+This repo should not absorb the whole product engine. It is the shell around the public engine, not a replacement for it.
 
 ---
 
-### Scenario 2: Raspberry Pi Offline Node with Optional Cloud Backup
+## Domain Split
 
-**Use Case:** Set up a fully offline disaster preparedness node on a Raspberry Pi 5, with optional cloud backup when internet is available.
+The intended domain model is:
 
-**Hardware Requirements:**
-- Raspberry Pi 5 (8GB RAM recommended)
-- External SSD strongly recommended (not HDD)
-- Battery backup for power outages (optional)
+### `.io`
 
-**Setup:**
+The real hosted app.
 
-```bash
-# On Raspberry Pi
-git clone https://github.com/yourusername/disaster-clippy-public.git
-cd disaster-clippy-public
-pip install -r requirements.txt
+Responsibilities:
 
-# Configure .env
-VECTOR_DB_MODE=local                    # ChromaDB for offline vectors
-BACKUP_PATH=/mnt/external/disaster_data # External hard drive
-EMBEDDING_MODE=local                    # Use Ollama (no API needed)
+- public search/chat experience
+- hosted runtime using shared cloud vectors
+- lightweight account-aware customization
+- pack-aware search behavior for signed-in users
 
-# Install Ollama for offline AI
-curl -fsSL https://ollama.com/install.sh | sh
-ollama pull llama3.2:3b
+This should feel like "use Disaster Clippy now."
 
-# Run the app
-python app.py
+### `.com`
+
+The product, catalog, and download site.
+
+Responsibilities:
+
+- explain what Disaster Clippy is
+- onboarding and install guides
+- source pack library / catalog
+- release notes
+- account/profile management
+- future update feeds and manifests
+
+This should feel closer to Kiwix’s main website model:
+
+- a product site first
+- a catalog/discovery surface second
+- operational/account features layered in later
+
+---
+
+## Product Surfaces
+
+### 1. Hosted Public App
+
+Audience:
+
+- casual users
+- researchers
+- users who just want to search or ask questions
+
+Behavior:
+
+- runs in `pinecone` mode
+- no local admin UI
+- no public source creation workflow
+- uses shared cloud-hosted vector/search infrastructure
+
+### 2. Local Runtime
+
+Audience:
+
+- offline users
+- preparedness groups
+- Raspberry Pi and LAN deployments
+- users syncing selected packs for offline use
+
+Behavior:
+
+- runs in `local` mode
+- supports local models and offline search
+- can sync or install chosen packs from the global registry
+- should work without the hosted service once set up
+
+### 3. Advanced Local Admin Toolkit
+
+Audience:
+
+- maintainers
+- community contributors
+- power users building custom packs
+
+Behavior:
+
+- still local-first
+- includes source creation, validation, scraping, indexing, translation, video processing, and future OCR tools
+- not intended to become a public hosted source-creation SaaS
+
+This is important: source creation should remain a local advanced workflow unless there is a very strong future reason to expose part of it publicly.
+
+### 4. Private Control Plane
+
+Audience:
+
+- maintainers
+- future operators of hosted services
+
+Behavior:
+
+- manages update manifests, pack catalog metadata, account linkage, and hosted operational concerns
+- belongs in the private repo
+
+---
+
+## Account and Pack Model
+
+The intended user flow is:
+
+1. User discovers Disaster Clippy on `.com`
+2. User explores the pack library and product docs
+3. User optionally creates an account
+4. User selects packs, languages, and preferences from the global registry
+5. User can:
+   - use the hosted `.io` app with that profile
+   - download the local runtime and sync that same profile offline
+   - optionally download the advanced local admin toolkit if they want to build or curate sources
+
+The account is not primarily for source creation. Its main job is profile and pack selection across hosted and offline use.
+
+---
+
+## Update System
+
+The project needs a clearer update model going forward.
+
+There are at least four distinct update channels:
+
+| Update type | Examples |
+|-------------|----------|
+| App updates | new code release, bug fixes, UI changes |
+| Source pack updates | new packs, revised packs, metadata updates |
+| Model updates | embeddings, local LLM packs, language packs |
+| Control/catalog updates | pack manifests, compatibility flags, deprecations |
+
+### Recommended approach
+
+Use signed or trusted manifests/catalogs rather than ad hoc download links.
+
+Local installs should be able to check for:
+
+- app updates
+- pack updates
+- model/language pack updates
+- compatibility notices
+
+This belongs primarily in the private control-plane side, but the public repo should be designed to consume those manifests cleanly.
+
+---
+
+## Layered Architecture
+
+Deployment and repo boundaries work better if the internal architecture stays layered:
+
+```text
+app.py
+admin/
+offline_tools/
+clippy_core/   (future extraction target)
 ```
 
-**Configure for Hybrid Online/Offline Operation:**
+See [`clippy-core-extraction.md`](./clippy-core-extraction.md).
 
-1. Go to http://192.168.1.x:8000/useradmin/settings
-2. Set Connection Mode to **"Hybrid"**
-3. Enable Personal Cloud Backup (optional, for syncing when online)
+That separation matters because:
 
-**Access:**
-- Users on your local network connect via WiFi/LAN: `http://192.168.1.x:8000`
-- Cloud backup syncs when internet IS available
-- Falls back to local-only when offline
-
-**Performance Notes:**
-- Chat responses: 2-10 seconds with llama3.2:3b
-- Can serve 5-10 concurrent users comfortably
-- Indexing large ZIM files will be slow (hours vs minutes on a server)
+- the hosted shell should not own all business logic
+- the private repo should not need to duplicate the public app engine
+- the local runtime should remain first-class
+- the portable chat/search engine should eventually be reusable outside the full app
 
 ---
 
-### Scenario 3: Global Admin with Personal Testing Environment
+## Supported Deployment Scenarios
 
-**Use Case:** You're the global admin maintaining the official Disaster Clippy deployment, but also want a personal testing environment with your own cloud storage.
+### Self-Hosted Local Server
 
-**Two-Tier Credential System:**
+Use case:
 
-```bash
-# .env (protected by .gitignore) - Official global admin credentials
-R2_ACCESS_KEY_ID=your_global_admin_key
-R2_SECRET_ACCESS_KEY=your_global_secret
-R2_ENDPOINT_URL=https://your_account.r2.cloudflarestorage.com
-R2_BUCKET_NAME=disaster-clippy-backups
-VECTOR_DB_MODE=global  # Full write access to official buckets
-```
+- personal server
+- VPS
+- LAN node
+- family/community preparedness hub
 
-**Personal Testing Configuration via Settings UI:**
-- `local_settings.json` (also protected by .gitignore)
-- Enable Personal Cloud Backup
-- Use different bucket: `disaster-clippy-bryan-testing`
-- Separate credentials from official bucket
-- Use for development/testing without affecting production
+Typical mode:
 
-**Priority Order:**
-1. When personal_cloud is enabled in `local_settings.json`, it overrides `.env`
-2. When personal_cloud is disabled, falls back to `.env` (global admin mode)
-3. If neither configured, no cloud storage
+- `local`
 
----
+What you get:
 
-### Scenario 4: Air-Gapped Emergency Deployment
+- full admin UI
+- local backups and local vectors
+- optional cloud sync
+- optional local models
 
-**Use Case:** Complete offline deployment for emergency preparedness, no internet at all.
+### Raspberry Pi or Air-Gapped Node
 
-**Pre-Deployment Preparation (while online):**
+Use case:
 
-1. Download essential ZIM files:
-   - Wikipedia medicine (~500MB)
-   - Wikihow (~2GB)
-   - Appropedia (~200MB)
+- disaster preparedness node
+- local network knowledge appliance
+- field/offline deployment
 
-2. Download Ollama model:
-   ```bash
-   ollama pull llama3.2:3b
-   ```
+Typical mode:
 
-3. Package everything on USB drive or external SSD:
-   ```
-   USB Drive/
-   |-- disaster-clippy/ (full git clone)
-   |-- backups/ (ZIM files, HTML backups)
-   |-- ollama/ (portable Ollama installation)
-   ```
+- `local`
 
-**Deployment (offline):**
+What matters most:
 
-```bash
-# Copy from USB to target machine
-cp -r /mnt/usb/disaster-clippy /opt/
-cd /opt/disaster-clippy
+- local storage
+- local vector DB
+- local LLM or fallback search-only behavior
+- pack install/update process that can work from local files when needed
 
-# Configure for offline-only
-VECTOR_DB_MODE=local
-BACKUP_PATH=/opt/disaster-clippy/backups
-EMBEDDING_MODE=local
+### Hosted Public App
 
-# Run
-python app.py
-```
+Use case:
 
-**Connection Mode:** Set to "Offline Only" in settings UI
+- public `.io` deployment
 
-**Storage Requirements:**
-- Minimum viable: ~10GB (core sources + small AI model)
-- Comprehensive: ~50-100GB (full Wikipedia + larger AI models)
+Typical mode:
 
----
+- `pinecone`
 
-## Personal Cloud Backup
+What you get:
 
-### Security Architecture
+- hosted search/chat
+- no admin UI
+- cloud-hosted shared vectors
+- account-aware pack selection later
 
-**File Storage:**
-- Credentials stored in `local_settings.json` (gitignored)
-- Never committed to repository
-- Masked in settings UI (only last 4 characters of access key shown)
+### Global Maintainer Environment
 
-**File Permissions (Linux/Mac):**
-```bash
-chmod 600 local_settings.json
-chmod 600 .env
-```
+Use case:
 
-**Test Connection Feature:**
-- Tests credentials WITHOUT saving
-- Verifies bucket access
-- Shows connection status before committing
+- official pack publishing
+- cloud vector sync
+- hosted ops and submissions review
 
-### Supported Cloud Providers
+Typical mode:
 
-| Provider | Endpoint Template | Typical Cost |
-|----------|------------------|--------------|
-| **Cloudflare R2** | `https://ACCOUNT-ID.r2.cloudflarestorage.com` | $0.015/GB storage, no egress fees |
-| **AWS S3** | `https://s3.amazonaws.com` | $0.023/GB storage + egress |
-| **Backblaze B2** | `https://s3.us-west-002.backblazeb2.com` | $0.005/GB storage, 1GB/day free egress |
-| **DigitalOcean Spaces** | `https://nyc3.digitaloceanspaces.com` | $5/month for 250GB + 1TB transfer |
-| **Custom S3-Compatible** | User-defined | Varies |
+- `global`
 
-### Configuration via Settings UI
+What you get:
 
-1. Navigate to: `/useradmin/settings`
-2. Enable "Personal Cloud Backup"
-3. Select provider (auto-fills endpoint)
-4. Enter credentials
-5. Click "Test Connection"
-6. Save settings
-
-### Configuration via local_settings.json
-
-```json
-{
-  "personal_cloud": {
-    "enabled": true,
-    "provider": "r2",
-    "endpoint_url": "https://YOUR-ACCOUNT-ID.r2.cloudflarestorage.com",
-    "access_key_id": "your_access_key",
-    "secret_access_key": "your_secret_key",
-    "bucket_name": "my-disaster-backups",
-    "region": "auto"
-  }
-}
-```
-
-### Using Your Own Web Server as Cloud Storage
-
-If you have a web server with an S3-compatible API (like MinIO):
-
-```json
-{
-  "personal_cloud": {
-    "enabled": true,
-    "provider": "custom",
-    "endpoint_url": "https://yourdomain.com:9000",
-    "access_key_id": "your_minio_key",
-    "secret_access_key": "your_minio_secret",
-    "bucket_name": "disaster-backups",
-    "region": "us-east-1"
-  }
-}
-```
+- write access to shared cloud systems
+- submissions review and publishing authority
+- private operational tooling
 
 ---
 
-## R2 Cloud Storage
+## What Stays Public vs Private
 
-### Two-Bucket Architecture
+### Public repo should own
 
-The R2 storage system uses two separate buckets for security:
+- app runtime
+- local admin and source tools
+- offline capability
+- source pack install/consume logic
+- translation/video/OCR processing pipelines
+- public docs
 
-| Bucket | Purpose | Railway Access | Global Admin |
-|--------|---------|----------------|--------------|
-| `disaster-clippy-backups` | Official content | Read only | Read/Write |
-| `disaster-clippy-submissions` | User submissions | Write only | Read/Delete |
+### Private repo should own
 
-### R2 Storage Functions
+- `.com` site
+- account/profile services
+- update/control plane
+- hosted operational services
+- any future commercial/account infrastructure
 
-**File:** `offline_tools/cloud/r2.py`
-
-**Bucket Getters:**
-- `get_backups_storage()` - Uses `R2_BACKUPS_BUCKET` (reads official content)
-- `get_submissions_storage()` - Uses `R2_SUBMISSIONS_BUCKET` (writes user submissions)
-- `get_r2_storage()` - Legacy single-bucket mode (backward compatible)
-
-**Server-Side Copy Methods:**
-- `copy_to_bucket(source_key, dest_bucket, dest_key)` - Cross-bucket copy
-- `move_to_bucket(source_key, dest_bucket, dest_key)` - Copy + delete
-
-**Helper Functions:**
-- `approve_submission(submission_key, dest_source_id, dest_filename)` - Server-side approve
-- `reject_submission(submission_key, reason)` - Move to rejected folder
-
-### R2 Environment Variables
-
-**Railway Deployment** (limited access tokens):
-
-```bash
-R2_ACCESS_KEY_ID=<your-key-id>
-R2_SECRET_ACCESS_KEY=<your-secret>
-R2_ENDPOINT_URL=https://<account>.r2.cloudflarestorage.com
-R2_BACKUPS_BUCKET=disaster-clippy-backups
-R2_SUBMISSIONS_BUCKET=disaster-clippy-submissions
-```
-
-**Global Admin** (full access token):
-
-```bash
-R2_ACCESS_KEY_ID=<admin-key-id>
-R2_SECRET_ACCESS_KEY=<admin-secret>
-R2_ENDPOINT_URL=https://<account>.r2.cloudflarestorage.com
-R2_BACKUPS_BUCKET=disaster-clippy-backups
-R2_SUBMISSIONS_BUCKET=disaster-clippy-submissions
-```
-
-### Cloudflare R2 Setup
-
-1. Create bucket: `disaster-clippy-backups`
-2. Create bucket: `disaster-clippy-submissions`
-3. Create API token for Railway: Read on backups, Write on submissions
-4. Create API token for Global Admin: Full access on both
-
-The code is backward compatible - if you only set `R2_BUCKET_NAME`, it uses single-bucket mode.
+This separation keeps the open-source engine strong while still allowing a richer hosted product layer.
 
 ---
 
-## Vector Database Configuration
+## Environment and Infrastructure Notes
 
-`VECTOR_DB_MODE` controls where vectors are stored:
+The older deployment ideas are still valid in principle:
 
-| Mode | Storage | Use Case |
-|------|---------|----------|
-| `local` (default) | ChromaDB in `BACKUP_PATH/chroma/` | Local admin, offline use |
-| `pinecone` | Pinecone cloud service | Railway deployment, global admin |
+- local installs may use ChromaDB and local storage
+- hosted public deployments may use Pinecone and cloud storage
+- maintainers may need broader write access than public runtimes
+- air-gapped deployments remain a first-class requirement
 
-### Pinecone Variables
+But those are implementation details underneath the larger product/deployment model above.
 
-Only needed if `VECTOR_DB_MODE=pinecone`:
+For current admin and cloud setup details, also see:
 
-| Variable | Description |
-|----------|-------------|
-| `PINECONE_API_KEY` | Your Pinecone API key from console.pinecone.io |
-| `PINECONE_ENVIRONMENT` | Region (e.g., us-east-1, gcp-starter) |
-| `PINECONE_INDEX_NAME` | Index name (default: disaster-clippy) |
-
-### Pinecone Sync API Endpoints
-
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| `/pinecone-status` | GET | Get Pinecone connection status and stats |
-| `/pinecone-check-source/{source_id}` | GET | Check if source exists in Pinecone (returns vector count) |
-| `/pinecone-source/{source_id}` | DELETE | Delete all vectors for a source (global admin only) |
-| `/pinecone-compare` | POST | Compare local ChromaDB with Pinecone |
-| `/pinecone-sync` | POST | Sync local vectors to Pinecone |
-
-### Deployment Requirements
-
-| Deployment | VECTOR_DB_MODE | Pinecone Keys |
-|------------|----------------|---------------|
-| Local admin | `local` | Not needed |
-| Railway public | `pinecone` | Yes - in Railway env vars |
-| Global admin | `pinecone` | Yes - for syncing to cloud |
+- [`architecture.md`](./architecture.md)
+- [`admin-guide.md`](./admin-guide.md)
 
 ---
 
-## Environment Variables
+## Recommended Next Docs
 
-| Variable | Purpose | Required |
-|----------|---------|----------|
-| `OPENAI_API_KEY` | Embeddings and chat | Yes (unless EMBEDDING_MODE=local) |
-| `ANTHROPIC_API_KEY` | Claude chat (optional) | No |
-| `PINECONE_API_KEY` | Cloud vector DB | Global admin only |
-| `R2_ACCESS_KEY_ID` | Cloud storage | For R2 upload/download |
-| `R2_SECRET_ACCESS_KEY` | Cloud storage | For R2 upload/download |
-| `ADMIN_MODE` | "local" or "global" | No (defaults to local) |
-| `EMBEDDING_MODE` | "openai" or "local" | No (defaults to openai) |
-| `VECTOR_DB_MODE` | "local" or "pinecone" | No (defaults to local) |
-| `BACKUP_PATH` | Path to backup folder | No (defaults to ./backups) |
-| `RAILWAY_PROXY_URL` | Railway proxy for cloud access | For local admins without keys |
+This deployment model should eventually be complemented by:
+
+- a private-repo control-plane doc
+- an update-manifest/catalog doc
+- a runtime/profile sync doc
+- a `.com` product-site information architecture doc
 
 ---
 
-## Related Documentation
-
-- [Architecture](architecture.md) - System design and security modes
-- [Admin Guide](admin-guide.md) - Setting up and running the admin panel
-
----
-
-*Last Updated: December 2025*
+*Updated: March 15, 2026*  
+*Status: current deployment and distribution direction*
