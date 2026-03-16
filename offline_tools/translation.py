@@ -10,7 +10,7 @@ Phase 3: Add NLLB universal model support
 import json
 import os
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from datetime import datetime
 import hashlib
 
@@ -147,13 +147,28 @@ class TranslationService:
                 # Set to evaluation mode (faster inference)
                 self._model_en_to_lang.eval()
 
-                self._model_loaded = True
-                device_str = f"GPU x{self._gpu_count}" if self._gpu_count > 0 else "CPU"
-                print(f"[Translation] Model loaded for {self.language} on {device_str}")
-                return True
-            else:
-                print(f"Model path not found: {en_to_lang_path}")
-                return False
+            # Load Language -> English model when available
+            lang_to_en_name = repos.get("lang_to_en", "").split("/")[-1]
+            lang_to_en_path = pack_path / lang_to_en_name if lang_to_en_name else None
+            if lang_to_en_path and lang_to_en_path.exists():
+                print(f"[Translation] Loading reverse model from {lang_to_en_path}...")
+                self._tokenizer_lang_to_en = MarianTokenizer.from_pretrained(str(lang_to_en_path))
+                self._model_lang_to_en = MarianMTModel.from_pretrained(str(lang_to_en_path))
+                self._model_lang_to_en = self._model_lang_to_en.to(self._device)
+
+                if self._device.type == "cuda":
+                    compute_cap = torch.cuda.get_device_capability(0)
+                    if compute_cap[0] >= 7 and compute_cap[1] >= 5:
+                        self._model_lang_to_en = self._model_lang_to_en.half()
+
+                if self._gpu_count > 1:
+                    self._model_lang_to_en = torch.nn.DataParallel(self._model_lang_to_en)
+                self._model_lang_to_en.eval()
+
+            self._model_loaded = True
+            device_str = f"GPU x{self._gpu_count}" if self._gpu_count > 0 else "CPU"
+            print(f"[Translation] Model loaded for {self.language} on {device_str}")
+            return True
 
         except ImportError as e:
             print(f"Missing dependency for translation: {e}")
@@ -220,6 +235,41 @@ class TranslationService:
 
         except Exception as e:
             print(f"Translation error: {e}")
+            return text
+
+    def translate_to_english(self, text: str) -> str:
+        """
+        Translate source-language text to English.
+
+        Returns original text if translation is unavailable or not needed.
+        """
+        if self.language == "en" or not text.strip():
+            return text
+
+        if not self._load_model():
+            return text
+
+        if self._model_lang_to_en is None or self._tokenizer_lang_to_en is None:
+            return text
+
+        try:
+            max_length = 512
+            inputs = self._tokenizer_lang_to_en(
+                text,
+                return_tensors="pt",
+                padding=True,
+                truncation=True,
+                max_length=max_length
+            )
+            if self._device is not None:
+                inputs = {k: v.to(self._device) for k, v in inputs.items()}
+
+            model = self._model_lang_to_en.module if hasattr(self._model_lang_to_en, 'module') else self._model_lang_to_en
+            outputs = model.generate(**inputs)
+            translated = self._tokenizer_lang_to_en.decode(outputs[0], skip_special_tokens=True)
+            return translated
+        except Exception as e:
+            print(f"Translation-to-English error: {e}")
             return text
 
     def translate_batch(self, texts: list) -> list:
@@ -303,6 +353,71 @@ class TranslationService:
             import traceback
             traceback.print_exc()
             return texts
+
+    def translate_batch_to_english(self, texts: List[str]) -> List[str]:
+        """
+        Translate multiple source-language texts to English.
+
+        Returns originals when reverse translation is unavailable or not needed.
+        """
+        if self.language == "en" or not texts:
+            return texts
+
+        if not self._load_model():
+            return texts
+
+        if self._model_lang_to_en is None or self._tokenizer_lang_to_en is None:
+            return texts
+
+        try:
+            import torch
+
+            max_chars = 500
+            non_empty = []
+            for i, t in enumerate(texts):
+                if t and t.strip():
+                    truncated = t[:max_chars] + "..." if len(t) > max_chars else t
+                    non_empty.append((i, truncated))
+
+            if not non_empty:
+                return texts
+
+            indices, to_translate = zip(*non_empty)
+            inputs = self._tokenizer_lang_to_en(
+                list(to_translate),
+                return_tensors="pt",
+                padding=True,
+                truncation=True,
+                max_length=256
+            )
+            if self._device is not None:
+                inputs = {k: v.to(self._device) for k, v in inputs.items()}
+
+            model = self._model_lang_to_en.module if hasattr(self._model_lang_to_en, 'module') else self._model_lang_to_en
+            with torch.no_grad():
+                outputs = model.generate(
+                    **inputs,
+                    max_new_tokens=256,
+                    num_beams=1,
+                    do_sample=False
+                )
+
+            translated = self._tokenizer_lang_to_en.batch_decode(outputs, skip_special_tokens=True)
+            result = list(texts)
+            for idx, trans in zip(indices, translated):
+                result[idx] = trans
+            return result
+        except Exception as e:
+            print(f"Batch translation-to-English error: {e}")
+            import traceback
+            traceback.print_exc()
+            return texts
+
+    def translate_texts(self, texts: List[str], *, to_english: bool = False) -> List[str]:
+        """Unified batch translation helper for transcript/block processing."""
+        if to_english:
+            return self.translate_batch_to_english(texts)
+        return self.translate_batch(texts)
 
     def translate_html(self, html: str, article_id: str = None) -> str:
         """
@@ -532,6 +647,46 @@ class TranslationCache:
             print(f"Error saving translation cache: {e}")
             return False
 
+    def get_video_transcript(self, video_key: str, language: str) -> Optional[dict]:
+        """Get cached translated video transcript artifact."""
+        if not self.is_enabled():
+            return None
+
+        cache_path = self._get_cache_path()
+        if not cache_path:
+            return None
+
+        safe_id = video_key.replace("/", "_").replace("\\", "_")
+        cache_file = cache_path / language / "videos" / f"{safe_id}.json"
+        if not cache_file.exists():
+            return None
+
+        try:
+            with open(cache_file, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except (json.JSONDecodeError, IOError):
+            return None
+
+    def save_video_transcript(self, video_key: str, language: str, data: dict) -> bool:
+        """Save translated video transcript artifact to cache."""
+        if not self.is_enabled():
+            return False
+
+        cache_path = self._get_cache_path()
+        if not cache_path:
+            return False
+
+        try:
+            safe_id = video_key.replace("/", "_").replace("\\", "_")
+            cache_file = cache_path / language / "videos" / f"{safe_id}.json"
+            cache_file.parent.mkdir(parents=True, exist_ok=True)
+            with open(cache_file, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False)
+            return True
+        except IOError as e:
+            print(f"Error saving video transcript cache: {e}")
+            return False
+
     def clear_language(self, language: str) -> int:
         """
         Clear all cached translations for a language.
@@ -585,6 +740,10 @@ class TranslationCache:
                         for f in articles_dir.glob("*.json"):
                             total_size += f.stat().st_size
                             article_count += 1
+                    videos_dir = lang_dir / "videos"
+                    if videos_dir.exists():
+                        for f in videos_dir.glob("*.json"):
+                            total_size += f.stat().st_size
         except Exception:
             pass
 

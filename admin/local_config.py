@@ -90,6 +90,9 @@ Here are some guides that can help:
             "active_language": "en",                  # Target language code ("en" = no translation)
             "cache_enabled": True,                    # Cache translated articles
             "cache_max_mb": 500                       # Max cache size in MB
+        },
+        "video_processing": {
+            "allow_live_transcript_fetch": False      # Optional online transcript acquisition
         }
     }
 
@@ -499,6 +502,16 @@ Here are some guides that can help:
     def get_translation_cache_max_mb(self) -> int:
         """Get max translation cache size in MB"""
         return self.config.get("translation", {}).get("cache_max_mb", 500)
+
+    def is_live_transcript_fetch_enabled(self) -> bool:
+        """Check whether optional live transcript retrieval is enabled."""
+        return self.config.get("video_processing", {}).get("allow_live_transcript_fetch", False)
+
+    def set_live_transcript_fetch_enabled(self, enabled: bool) -> None:
+        """Enable or disable optional live transcript retrieval."""
+        if "video_processing" not in self.config:
+            self.config["video_processing"] = self.DEFAULT_CONFIG["video_processing"].copy()
+        self.config["video_processing"]["allow_live_transcript_fetch"] = enabled
 
     # GPU Configuration
     def is_gpu_enabled(self) -> bool:

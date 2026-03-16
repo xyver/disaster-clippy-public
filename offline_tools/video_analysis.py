@@ -9,33 +9,13 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-
-@dataclass
-class VideoRecord:
-    """Lightweight metadata for one video entry in a ZIM."""
-
-    video_id: str
-    title: str
-    description: str
-    duration_seconds: int
-    video_path: Optional[str]
-    thumbnail_path: Optional[str]
-    upload_date: str
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "id": self.video_id,
-            "title": self.title,
-            "description": self.description,
-            "duration": self.duration_seconds,
-            "video_path": self.video_path,
-            "thumbnail_path": self.thumbnail_path,
-            "upload_date": self.upload_date,
-        }
+from .transcript_acquisition import acquire_best_transcript
+from .translation import TranslationService
+from .video_models import TranscriptChunk, TranscriptDocument, TranscriptSegment, VideoRecord
 
 
 class VideoZIMReader:
@@ -183,6 +163,38 @@ def transcribe_with_timestamps(
     return output_segments, info.duration
 
 
+def normalize_segment_dicts(
+    segments: Sequence[Dict[str, Any]],
+    *,
+    language: str = "",
+    source_kind: str = "",
+    segment_prefix: str = "seg",
+) -> List[TranscriptSegment]:
+    """Convert loose segment dictionaries into canonical transcript segments."""
+    normalized: List[TranscriptSegment] = []
+    for index, segment in enumerate(segments):
+        text = str(segment.get("text", "")).strip()
+        if not text:
+            continue
+
+        start = float(segment.get("start_sec", 0.0))
+        end = float(segment.get("end_sec", start))
+        if end < start:
+            end = start
+
+        normalized.append(
+            TranscriptSegment(
+                segment_id=f"{segment_prefix}_{index + 1}",
+                start_sec=round(start, 3),
+                end_sec=round(end, 3),
+                text=text,
+                language=language,
+                source_kind=source_kind,
+            )
+        )
+    return normalized
+
+
 def group_segments_by_duration(
     segments: Sequence[Dict[str, Any]],
     chunk_duration_seconds: float = 60.0,
@@ -213,6 +225,268 @@ def group_segments_by_duration(
         chunks.append(current)
 
     return chunks
+
+
+def ensure_raw_data_dir(source_path: str | Path) -> Path:
+    """Ensure raw_data/ exists inside a source folder."""
+    raw_dir = Path(source_path) / "raw_data"
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    return raw_dir
+
+
+def ensure_video_raw_data_dir(source_path: str | Path, video_id: str) -> Path:
+    """Ensure raw_data/videos/<video_id>/ exists inside a source folder."""
+    video_dir = ensure_raw_data_dir(source_path) / "videos" / video_id
+    video_dir.mkdir(parents=True, exist_ok=True)
+    return video_dir
+
+
+def write_transcript_artifact(
+    source_path: str | Path,
+    filename: str,
+    transcript: TranscriptDocument,
+) -> Path:
+    """Write a transcript artifact into source-owned raw_data/."""
+    raw_dir = ensure_video_raw_data_dir(source_path, transcript.video_id)
+    artifact_path = raw_dir / filename
+    with open(artifact_path, "w", encoding="utf-8") as f:
+        json.dump(transcript.to_dict(), f, indent=2, ensure_ascii=False)
+    return artifact_path
+
+
+def write_chunk_artifact(
+    source_path: str | Path,
+    filename: str,
+    chunks: Sequence[TranscriptChunk],
+) -> Path:
+    """Write chunk artifacts into source-owned raw_data/."""
+    if not chunks:
+        raise ValueError("Cannot write chunk artifact for empty chunk list")
+    raw_dir = ensure_video_raw_data_dir(source_path, chunks[0].video_id)
+    artifact_path = raw_dir / filename
+    with open(artifact_path, "w", encoding="utf-8") as f:
+        json.dump([chunk.to_dict() for chunk in chunks], f, indent=2, ensure_ascii=False)
+    return artifact_path
+
+
+def write_topics_artifact(
+    source_path: str | Path,
+    filename: str,
+    chunks_with_topics: Sequence[Dict[str, Any]] | Sequence[TranscriptChunk],
+    *,
+    video_id: str,
+) -> Path:
+    """Write topic-enriched chunk artifacts into source-owned raw_data/."""
+    raw_dir = ensure_video_raw_data_dir(source_path, video_id)
+    artifact_path = raw_dir / filename
+    serializable = []
+    for chunk in chunks_with_topics:
+        if hasattr(chunk, "to_dict"):
+            serializable.append(chunk.to_dict())
+        else:
+            serializable.append(dict(chunk))
+    with open(artifact_path, "w", encoding="utf-8") as f:
+        json.dump(serializable, f, indent=2, ensure_ascii=False)
+    return artifact_path
+
+
+def translate_transcript_to_english(
+    transcript: TranscriptDocument,
+    *,
+    source_language: str = "",
+) -> TranscriptDocument:
+    """Normalize a transcript into the English downstream artifact."""
+    effective_language = source_language or transcript.language or transcript.original_language or "en"
+
+    if effective_language == "en":
+        return TranscriptDocument(
+            video_id=transcript.video_id,
+            language="en",
+            source_kind=transcript.source_kind,
+            full_text=transcript.full_text,
+            segments=[
+                TranscriptSegment(
+                    segment_id=segment.segment_id,
+                    start_sec=segment.start_sec,
+                    end_sec=segment.end_sec,
+                    text=segment.text,
+                    language="en",
+                    source_kind=segment.source_kind,
+                    original_segment_ids=segment.original_segment_ids or [segment.segment_id],
+                )
+                for segment in transcript.segments
+            ],
+            original_language=effective_language,
+            translation_target_language="en",
+            source_url=transcript.source_url,
+            retrieved_at=transcript.retrieved_at,
+            metadata={**transcript.metadata, "normalized_without_translation": True},
+        )
+
+    translator = TranslationService(effective_language)
+    translated_texts = translator.translate_batch_to_english([segment.text for segment in transcript.segments])
+    translated_segments: List[TranscriptSegment] = []
+    for segment, translated_text in zip(transcript.segments, translated_texts):
+        translated_segments.append(
+            TranscriptSegment(
+                segment_id=segment.segment_id,
+                start_sec=segment.start_sec,
+                end_sec=segment.end_sec,
+                text=translated_text,
+                language="en",
+                source_kind=segment.source_kind,
+                original_segment_ids=segment.original_segment_ids or [segment.segment_id],
+            )
+        )
+
+    return TranscriptDocument(
+        video_id=transcript.video_id,
+        language="en",
+        source_kind=transcript.source_kind,
+        full_text="\n\n".join(seg.text for seg in translated_segments if seg.text.strip()),
+        segments=translated_segments,
+        original_language=effective_language,
+        translation_target_language="en",
+        translation_model=f"MarianMT:{effective_language}->en" if effective_language != "en" else "",
+        translation_generated_at=datetime.utcnow().isoformat() + "Z",
+        source_url=transcript.source_url,
+        retrieved_at=transcript.retrieved_at,
+        metadata={**transcript.metadata},
+    )
+
+
+def chunk_transcript_document(
+    transcript: TranscriptDocument,
+    chunk_duration_seconds: float = 60.0,
+) -> List[TranscriptChunk]:
+    """Create English chunk artifacts from a normalized transcript document."""
+    loose_chunks = group_segments_by_duration(
+        [
+            {"start_sec": seg.start_sec, "end_sec": seg.end_sec, "text": seg.text}
+            for seg in transcript.segments
+        ],
+        chunk_duration_seconds=chunk_duration_seconds,
+    )
+
+    chunks: List[TranscriptChunk] = []
+    for index, chunk in enumerate(loose_chunks):
+        chunk_start = float(chunk["start_sec"])
+        chunk_end = float(chunk["end_sec"])
+        segment_ids = [
+            segment.segment_id
+            for segment in transcript.segments
+            if segment.end_sec >= chunk_start and segment.start_sec <= chunk_end
+        ]
+        chunks.append(
+            TranscriptChunk(
+                chunk_id=f"{transcript.video_id}_chunk_{index + 1}",
+                video_id=transcript.video_id,
+                start_sec=chunk_start,
+                end_sec=chunk_end,
+                text=str(chunk.get("text", "")).strip(),
+                language=transcript.language or "en",
+                text_original=" ".join(
+                    segment.text for segment in transcript.segments
+                    if segment.segment_id in segment_ids
+                ).strip(),
+                text_translated=str(chunk.get("text", "")).strip(),
+                transcript_source=transcript.source_kind,
+                original_segment_ids=segment_ids,
+            )
+        )
+    return chunks
+
+
+def prepare_video_transcripts(
+    source_path: str | Path,
+    video: VideoRecord,
+    *,
+    asr_video_path: Optional[str] = None,
+    asr_model_name: str = "small",
+    chunk_duration_seconds: float = 60.0,
+    write_artifacts: bool = True,
+    allow_live_fetch: Optional[bool] = None,
+    enrich_topics: bool = False,
+    ollama_url: str = "http://localhost:11434",
+    topic_model: str = "qwen2.5:7b",
+) -> Dict[str, Any]:
+    """
+    Acquisition-first transcript preparation for one video.
+
+    Current behavior:
+    - try packaged transcript assets first
+    - fall back to ASR if an explicit media path is provided
+    - normalize an English transcript artifact
+    - chunk after translation/normalization
+    """
+    acquisition = acquire_best_transcript(source_path, video, allow_live_fetch=allow_live_fetch)
+
+    transcript_original: Optional[TranscriptDocument] = acquisition.transcript
+    used_asr = False
+    if transcript_original is None and asr_video_path:
+        segment_dicts, duration_seconds = transcribe_with_timestamps(asr_video_path, model_name=asr_model_name)
+        segments = normalize_segment_dicts(
+            segment_dicts,
+            language=video.language or "",
+            source_kind="local_asr",
+            segment_prefix=video.video_id,
+        )
+        transcript_original = TranscriptDocument(
+            video_id=video.video_id,
+            language=video.language or "",
+            source_kind="local_asr",
+            full_text="\n\n".join(segment.text for segment in segments if segment.text.strip()),
+            segments=segments,
+            original_language=video.language or "",
+            source_url=video.source_url,
+            retrieved_at=datetime.utcnow().isoformat() + "Z",
+            metadata={"duration_seconds": duration_seconds, "source_file": asr_video_path},
+        )
+        used_asr = True
+
+    if transcript_original is None:
+        return {
+            "success": False,
+            "video_id": video.video_id,
+            "requires_asr": acquisition.requires_asr,
+            "error": acquisition.error or "Transcript acquisition failed",
+            "warnings": acquisition.warnings,
+        }
+
+    transcript_english = translate_transcript_to_english(
+        transcript_original,
+        source_language=transcript_original.original_language or transcript_original.language or video.language,
+    )
+    chunks_english = chunk_transcript_document(transcript_english, chunk_duration_seconds=chunk_duration_seconds)
+    topics_english: List[Dict[str, Any]] = []
+    if enrich_topics and chunks_english:
+        topics_english = identify_topics_with_ollama(
+            [chunk.to_dict() for chunk in chunks_english],
+            ollama_url=ollama_url,
+            model=topic_model,
+        )
+
+    artifacts: Dict[str, str] = {}
+    if write_artifacts:
+        artifacts["transcript_original"] = str(write_transcript_artifact(source_path, "transcript_original.json", transcript_original))
+        artifacts["transcript_english"] = str(write_transcript_artifact(source_path, "transcript_english.json", transcript_english))
+        artifacts["chunks_english"] = str(write_chunk_artifact(source_path, "chunks_english.json", chunks_english))
+        if topics_english:
+            artifacts["topics_english"] = str(write_topics_artifact(source_path, "topics_english.json", topics_english, video_id=video.video_id))
+
+    return {
+        "success": True,
+        "video_id": video.video_id,
+        "source_kind": transcript_original.source_kind,
+        "used_asr": used_asr,
+        "requires_asr": False,
+        "artifacts": artifacts,
+        "transcript_original": transcript_original,
+        "transcript_english": transcript_english,
+        "chunks_english": chunks_english,
+        "topics_english": topics_english,
+        "warnings": acquisition.warnings,
+    }
 
 
 def identify_topics_with_ollama(
@@ -277,4 +551,3 @@ def identify_topics_with_ollama(
         chunk["keywords"] = keywords
 
     return chunks
-

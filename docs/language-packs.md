@@ -174,6 +174,25 @@ All content is indexed and stored in English. Language packs enable:
 2. **Website translation**: Offline articles displayed in user's language
 3. **UI translation**: App interface in user's language
 
+### Video Transcript Translation
+
+Video content fits naturally into the same translation architecture because the important searchable layer is transcript text.
+
+That means:
+- acquire or generate transcript text first
+- preserve the original transcript text and timing
+- translate transcript text into English for indexing/search when needed
+- optionally translate transcript text into user-facing languages for playback, browsing, or export
+
+Examples:
+- English video -> transcript -> translate to Spanish for local users
+- Spanish or Arabic video -> transcript -> translate to English for indexing and to other installed languages for display
+
+This keeps video processing aligned with the existing language-pack model:
+- translation works on text, not raw media
+- translated transcript files stay small compared with video assets
+- the same MarianMT/NLLB infrastructure can be reused
+
 ---
 
 ## Translation Flow
@@ -227,6 +246,15 @@ This means:
 - All vectors generated from English text
 - Translation happens at query time and display time
 - Users can still search/chat in any language
+
+### How Video Fits the English-Only Index
+
+For video sources, the same principle applies:
+- keep the original transcript as source truth
+- translate non-English transcripts into English for indexing when using the English-only search path
+- optionally retain translated user-facing variants for browsing or subtitles
+
+This preserves a single primary search space while still supporting multilingual video access.
 
 ---
 
@@ -432,6 +460,37 @@ BACKUP_PATH/
   }
 }
 ```
+
+### Cache Structure for Video Transcript Translation
+
+Video transcript translations should follow the same philosophy as article caching, but preserve timing and transcript provenance.
+
+Suggested shape:
+
+```json
+{
+  "video_id": "abc123",
+  "source_id": "youtube_snapshot_2026",
+  "source_hash": "sha256:def456...",
+  "original_language": "es",
+  "target_language": "en",
+  "translated_at": "2026-03-15T00:00:00Z",
+  "transcript_source": "online_caption",
+  "chunks": [
+    {
+      "start_sec": 0.0,
+      "end_sec": 62.4,
+      "text_original": "Hola a todos...",
+      "text_translated": "Hello everyone..."
+    }
+  ]
+}
+```
+
+This allows:
+- reuse of translated transcript chunks without rerunning the model
+- later retranslation if source transcript text changes
+- multilingual playback/search using lightweight cached text files
 
 ### Cache Invalidation
 
@@ -928,6 +987,38 @@ def view_article(source_id: str, article_id: str):
 
     return render_template('viewer.html', content=html)
 ```
+
+---
+
+## Video Integration
+
+Language packs should integrate directly with the future video-processing pipeline described in [`video_processing.md`](video_processing.md).
+
+Recommended video translation flow:
+
+1. Acquire transcript from packaged subtitles, online captions, imported text, or local ASR
+2. Detect or confirm transcript language
+3. Preserve original transcript text with timestamps
+4. Translate transcript text to English when needed for indexing/search
+5. Optionally translate transcript text to installed user-facing languages
+6. Cache translated transcript layers for reuse
+
+Recommended storage behavior:
+- keep the original transcript as canonical source truth
+- store translated transcript text as additional lightweight layers
+- preserve language metadata and transcript provenance for each layer
+
+Recommended fields for translated transcript storage:
+- `original_language`
+- `translation_target_language`
+- `text_original`
+- `text_translated`
+- `start_sec`
+- `end_sec`
+- `transcript_source`
+- `translation_model`
+
+Because transcripts are text-only, these translated layers should be relatively small compared with source media or model downloads. This makes multilingual video support a good fit for Disaster Clippy's offline pack architecture.
 
 ---
 
