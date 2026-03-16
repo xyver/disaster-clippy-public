@@ -127,13 +127,13 @@ All indexers use `VectorStore.add_documents_incremental()`:
 
 ## ZIM Tools
 
-### Video ZIM Toolkit (Contributed)
+### Video Processing
 
 For video-heavy ZIM archives, a standalone toolkit is available:
 - `offline_tools/video_analysis.py`
 
-Handoff and integration guidance:
-- `docs/video-zim-analysis-handoff.md`
+Processing and integration guidance:
+- `docs/video_processing.md`
 
 ### ZIM Metadata Extraction
 
@@ -355,6 +355,37 @@ The `#page=N` fragment enables direct navigation to the cited page in the browse
 R2_PUBLIC_URL=https://pub-xxx.r2.dev
 ```
 
+### OCR for Scanned PDFs
+
+Some PDFs contain real extractable text, while others are only scanned page images. The long-term direction for PDF processing is the same hybrid strategy used elsewhere in the source pipeline:
+
+- extract existing text first when available
+- run OCR only when the PDF does not contain usable text
+- preserve generated OCR text as an intermediate artifact
+- then normalize, translate, chunk, and index the resulting text
+
+This is especially important for:
+- scanned books
+- historical manuals
+- image-only technical documents
+- PDFs exported from old print archives
+
+Recommended future PDF flow:
+
+1. Inspect PDF for extractable text
+2. If usable text exists, process normally
+3. If text is missing or too sparse, run OCR
+4. Preserve OCR text as source-owned intermediate data
+5. Feed the resulting text into the same downstream indexing and translation layers as normal text PDFs
+
+This keeps PDF handling aligned with the broader "prepare everything" pipeline:
+- HTML -> parse text
+- PDF -> extract text or OCR
+- Video -> acquire transcript or transcribe
+- Subtitles/transcripts -> parse directly
+
+In other words, OCR should be treated as the PDF equivalent of local ASR for video: a text-generation fallback used only when the source does not already provide usable text.
+
 ### PDF Offline Browsing
 
 PDFs are served from the backup folder for offline access:
@@ -496,6 +527,8 @@ During metadata generation, internal links between documents are extracted and s
 - [Validation System](validation.md) - Source validation gates and checks
 - [Jobs System](jobs.md) - Background job processing for indexing
 - [Architecture](architecture.md) - System design and data flow
+- [Video Processing](video_processing.md) - Transcript acquisition, transcription, translation, and indexing strategy
+- [Video Processing Plan](video_processing_plan.md) - Implementation checklist for hybrid video source preparation
 
 ---
 
