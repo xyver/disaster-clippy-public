@@ -1,0 +1,56 @@
+[
+  {
+    "id": "c001_default_chat",
+    "method": "POST",
+    "path": "/api/v1/chat",
+    "payload": {
+      "message": "How do I purify water?"
+    },
+    "expect_status": 200,
+    "expect_json_keys": ["response", "session_id"],
+    "expect_response_contains_any": ["water", "purify", "boil", "filter"]
+  },
+  {
+    "id": "c002_sources_list",
+    "method": "GET",
+    "path": "/api/v1/sources",
+    "expect_status": 200,
+    "expect_json_keys": ["sources", "total_documents"]
+  },
+  {
+    "id": "c003_no_sources_message",
+    "method": "POST",
+    "path": "/api/v1/chat",
+    "payload": {
+      "message": "How do I purify water?",
+      "source_mode": "none",
+      "include": []
+    },
+    "expect_status": 200,
+    "expect_json_keys": ["response", "session_id"],
+    "expect_response_contains_all": ["No sources selected to search"]
+  },
+  {
+    "id": "c004_typo_source_warning",
+    "method": "POST",
+    "path": "/api/v1/chat",
+    "payload": {
+      "message": "How do I purify water?",
+      "source_mode": "none",
+      "include": ["apropedia"]
+    },
+    "expect_status": 200,
+    "expect_json_keys": ["response", "session_id"],
+    "expect_response_contains_any": ["Did you mean", "Searching all sources instead", "not found"]
+  },
+  {
+    "id": "c005_stream_chat",
+    "method": "POST",
+    "path": "/api/v1/chat/stream",
+    "payload": {
+      "message": "How do I purify water?"
+    },
+    "expect_status": 200,
+    "expect_stream_contains": ["data:"]
+  }
+]

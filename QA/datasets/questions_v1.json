@@ -1,0 +1,86 @@
+[
+  {
+    "id": "q001",
+    "question": "How can I purify water if I only have a pot and cloth?",
+    "expected_topics": ["water", "purify", "boil", "cloth"],
+    "expected_sources": ["ready_gov_site", "appropedia"],
+    "notes": "Should prefer practical step-based guidance."
+  },
+  {
+    "id": "q002",
+    "question": "What are simple ways to keep food cold without electricity?",
+    "expected_topics": ["food", "cold", "cooler", "ice", "preservation"],
+    "expected_sources": ["appropedia", "builditsolar2"],
+    "notes": "Useful for power outage scenarios."
+  },
+  {
+    "id": "q003",
+    "question": "How do I make an emergency toilet if plumbing is down?",
+    "expected_topics": ["toilet", "sanitation", "waste", "bucket"],
+    "expected_sources": ["ready_gov_site", "appropedia"],
+    "notes": "Should include hygiene and contamination warnings."
+  },
+  {
+    "id": "q004",
+    "question": "What should go into a basic disaster first aid kit?",
+    "expected_topics": ["first aid", "kit", "supplies", "medical"],
+    "expected_sources": ["ready_gov_site", "wikipedia-medical"],
+    "notes": "Should be list-oriented and practical."
+  },
+  {
+    "id": "q005",
+    "question": "How can I heat a small room safely during a winter power outage?",
+    "expected_topics": ["heat", "winter", "safe", "carbon monoxide", "indoor"],
+    "expected_sources": ["ready_gov_site", "appropedia"],
+    "notes": "Safety matters more than completeness."
+  },
+  {
+    "id": "q006",
+    "question": "What are signs that drinking water may be unsafe after a flood?",
+    "expected_topics": ["flood", "unsafe water", "contamination", "boil"],
+    "expected_sources": ["ready_gov_site", "wikipedia-medical"],
+    "notes": "Should mention contamination and treatment."
+  },
+  {
+    "id": "q007",
+    "question": "How do I store rice and beans long term without pests?",
+    "expected_topics": ["storage", "rice", "beans", "pests", "containers"],
+    "expected_sources": ["appropedia"],
+    "notes": "Good prepper-style storage question."
+  },
+  {
+    "id": "q008",
+    "question": "What should I do if I suspect mild hypothermia?",
+    "expected_topics": ["hypothermia", "warm", "medical", "emergency"],
+    "expected_sources": ["wikipedia-medical", "ready_gov_site"],
+    "notes": "Needs safety-conscious triage guidance."
+  },
+  {
+    "id": "q009",
+    "question": "How can I build a simple solar oven from household materials?",
+    "expected_topics": ["solar oven", "cardboard", "foil", "cook"],
+    "expected_sources": ["builditsolar2", "appropedia"],
+    "notes": "Classic DIY energy question."
+  },
+  {
+    "id": "q010",
+    "question": "What is the safest way to handle and dispose of human waste in an emergency shelter?",
+    "expected_topics": ["shelter", "human waste", "sanitation", "disposal"],
+    "expected_sources": ["ready_gov_site", "appropedia"],
+    "notes": "Public health focused."
+  },
+  {
+    "id": "q011",
+    "question": "How do I make a temporary handwashing station with limited supplies?",
+    "expected_topics": ["handwashing", "temporary", "soap", "water", "sanitation"],
+    "expected_sources": ["appropedia", "ready_gov_site"],
+    "notes": "Should be concrete and low-resource."
+  },
+  {
+    "id": "q012",
+    "question": "What are common symptoms of dehydration and what should I do first?",
+    "expected_topics": ["dehydration", "symptoms", "water", "oral rehydration"],
+    "expected_sources": ["wikipedia-medical", "ready_gov_site"],
+    "notes": "Basic medical grounding check."
+  }
+]
