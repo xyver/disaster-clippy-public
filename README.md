@@ -13,6 +13,24 @@ It is not just a chat app and not just an admin tool. The project is meant to su
 
 ---
 
+## The Platform Behind It
+
+Disaster preparedness is the first vertical. The engine underneath is general purpose.
+
+The core idea is simple: most AI systems hide what they know and you have to trust them. This one makes the knowledge layer visible, swappable, and verifiable. Every answer cites its source. You control what goes in. If something looks wrong, you can check it yourself.
+
+That approach works for any curated body of knowledge, not just preparedness. The same engine has been used for:
+
+- **Building codes** — searchable local and regional code references for construction and compliance
+- **Pandemic preparedness** — flu response protocols and field guidance for organizational planning
+- **Humanitarian reference** — offline-capable search across Appropedia, Akvo, and similar open knowledge bases
+
+The source pack model is what makes this portable. A pack is a discrete, versioned bundle of knowledge — HTML backups, ZIM archives, PDFs, embeddings, and metadata — that can be installed locally, carried offline, or swapped out entirely. The runtime does not care what the pack contains.
+
+If you are a developer thinking about building something similar for your own domain, the architecture is designed with that in mind. See [`docs/clippy-core-extraction.md`](docs/clippy-core-extraction.md) for the direction the portable core is heading, and [`docs/template-deployments.md`](docs/template-deployments.md) for the planned plug-and-play deployment path.
+
+---
+
 ## What It Does
 
 Users ask questions in plain language and get grounded answers from curated source packs.
