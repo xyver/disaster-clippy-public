@@ -83,7 +83,7 @@
     border: 1px solid #d5c8a9;
     font-family: Georgia, 'Times New Roman', serif;
     line-height: 1.7;
-    max-width: min(88%, 760px);
+    max-width: min(96%, 960px);
 }
 
 .message-content {
@@ -191,42 +191,48 @@
 
 .reference-cards {
     display: grid;
-    gap: 0.45rem;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 0.5rem;
 }
 
 .article-card {
     background: #f4efe2;
     border: 1px solid #d5c8a9;
-    border-left: 3px solid #d5c8a9;
+    border-top: 2px solid #d5c8a9;
     border-radius: 4px;
-    padding: 0.6rem 0.8rem;
-    transition: border-left-color 0.15s;
+    padding: 0.6rem 0.75rem;
+    transition: border-top-color 0.15s;
+    min-width: 0; /* prevent grid blowout */
 }
 
 .article-card:hover {
-    border-left-color: #ad4f2d;
+    border-top-color: #ad4f2d;
 }
 
 .article-card-header {
     display: flex;
     align-items: baseline;
-    gap: 0.5rem;
-    margin-bottom: 0.2rem;
+    gap: 0.35rem;
+    margin-bottom: 0.25rem;
 }
 
 .cite-num {
-    font-size: 0.7rem;
+    font-size: 0.65rem;
     color: #8a9c8e;
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     flex-shrink: 0;
 }
 
 .article-card h3 {
-    font-size: 0.88rem;
+    font-size: 0.8rem;
     font-family: Georgia, 'Times New Roman', serif;
     font-weight: normal;
     margin: 0;
-    line-height: 1.4;
+    line-height: 1.35;
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
 }
 
 .article-card h3 a {
@@ -239,16 +245,23 @@
 }
 
 .article-meta {
-    font-size: 0.75rem;
+    font-size: 0.7rem;
     color: #8a9c8e;
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-    margin-bottom: 0.3rem;
+    margin-bottom: 0.2rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .article-snippet {
-    font-size: 0.82rem;
+    font-size: 0.75rem;
     color: #5f6b61;
-    line-height: 1.5;
+    line-height: 1.4;
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
 }
 
 .zim-title {
@@ -444,6 +457,15 @@
         max-height: 65vh;
     }
     .message.assistant {
-        max-width: 95%;
+        max-width: 98%;
+    }
+    .reference-cards {
+        grid-template-columns: repeat(3, 1fr);
+    }
+}
+
+@media (max-width: 600px) {
+    .reference-cards {
+        grid-template-columns: repeat(2, 1fr);
     }
 }
