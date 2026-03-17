@@ -25,15 +25,15 @@
         <div style="display: flex; align-items: center; gap: 1rem;">
             <!-- Search Language selector for pre-localized sources (Phase 4) -->
             <div id="searchLanguageSelector" style="display: none;">
-                <label for="searchLanguage" style="color: #9c6ccc; font-size: 0.85rem; margin-right: 0.5rem; font-weight: 500;">Search:</label>
-                <select id="searchLanguage" style="background: #16213e; border: 2px solid #9c6ccc; color: #e0e0e0; padding: 0.3rem 0.6rem; border-radius: 6px; font-size: 0.85rem; cursor: pointer; font-weight: 500;">
+                <label for="searchLanguage" style="color: #5f6b61; font-size: 0.85rem; margin-right: 0.5rem; font-weight: 500;">Search:</label>
+                <select id="searchLanguage" style="background: #fff9ee; border: 1px solid #d5c8a9; color: #1a2c24; padding: 0.3rem 0.6rem; border-radius: 6px; font-size: 0.85rem; cursor: pointer;">
                     <option value="en">English</option>
                 </select>
             </div>
             <!-- Runtime translation selector (Phase 1) -->
             <div id="languageSelector" style="display: none;">
-                <label for="articleLanguage" style="color: #4ecca3; font-size: 0.85rem; margin-right: 0.5rem; font-weight: 500;">Translate:</label>
-                <select id="articleLanguage" style="background: #16213e; border: 2px solid #4ecca3; color: #e0e0e0; padding: 0.3rem 0.6rem; border-radius: 6px; font-size: 0.85rem; cursor: pointer; font-weight: 500;">
+                <label for="articleLanguage" style="color: #5f6b61; font-size: 0.85rem; margin-right: 0.5rem; font-weight: 500;">Translate:</label>
+                <select id="articleLanguage" style="background: #fff9ee; border: 1px solid #d5c8a9; color: #1a2c24; padding: 0.3rem 0.6rem; border-radius: 6px; font-size: 0.85rem; cursor: pointer;">
                     <option value="en">English (Original)</option>
                 </select>
             </div>
@@ -125,8 +125,7 @@
 
                 // Update border color to indicate active translation
                 if (activeLanguage !== 'en') {
-                    select.style.borderColor = '#4ecca3';
-                    select.style.boxShadow = '0 0 8px rgba(78, 204, 163, 0.3)';
+                    select.style.borderColor = '#ad4f2d';
                 }
 
                 // Show selector
@@ -153,21 +152,13 @@
                         const result = await setResponse.json();
                         console.log('[Language] Set language result:', result);
 
-                        // Visual feedback - success
                         this.style.background = originalBg;
                         this.disabled = false;
-
-                        if (langCode !== 'en') {
-                            this.style.borderColor = '#4ecca3';
-                            this.style.boxShadow = '0 0 8px rgba(78, 204, 163, 0.3)';
-                        } else {
-                            this.style.borderColor = '#4ecca3';
-                            this.style.boxShadow = 'none';
-                        }
+                        this.style.borderColor = langCode !== 'en' ? '#ad4f2d' : '#d5c8a9';
                     } catch (e) {
                         console.error('[Language] Failed to set language:', e);
                         this.style.background = originalBg;
-                        this.style.borderColor = '#e94560';
+                        this.style.borderColor = '#ad4f2d';
                         this.disabled = false;
                     }
                 });
@@ -227,8 +218,7 @@
                 const storedLang = localStorage.getItem('searchLanguage') || 'en';
                 if (languageMap.has(storedLang)) {
                     select.value = storedLang;
-                    // Visual feedback
-                    select.style.boxShadow = '0 0 8px rgba(156, 108, 204, 0.3)';
+                    select.style.borderColor = '#ad4f2d';
                 }
 
                 // Show selector
@@ -244,12 +234,7 @@
                     // Store preference
                     localStorage.setItem('searchLanguage', langCode);
 
-                    // Visual feedback
-                    if (langCode !== 'en') {
-                        this.style.boxShadow = '0 0 8px rgba(156, 108, 204, 0.3)';
-                    } else {
-                        this.style.boxShadow = 'none';
-                    }
+                    this.style.borderColor = langCode !== 'en' ? '#ad4f2d' : '#d5c8a9';
 
                     // The search routing will use this preference on next query
                     // Could reload sources list here if needed
