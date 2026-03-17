@@ -7,7 +7,9 @@
       "Bash(dir /b \"C:\\\\Users\\\\bryan\\\\webtest\")",
       "Read(//c/Users/bryan/webtest/clippy_core/**)",
       "Bash(supabase migration new:*)",
-      "Bash(dir:*)"
+      "Bash(dir:*)",
+      "WebFetch(domain:www.disasterclippy.com)",
+      "WebFetch(domain:daedalmap.com)"
     ],
     "additionalDirectories": [
       "C:\\Users\\bryan\\webtest"
