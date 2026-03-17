@@ -12,8 +12,8 @@
     <header>
         <h1>Disaster Clippy</h1>
         <p>Curated preparedness knowledge. Every answer, cited.</p>
-        <p style="margin-top: 0.5rem;">
-            <a href="https://github.com/xyver/disaster-clippy-public#readme" target="_blank">About this project</a>
+        <p class="header-links">
+            <a href="https://github.com/xyver/disaster-clippy-public#readme" target="_blank" rel="noopener noreferrer">About this project</a>
             | <a href="/suggest">Suggest a site</a>
             | <a href="/visualise">Visualize</a>
             <span id="adminLink" style="display: none;"> | <a href="/useradmin/">Local Settings</a></span>
@@ -22,22 +22,22 @@
 
     <div class="stats-bar">
         <span id="indexStats">Loading...</span>
-        <div style="display: flex; align-items: center; gap: 1rem;">
-            <!-- Search Language selector for pre-localized sources (Phase 4) -->
+        <div class="stats-bar-controls">
+            <!-- Search Language selector for pre-localized sources -->
             <div id="searchLanguageSelector" style="display: none;">
-                <label for="searchLanguage" style="color: #5f6b61; font-size: 0.85rem; margin-right: 0.5rem; font-weight: 500;">Search:</label>
-                <select id="searchLanguage" style="background: #fff9ee; border: 1px solid #d5c8a9; color: #1a2c24; padding: 0.3rem 0.6rem; border-radius: 6px; font-size: 0.85rem; cursor: pointer;">
+                <label for="searchLanguage" class="lang-label">Search:</label>
+                <select id="searchLanguage" class="lang-select">
                     <option value="en">English</option>
                 </select>
             </div>
-            <!-- Runtime translation selector (Phase 1) -->
+            <!-- Runtime translation selector -->
             <div id="languageSelector" style="display: none;">
-                <label for="articleLanguage" style="color: #5f6b61; font-size: 0.85rem; margin-right: 0.5rem; font-weight: 500;">Translate:</label>
-                <select id="articleLanguage" style="background: #fff9ee; border: 1px solid #d5c8a9; color: #1a2c24; padding: 0.3rem 0.6rem; border-radius: 6px; font-size: 0.85rem; cursor: pointer;">
+                <label for="articleLanguage" class="lang-label">Translate:</label>
+                <select id="articleLanguage" class="lang-select">
                     <option value="en">English (Original)</option>
                 </select>
             </div>
-            <button id="toggleSources">Collection</button>
+            <button id="toggleSources" aria-expanded="false" aria-controls="sourcesPanel">Collection</button>
         </div>
     </div>
 
@@ -59,7 +59,7 @@
                     <div class="message-content">What are you looking for? I'll search the collection and point you to the source.</div>
                 </div>
             </div>
-            <div class="loading" id="loading">Searching knowledge base...</div>
+            <div class="loading" id="loading">Searching collection...</div>
             <div class="chat-input">
                 <div class="connection-status" id="connectionStatus" title="Connection status">
                     <span class="connection-dot online" id="connectionDot"></span>

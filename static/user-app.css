@@ -56,3 +56,37 @@ header a {
 header a:hover {
     text-decoration: underline;
 }
+
+.header-links {
+    margin-top: 0.5rem;
+}
+
+/* Language selector chrome — admin-only, shown conditionally */
+.stats-bar-controls {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+}
+
+.lang-label {
+    color: var(--muted);
+    font-size: 0.85rem;
+    margin-right: 0.5rem;
+    font-weight: 500;
+}
+
+.lang-select {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    color: var(--ink);
+    padding: 0.3rem 0.6rem;
+    border-radius: 6px;
+    font-size: 0.85rem;
+    cursor: pointer;
+    font-family: var(--font-sans);
+}
+
+.lang-select:focus {
+    outline: none;
+    border-color: var(--accent);
+}

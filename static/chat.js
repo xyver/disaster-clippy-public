@@ -382,6 +382,7 @@ function updateToggleButton() {
 // Toggle sources panel
 function toggleSourcesPanel() {
     sourcesPanel.classList.toggle('open');
+    toggleSourcesBtn.setAttribute('aria-expanded', sourcesPanel.classList.contains('open'));
 }
 
 // Select all sources
