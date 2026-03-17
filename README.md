@@ -1,13 +1,13 @@
 # Disaster Clippy
 
-**Preparedness knowledge you can use online, offline, and locally.**
+**Conversational search over your own data, online, offline, and locally.**
 
-Disaster Clippy is an offline-capable AI search system for emergency preparedness, resilience, survival skills, medical references, and practical DIY knowledge. It combines a hosted app, a local runtime, and advanced local admin/source tools around a shared source-pack model.
+Disaster Clippy is an offline-capable AI search system for any curated body of knowledge. It combines a hosted demo, a local runtime, and advanced local admin/source tools around a shared collection and source-pack model.
 
 It is not just a chat app and not just an admin tool. The project is meant to support four related surfaces:
 
-- hosted public app
-- product and catalog site
+- hosted demo app
+- product and documentation site
 - downloadable local runtime
 - downloadable advanced local admin toolkit
 
@@ -15,17 +15,17 @@ It is not just a chat app and not just an admin tool. The project is meant to su
 
 ## The Platform Behind It
 
-Disaster preparedness is the first vertical. The engine underneath is general purpose.
+Disaster preparedness is the first example deployment. The engine underneath is general purpose.
 
 The core idea is simple: most AI systems hide what they know and you have to trust them. This one makes the knowledge layer visible, swappable, and verifiable. Every answer cites its source. You control what goes in. If something looks wrong, you can check it yourself.
 
-That approach works for any curated body of knowledge, not just preparedness. The same engine has been used for:
+That approach works for any curated body of knowledge. The same engine has been used for:
 
 - **Building codes** — searchable local and regional code references for construction and compliance
 - **Pandemic preparedness** — flu response protocols and field guidance for organizational planning
 - **Humanitarian reference** — offline-capable search across Appropedia, Akvo, and similar open knowledge bases
 
-The source pack model is what makes this portable. A pack is a discrete, versioned bundle of knowledge — HTML backups, ZIM archives, PDFs, embeddings, and metadata — that can be installed locally, carried offline, or swapped out entirely. The runtime does not care what the pack contains.
+The source pack model is what makes this portable. On the public site and in the app, people explore collections. Under the hood, a pack is the discrete, versioned bundle of knowledge — HTML backups, ZIM archives, PDFs, embeddings, and metadata — that can be installed locally, carried offline, or swapped out entirely. The runtime does not care what the pack contains.
 
 If you are a developer thinking about building something similar for your own domain, the architecture is designed with that in mind. See [`docs/clippy-core-extraction.md`](docs/clippy-core-extraction.md) for the direction the portable core is heading, and [`docs/template-deployments.md`](docs/template-deployments.md) for the planned plug-and-play deployment path.
 
@@ -33,18 +33,18 @@ If you are a developer thinking about building something similar for your own do
 
 ## What It Does
 
-Users ask questions in plain language and get grounded answers from curated source packs.
+Users ask questions in plain language and get grounded answers from curated collections.
 
 Example questions:
 
-- "How do I purify water in an emergency?"
-- "What should I keep in a first aid kit?"
-- "Show me practical guides on food preservation"
-- "How can I heat a room safely during a winter outage?"
+- "What are the main code requirements for rooftop solar in this jurisdiction?"
+- "Show me the strongest references in this internal operations manual"
+- "What does this humanitarian guide say about water storage?"
+- "Find practical how-to material across this archive"
 
 The system is designed so the same general experience can work:
 
-- in a hosted public app
+- in a hosted demo app
 - on a laptop or local server
 - on a Raspberry Pi or air-gapped node
 
@@ -52,25 +52,25 @@ The system is designed so the same general experience can work:
 
 ## Product Model
 
-### Hosted App
+### Hosted Demo
 
-The hosted app is the easiest way to use Disaster Clippy.
+The hosted demo is the easiest way to experience Disaster Clippy.
 
 It is intended for:
 
-- normal end users
 - people exploring the system for the first time
+- teams validating a collection before self-hosting
 - users who want search/chat without running admin tooling
 
 ### Local Runtime
 
-The local runtime is for users who want resilience and control.
+The local runtime is for people who want resilience, control, and their own data.
 
 It is intended for:
 
 - offline setups
 - LAN/Raspberry Pi deployments
-- organizations or individuals carrying selected source packs locally
+- organizations or individuals carrying selected collections locally
 
 ### Advanced Local Admin
 
@@ -106,13 +106,15 @@ This lets users:
 - choose which sources to install or sync
 - carry the same pack choices between hosted and local use
 
+On the public site and in the app, these are presented as collections. In the runtime and tooling, packs are the portable unit underneath.
+
 ---
 
 ## Quick Start
 
-### 1. Use the Hosted App
+### 1. Use the Hosted Demo
 
-Current hosted app:
+Current hosted demo:
 
 - `https://app.disasterclippy.com`
 
@@ -184,7 +186,7 @@ Use the cloud install when you want:
 
 ### For Users
 
-- natural language search across curated preparedness knowledge
+- natural language search across curated collections
 - grounded responses with source attribution
 - source filtering
 - multi-turn conversation
