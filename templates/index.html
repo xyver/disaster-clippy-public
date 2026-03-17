@@ -83,8 +83,9 @@
             .then(data => {
                 if (data.available) {
                     document.getElementById('adminLink').style.display = 'inline';
-                    // Load language selector for admin users
+                    // Language selectors are admin-only — only load when admin is available
                     loadLanguageSelector();
+                    loadSearchLanguageSelector();
                 }
             })
             .catch(() => {}); // Silently fail if endpoint unavailable
@@ -245,8 +246,7 @@
             }
         }
 
-        // Load both selectors
-        loadSearchLanguageSelector();
+        // Search language selector loaded inside admin check above
     </script>
 </body>
 </html>
