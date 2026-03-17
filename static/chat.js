@@ -8,7 +8,6 @@ const chatMessages = document.getElementById('chatMessages');
 const chatForm = document.getElementById('chatForm');
 const userInput = document.getElementById('userInput');
 const sendBtn = document.getElementById('sendBtn');
-const articlesList = document.getElementById('articlesList');
 const loading = document.getElementById('loading');
 const indexStats = document.getElementById('indexStats');
 const sourcesPanel = document.getElementById('sourcesPanel');
@@ -66,52 +65,54 @@ function addMessage(content, isUser = false) {
     chatMessages.scrollTop = chatMessages.scrollHeight;
 }
 
-// Render articles panel
-function renderArticles(articles) {
-    if (!articles || articles.length === 0) {
-        articlesList.innerHTML = '<div class="empty-state">No matching articles found</div>';
-        return;
-    }
+// Attach reference cards to a specific message div
+function renderArticles(articles, messageDiv) {
+    if (!articles || articles.length === 0) return;
 
-    articlesList.innerHTML = articles.map((article, idx) => {
+    const refsSection = document.createElement('div');
+    refsSection.className = 'message-references';
+
+    const label = document.createElement('p');
+    label.className = 'references-label';
+    label.textContent = 'References';
+    refsSection.appendChild(label);
+
+    const cardsDiv = document.createElement('div');
+    cardsDiv.className = 'reference-cards';
+
+    cardsDiv.innerHTML = articles.map((article, idx) => {
         const url = article.url || '';
         const isLocalZim = url.startsWith('/zim/');
         const isLocalBackup = url.startsWith('/backup/');
         const isExternalUrl = url.startsWith('http://') || url.startsWith('https://');
 
-        // Build the title HTML with appropriate link
         let titleHtml;
         if (isLocalZim) {
-            // Local ZIM URL - opens in new tab to preserve chat history
             titleHtml = `<a href="${escapeHtml(url)}" target="_blank" class="zim-link">${escapeHtml(article.title)}</a><span class="zim-badge">local</span>`;
         } else if (isLocalBackup) {
-            // Local HTML backup URL - opens in new tab
             titleHtml = `<a href="${escapeHtml(url)}" target="_blank" class="backup-link">${escapeHtml(article.title)}</a><span class="zim-badge">local</span>`;
         } else if (isExternalUrl) {
-            // External URL - opens in new tab
             titleHtml = `<a href="${escapeHtml(url)}" target="_blank">${escapeHtml(article.title)}</a>`;
         } else if (url.startsWith('zim://')) {
-            // Fallback for unconverted zim:// URLs (should not happen)
             titleHtml = `<span class="zim-title">${escapeHtml(article.title)}</span><span class="zim-badge">offline</span>`;
         } else {
-            // No URL or unknown format
             titleHtml = `<span>${escapeHtml(article.title)}</span>`;
         }
 
         return `
             <div class="article-card">
-                <h3>
-                    <span>#${idx + 1}</span>
-                    ${titleHtml}
-                    <span class="score-badge">${(article.score * 100).toFixed(0)}% match</span>
-                </h3>
-                <div class="article-meta">
-                    Source: ${escapeHtml(article.source)}${(isLocalZim || isLocalBackup) ? ' (offline)' : ''}
+                <div class="article-card-header">
+                    <span class="cite-num">${idx + 1}</span>
+                    <h3>${titleHtml}</h3>
                 </div>
+                <div class="article-meta">${escapeHtml(article.source)}${(isLocalZim || isLocalBackup) ? ' \u00b7 offline' : ''}</div>
                 <div class="article-snippet">${escapeHtml(article.snippet)}</div>
             </div>
         `;
     }).join('');
+
+    refsSection.appendChild(cardsDiv);
+    messageDiv.appendChild(refsSection);
 }
 
 // Send chat message with streaming
@@ -198,11 +199,11 @@ async function sendMessage(message) {
                             contentDiv.innerHTML = parseMarkdown(fullResponse);
                             chatMessages.scrollTop = chatMessages.scrollHeight;
                         } else if (data.startsWith('[ARTICLES]')) {
-                            // Parse articles JSON
+                            // Parse articles JSON and attach to this message
                             try {
                                 const articlesJson = data.substring(10);
                                 const articles = JSON.parse(articlesJson);
-                                renderArticles(articles);
+                                renderArticles(articles, messageDiv);
                             } catch (e) {
                                 console.error('Failed to parse articles:', e);
                             }
@@ -370,11 +371,11 @@ function onSourceChange() {
 function updateToggleButton() {
     const totalSources = Object.keys(availableSources).length;
     if (selectedSources === null || selectedSources.length === totalSources) {
-        toggleSourcesBtn.textContent = `Select Sources (${totalSources}/${totalSources})`;
+        toggleSourcesBtn.textContent = `Collection (${totalSources})`;
     } else if (selectedSources.length === 0) {
-        toggleSourcesBtn.textContent = `Select Sources (0/${totalSources})`;
+        toggleSourcesBtn.textContent = `Collection (0/${totalSources})`;
     } else {
-        toggleSourcesBtn.textContent = `Select Sources (${selectedSources.length}/${totalSources})`;
+        toggleSourcesBtn.textContent = `Collection (${selectedSources.length}/${totalSources})`;
     }
 }
 

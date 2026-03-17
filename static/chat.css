@@ -89,7 +89,6 @@ header a:hover {
     flex: 1;
     display: flex;
     flex-direction: column;
-    border-right: 1px solid #d5c8a9;
     height: 100%;
     overflow: hidden;
 }
@@ -102,16 +101,16 @@ header a:hover {
 }
 
 .message {
-    margin-bottom: 1rem;
-    padding: 0.75rem 1rem;
+    margin-bottom: 1.25rem;
+    padding: 0.85rem 1.1rem;
     border-radius: 8px;
-    max-width: 85%;
 }
 
 .message.user {
     background: #ead9b8;
     border: 1px solid #d5c8a9;
     margin-left: auto;
+    max-width: 75%;
 }
 
 .message.assistant {
@@ -119,6 +118,7 @@ header a:hover {
     border: 1px solid #d5c8a9;
     font-family: Georgia, 'Times New Roman', serif;
     line-height: 1.7;
+    max-width: min(88%, 760px);
 }
 
 .message-content {
@@ -200,42 +200,60 @@ header a:hover {
     cursor: not-allowed;
 }
 
-/* References Panel */
-.articles-panel {
-    width: 400px;
-    overflow-y: auto;
-    overflow-x: hidden;
-    padding: 1rem;
-    background: #fff9ee;
-    flex-shrink: 0;
+/* Inline references — attached below each assistant message */
+.message-references {
+    margin-top: 1rem;
+    padding-top: 0.85rem;
+    border-top: 1px solid #d5c8a9;
 }
 
-.articles-panel h2 {
-    font-size: 0.75rem;
+.references-label {
+    font-size: 0.68rem;
     text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: #5f6b61;
-    margin-bottom: 1rem;
-    padding-bottom: 0.5rem;
-    border-bottom: 1px solid #d5c8a9;
+    letter-spacing: 0.1em;
+    color: #8a9c8e;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    margin-bottom: 0.6rem;
+}
+
+.reference-cards {
+    display: grid;
+    gap: 0.45rem;
 }
 
 .article-card {
     background: #f4efe2;
     border: 1px solid #d5c8a9;
-    border-radius: 8px;
-    padding: 1rem;
-    margin-bottom: 0.75rem;
+    border-left: 3px solid #d5c8a9;
+    border-radius: 4px;
+    padding: 0.6rem 0.8rem;
+    transition: border-left-color 0.15s;
 }
 
 .article-card:hover {
-    border-color: #ad4f2d;
+    border-left-color: #ad4f2d;
+}
+
+.article-card-header {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+    margin-bottom: 0.2rem;
+}
+
+.cite-num {
+    font-size: 0.7rem;
+    color: #8a9c8e;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    flex-shrink: 0;
 }
 
 .article-card h3 {
-    font-size: 0.95rem;
+    font-size: 0.88rem;
     font-family: Georgia, 'Times New Roman', serif;
-    margin-bottom: 0.5rem;
+    font-weight: normal;
+    margin: 0;
+    line-height: 1.4;
 }
 
 .article-card h3 a {
@@ -248,25 +266,16 @@ header a:hover {
 }
 
 .article-meta {
-    font-size: 0.8rem;
-    color: #5f6b61;
-    margin-bottom: 0.5rem;
+    font-size: 0.75rem;
+    color: #8a9c8e;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    margin-bottom: 0.3rem;
 }
 
 .article-snippet {
-    font-size: 0.85rem;
+    font-size: 0.82rem;
     color: #5f6b61;
     line-height: 1.5;
-}
-
-.score-badge {
-    display: inline-block;
-    background: #ead9b8;
-    color: #45644d;
-    padding: 0.15rem 0.5rem;
-    border-radius: 4px;
-    font-size: 0.75rem;
-    margin-left: 0.5rem;
 }
 
 .zim-title {
@@ -451,20 +460,17 @@ header a:hover {
 /* Responsive */
 @media (max-width: 900px) {
     .container {
-        flex-direction: column;
         height: auto;
         min-height: calc(100vh - 140px);
     }
     .chat-panel {
         height: auto;
-        min-height: 400px;
+        min-height: 500px;
     }
     .chat-messages {
-        max-height: 50vh;
+        max-height: 65vh;
     }
-    .articles-panel {
-        width: 100%;
-        height: auto;
-        max-height: 300px;
+    .message.assistant {
+        max-width: 95%;
     }
 }
