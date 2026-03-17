@@ -3,52 +3,11 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Suggest a Site - Disaster Clippy</title>
+    <title>Suggest a Source - Disaster Clippy</title>
     <link rel="icon" type="image/png" href="/static/paperclip.png">
     <link rel="stylesheet" href="/static/user-app.css">
     <style>
-        * {
-            box-sizing: border-box;
-            margin: 0;
-            padding: 0;
-        }
-
-        body {
-            font-family: 'Roboto', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-            background: #1a1a2e;
-            color: #eee;
-            min-height: 100vh;
-            display: flex;
-            flex-direction: column;
-        }
-
-        header {
-            background: #16213e;
-            padding: 1rem 2rem;
-            border-bottom: 1px solid #0f3460;
-        }
-
-        header h1 {
-            font-size: 1.5rem;
-            color: #e94560;
-        }
-
-        header p {
-            font-size: 0.9rem;
-            color: #888;
-            margin-top: 0.25rem;
-        }
-
-        header a {
-            color: #4ecca3;
-            text-decoration: none;
-        }
-
-        header a:hover {
-            text-decoration: underline;
-        }
-
-        .container {
+        .suggest-container {
             max-width: 600px;
             margin: 2rem auto;
             padding: 0 1rem;
@@ -56,20 +15,21 @@
         }
 
         .card {
-            background: #16213e;
-            border: 1px solid #0f3460;
+            background: var(--surface);
+            border: 1px solid var(--line);
             border-radius: 8px;
             padding: 2rem;
         }
 
         .card h2 {
-            color: #4ecca3;
+            font-family: var(--font-serif);
+            color: var(--ink);
             margin-bottom: 1rem;
             font-size: 1.25rem;
         }
 
         .card p {
-            color: #aaa;
+            color: var(--muted);
             margin-bottom: 1.5rem;
             line-height: 1.6;
         }
@@ -80,7 +40,7 @@
 
         .form-group label {
             display: block;
-            color: #888;
+            color: var(--muted);
             font-size: 0.85rem;
             margin-bottom: 0.5rem;
         }
@@ -89,10 +49,10 @@
         .form-group textarea {
             width: 100%;
             padding: 0.75rem;
-            background: #1a1a2e;
-            border: 1px solid #0f3460;
+            background: var(--bg);
+            border: 1px solid var(--line);
             border-radius: 6px;
-            color: #eee;
+            color: var(--ink);
             font-size: 1rem;
             font-family: inherit;
         }
@@ -100,7 +60,7 @@
         .form-group input[type="text"]:focus,
         .form-group textarea:focus {
             outline: none;
-            border-color: #4ecca3;
+            border-color: var(--accent);
         }
 
         .form-group textarea {
@@ -109,8 +69,8 @@
         }
 
         .btn {
-            background: #4ecca3;
-            color: #1a1a2e;
+            background: var(--accent);
+            color: var(--surface);
             border: none;
             padding: 0.75rem 1.5rem;
             border-radius: 6px;
@@ -118,95 +78,99 @@
             font-weight: 500;
             cursor: pointer;
             transition: background 0.2s;
+            font-family: inherit;
         }
 
-        .btn:hover {
-            background: #3db890;
-        }
+        .btn:hover { background: var(--accent-dark); }
 
         .btn:disabled {
-            background: #555;
+            background: var(--faint);
             cursor: not-allowed;
         }
 
-        .message {
+        .form-message {
             padding: 1rem;
             border-radius: 6px;
             margin-top: 1rem;
             display: none;
+            font-size: 0.9rem;
         }
 
-        .message.success {
-            background: #1a2e1a;
-            border: 1px solid #4ecca3;
-            color: #4ecca3;
+        .form-message.success {
+            background: var(--surface);
+            border: 1px solid var(--leaf);
+            color: var(--leaf);
         }
 
-        .message.error {
-            background: #2e1a1a;
-            border: 1px solid #e94560;
-            color: #e94560;
+        .form-message.error {
+            background: var(--surface);
+            border: 1px solid var(--accent);
+            color: var(--accent);
         }
 
         .examples {
-            margin-top: 1rem;
+            margin-top: 1.25rem;
             padding: 1rem;
-            background: #1a1a2e;
+            background: var(--bg);
+            border: 1px solid var(--line);
             border-radius: 6px;
             font-size: 0.85rem;
-            color: #888;
+            color: var(--muted);
+            line-height: 1.7;
         }
 
         .examples strong {
-            color: #aaa;
+            color: var(--ink);
+            display: block;
+            margin-bottom: 0.25rem;
         }
     </style>
 </head>
 <body>
     <header>
         <h1>Disaster Clippy</h1>
-        <p>Conversational search for DIY guides and humanitarian resources</p>
+        <p>Curated preparedness knowledge. Every answer, cited.</p>
         <p style="margin-top: 0.5rem;">
-            <a href="/">Back to Search</a>
+            <a href="/">Back to search</a>
         </p>
     </header>
 
-    <div class="container">
+    <div class="suggest-container">
         <div class="card">
-            <h2>Suggest a Site</h2>
+            <h2>Suggest a source</h2>
             <p>
-                Found a website with useful DIY guides, survival tips, or humanitarian resources?
-                Suggest it here and our team will review it for inclusion in our search engine.
+                Found a website, document, or resource that belongs in the collection?
+                Suggest it here and we'll review it for inclusion.
             </p>
 
             <form id="suggestForm" onsubmit="submitSuggestion(event)">
                 <div class="form-group">
-                    <label for="url">Website URL *</label>
+                    <label for="url">Source URL *</label>
                     <input type="text" id="url" name="url" placeholder="https://example.com" required>
                 </div>
 
                 <div class="form-group">
-                    <label for="description">Why is this site useful? (optional)</label>
-                    <textarea id="description" name="description" placeholder="e.g., Great collection of solar cooker designs..."></textarea>
+                    <label for="description">Why does it belong in the collection? (optional)</label>
+                    <textarea id="description" name="description" placeholder="e.g., Thorough water purification guides from a trusted organization..."></textarea>
                 </div>
 
-                <button type="submit" class="btn" id="submitBtn">Submit Suggestion</button>
+                <button type="submit" class="btn" id="submitBtn">Submit suggestion</button>
             </form>
 
-            <div id="successMessage" class="message success">
-                Thank you! Your suggestion has been submitted for review.
+            <div id="successMessage" class="form-message success">
+                Thank you. Your suggestion has been submitted for review.
             </div>
 
-            <div id="errorMessage" class="message error">
+            <div id="errorMessage" class="form-message error">
                 Something went wrong. Please try again.
             </div>
 
             <div class="examples">
-                <strong>Good examples:</strong><br>
-                - Wikis about solar energy, water purification, or emergency preparedness<br>
-                - DIY project sites with tutorials and guides<br>
-                - Open-source hardware documentation<br>
-                - Humanitarian organization resource pages
+                <strong>Good examples</strong>
+                Government and NGO emergency preparedness guides<br>
+                Wikis covering water, food, shelter, or medical self-sufficiency<br>
+                Open-source hardware and off-grid systems documentation<br>
+                Humanitarian organization field manuals and resource pages
             </div>
         </div>
     </div>
@@ -221,11 +185,9 @@
             const urlInput = document.getElementById('url');
             const descInput = document.getElementById('description');
 
-            // Hide messages
             successMsg.style.display = 'none';
             errorMsg.style.display = 'none';
 
-            // Basic URL validation
             let url = urlInput.value.trim();
             if (!url.startsWith('http://') && !url.startsWith('https://')) {
                 url = 'https://' + url;
@@ -237,13 +199,8 @@
             try {
                 const response = await fetch('/api/suggest-site', {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        url: url,
-                        description: descInput.value.trim()
-                    })
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ url: url, description: descInput.value.trim() })
                 });
 
                 const data = await response.json();
@@ -261,7 +218,7 @@
                 errorMsg.style.display = 'block';
             } finally {
                 btn.disabled = false;
-                btn.textContent = 'Submit Suggestion';
+                btn.textContent = 'Submit suggestion';
             }
         }
     </script>
