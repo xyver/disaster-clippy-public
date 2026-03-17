@@ -174,6 +174,7 @@ async function sendMessage(message) {
         const decoder = new TextDecoder();
         let fullResponse = '';
         let buffer = '';  // Buffer to handle partial SSE messages
+        let pendingArticles = null;  // Hold articles until text is done streaming
 
         while (true) {
             const { done, value } = await reader.read();
@@ -195,15 +196,17 @@ async function sendMessage(message) {
                         const data = line.substring(6);
 
                         if (data === '[DONE]') {
-                            // Stream complete - parse markdown
+                            // Stream complete - parse markdown, then attach references
                             contentDiv.innerHTML = parseMarkdown(fullResponse);
+                            if (pendingArticles) {
+                                renderArticles(pendingArticles, messageDiv);
+                            }
                             chatMessages.scrollTop = chatMessages.scrollHeight;
                         } else if (data.startsWith('[ARTICLES]')) {
-                            // Parse articles JSON and attach to this message
+                            // Store articles — render after text finishes so they appear below
                             try {
                                 const articlesJson = data.substring(10);
-                                const articles = JSON.parse(articlesJson);
-                                renderArticles(articles, messageDiv);
+                                pendingArticles = JSON.parse(articlesJson);
                             } catch (e) {
                                 console.error('Failed to parse articles:', e);
                             }
