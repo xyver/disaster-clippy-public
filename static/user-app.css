@@ -4,24 +4,21 @@
  * Edit this file to update the design across all pages.
  */
 
-/* Google Fonts - Roboto */
-@import url('https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap');
-
 /* CSS Variables for consistent theming */
 :root {
-    --color-bg-dark: #1a1a2e;
-    --color-bg-medium: #16213e;
-    --color-bg-light: #0f3460;
-    --color-text-primary: #eee;
-    --color-text-secondary: #aaa;
-    --color-text-muted: #888;
-    --color-text-faint: #666;
-    --color-accent-red: #e94560;
-    --color-accent-red-hover: #ff6b6b;
-    --color-accent-green: #4ecca3;
-    --color-accent-green-hover: #3db890;
-    --color-border: #0f3460;
-    --font-family: 'Roboto', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --bg: #f4efe2;
+    --surface: #fff9ee;
+    --surface-strong: #fff6e7;
+    --ink: #1a2c24;
+    --muted: #5f6b61;
+    --faint: #8a9c8e;
+    --line: #d5c8a9;
+    --sand: #ead9b8;
+    --accent: #ad4f2d;
+    --accent-dark: #6b2d16;
+    --leaf: #45644d;
+    --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --font-serif: Georgia, 'Times New Roman', serif;
 }
 
 /* Reset and Base */
