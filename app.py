@@ -69,6 +69,7 @@ _mode = os.getenv("VECTOR_DB_MODE", "NOT_SET")
 print(f"[STARTUP] .env path: {_env_path}, exists: {_env_path.exists()}, VECTOR_DB_MODE={_mode}")
 
 import json
+import re
 import difflib
 from typing import List, Optional, Dict, Any, Tuple
 from datetime import datetime, timedelta, timezone
