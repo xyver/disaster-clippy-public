@@ -96,7 +96,7 @@ This lets users:
 
 Current hosted app:
 
-- `https://disaster-clippy.up.railway.app/`
+- `https://app.disasterclippy.com`
 
 ### 2. Run Locally
 
@@ -132,7 +132,7 @@ ollama pull llama3.2:3b
 ### 4. Use the API
 
 ```bash
-curl -X POST "https://disaster-clippy.up.railway.app/api/v1/chat" \
+curl -X POST "https://app.disasterclippy.com/api/v1/chat" \
   -H "Content-Type: application/json" \
   -d '{"message": "How do I purify water?"}'
 ```
