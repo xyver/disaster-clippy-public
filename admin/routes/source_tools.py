@@ -12,6 +12,7 @@ from pathlib import Path
 from datetime import datetime
 import json
 import os
+import re
 
 from offline_tools.schemas import (
     get_manifest_file, get_metadata_file, get_index_file,

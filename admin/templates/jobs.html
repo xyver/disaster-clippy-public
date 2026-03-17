@@ -42,18 +42,22 @@
             text-transform: uppercase;
             margin-right: 0.5rem;
         }
-        .tag-download { background: #1a3a5c; color: #4ecdc4; }
-        .tag-upload { background: #3a1a5c; color: #c44ecd; }
-        .tag-index { background: #1a5c3a; color: #4ecd6c; }
-        .tag-metadata { background: #5c4a1a; color: #cdb44e; }
-        .tag-scan { background: #1a4a5c; color: #4eb4cd; }
-        .tag-validate { background: #5c1a3a; color: #cd4e8c; }
-        .tag-pinecone_sync { background: #2a1a5c; color: #8b5cf6; }
+        /* Acquisition: download, scan */
+        .tag-download { background: #1a3a5c; color: #4eb4cd; }
+        .tag-scan     { background: #1a3a5c; color: #4eb4cd; }
+        /* Processing: index, metadata, validate */
+        .tag-index    { background: #1a5c3a; color: #4ecd6c; }
+        .tag-metadata { background: #1a5c3a; color: #4ecd6c; }
+        .tag-validate { background: #1a5c3a; color: #4ecd6c; }
+        /* Storage: upload, cloud_publish, pinecone_sync, visualisation */
+        .tag-upload          { background: #2a1a5c; color: #8b5cf6; }
+        .tag-cloud_publish   { background: #2a1a5c; color: #8b5cf6; }
+        .tag-pinecone_sync     { background: #2a1a5c; color: #8b5cf6; }
         .tag-pinecone_sync_dry { background: #2a1a5c; color: #a78bfa; }
-        .tag-visualisation { background: #1a5c5c; color: #4ecdb4; }
-        .tag-cloud_publish { background: #1a3a5c; color: #5cb8f6; }
+        .tag-visualisation   { background: #2a1a5c; color: #8b5cf6; }
+        /* Destructive: delete_source, clear_vectors */
         .tag-delete_source { background: #5c1a1a; color: #e94560; }
-        .tag-clear_vectors { background: #5c3a1a; color: #f0a060; }
+        .tag-clear_vectors { background: #5c1a1a; color: #e94560; }
         .job-source { color: #4ecca3; font-weight: 500; }
         .job-message { font-size: 0.8rem; color: #888; margin-top: 0.25rem; }
         .job-actions { display: flex; gap: 0.5rem; align-items: center; }

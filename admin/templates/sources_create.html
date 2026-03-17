@@ -7,7 +7,6 @@
     <link rel="icon" type="image/png" href="/static/paperclip.png">
     <link rel="stylesheet" href="/admin/static/{{ admin_css }}">
     <style>
-        /* Page-specific styles */
         .sub-nav {
             display: flex;
             gap: 1rem;
@@ -23,63 +22,175 @@
         }
         .sub-nav a:hover { background: #0f3460; }
         .sub-nav a.active { background: #0f3460; color: #e94560; }
-        .wizard-steps {
-            display: flex;
+
+        .source-type-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
             gap: 1rem;
             margin-bottom: 2rem;
         }
-        .step {
-            flex: 1;
-            text-align: center;
-            padding: 1rem;
+        .source-type-card {
             background: #1a1a2e;
             border: 1px solid #0f3460;
-            border-radius: 4px;
-            color: #666;
+            border-radius: 6px;
+            padding: 1.25rem;
         }
-        .step.active { border-color: #e94560; color: #e94560; }
-        .step.completed { border-color: #4ecca3; color: #4ecca3; }
+        .source-type-card h3 {
+            color: #4ecca3;
+            font-size: 0.95rem;
+            margin-bottom: 0.5rem;
+        }
+        .source-type-card p {
+            color: #888;
+            font-size: 0.8rem;
+            margin-bottom: 0.75rem;
+            line-height: 1.5;
+        }
+        .source-type-card code {
+            display: block;
+            background: #0d0d1a;
+            border: 1px solid #0f3460;
+            border-radius: 4px;
+            padding: 0.5rem 0.75rem;
+            font-size: 0.78rem;
+            color: #4ecca3;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+        .section-label {
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            color: #555;
+            margin: 2rem 0 0.75rem 0;
+        }
+        .section-label:first-child {
+            margin-top: 0;
+        }
+        .pipeline-steps {
+            background: #1a1a2e;
+            border: 1px solid #0f3460;
+            border-radius: 6px;
+            padding: 1.25rem;
+            margin-bottom: 1rem;
+        }
+        .pipeline-steps p {
+            color: #888;
+            font-size: 0.85rem;
+            margin-bottom: 0.75rem;
+        }
+        .pipeline-steps code {
+            display: block;
+            background: #0d0d1a;
+            border: 1px solid #0f3460;
+            border-radius: 4px;
+            padding: 0.6rem 0.75rem;
+            font-size: 0.8rem;
+            color: #4ecca3;
+            margin-bottom: 0.5rem;
+            white-space: pre-wrap;
+        }
+        .pipeline-steps code:last-child {
+            margin-bottom: 0;
+        }
+        .step-label {
+            font-size: 0.7rem;
+            color: #555;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            margin: 0.5rem 0 0.25rem 0;
+        }
     </style>
 </head>
 <body>
     <header>
         <div>
             <h1>Create Source</h1>
-            <p>Create a new content source backup</p>
+            <p>Sources are created via the CLI. Choose a source type below.</p>
         </div>
         {% with active_page='sources' %}{% include '_nav.html' %}{% endwith %}
     </header>
 
     <div class="container">
-        <!-- Sub-navigation -->
         <div class="sub-nav">
             <a href="/useradmin/sources">All Sources</a>
             <a href="/useradmin/sources/tools">Source Tools</a>
             <a href="/useradmin/sources/create" class="active">Create New</a>
         </div>
 
-        <!-- Wizard Steps -->
-        <div class="wizard-steps">
-            <div class="step active">1. Choose Type</div>
-            <div class="step">2. Configure</div>
-            <div class="step">3. Scrape/Import</div>
-            <div class="step">4. Index</div>
-            <div class="step">5. Verify</div>
+        <p class="section-label">Scrape from a live source</p>
+        <div class="source-type-grid">
+
+            <div class="source-type-card">
+                <h3>MediaWiki site</h3>
+                <p>Any site running MediaWiki — Appropedia, Fandom wikis, or your own instance.</p>
+                <code>python -m cli.ingest scrape mediawiki --url https://www.appropedia.org</code>
+            </div>
+
+            <div class="source-type-card">
+                <h3>Appropedia (preset)</h3>
+                <p>Pre-configured for Appropedia.org with recommended category filters.</p>
+                <code>python -m cli.ingest scrape appropedia</code>
+            </div>
+
+            <div class="source-type-card">
+                <h3>Fandom wiki (preset)</h3>
+                <p>Any Fandom wiki — pass the subdomain.</p>
+                <code>python -m cli.ingest scrape fandom --wiki solarcooking</code>
+            </div>
+
+            <div class="source-type-card">
+                <h3>Static HTML site</h3>
+                <p>Crawls a site via sitemap.xml. Supply a CSS selector to target the main content.</p>
+                <code>python -m cli.ingest scrape static --url https://example.com --selector article</code>
+            </div>
+
+            <div class="source-type-card">
+                <h3>Substack newsletter</h3>
+                <p>Export your subscriber list from Substack, then pass the CSV and the newsletter URL.</p>
+                <code>python -m cli.ingest scrape substack --csv posts.csv --url https://yourname.substack.com</code>
+            </div>
+
         </div>
 
-        <div class="section">
-            <h2>Source Type</h2>
-            <div class="placeholder">
-                Source creation wizard coming soon...<br><br>
-                For now, use the CLI tools:<br>
-                <code style="color: #4ecca3;">python -m cli.ingest scrape mediawiki --url https://wiki.example.com</code>
+        <p class="section-label">Import from a file or archive</p>
+        <div class="source-type-grid">
+
+            <div class="source-type-card">
+                <h3>Single PDF</h3>
+                <p>Process one PDF file and add it to the vector database.</p>
+                <code>python -m cli.ingest scrape pdf --file /path/to/document.pdf</code>
             </div>
+
+            <div class="source-type-card">
+                <h3>PDF folder</h3>
+                <p>Batch-process all PDFs in a folder. Use --sectioned for structured docs like building codes.</p>
+                <code>python -m cli.ingest scrape pdf --folder /path/to/pdfs --sectioned</code>
+            </div>
+
+            <div class="source-type-card">
+                <h3>PDF collection (managed)</h3>
+                <p>Organise PDFs into named collections with licensing and topic tags before indexing.</p>
+                <code>python -m cli.ingest pdf create my-collection
+python -m cli.ingest pdf import inbox-item
+python -m cli.ingest pdf process my-collection</code>
+            </div>
+
         </div>
+
+        <p class="section-label">Full pipeline (scrape, index, and make searchable)</p>
+        <div class="pipeline-steps">
+            <p>Run these three steps in order for any new source. Replace the scrape command with whichever type applies.</p>
+            <p class="step-label">1. Scrape</p>
+            <code>python -m cli.ingest scrape mediawiki --url https://www.appropedia.org</code>
+            <p class="step-label">2. Index into vector database</p>
+            <code>python -m cli.ingest sync</code>
+            <p class="step-label">3. Check the result</p>
+            <code>python -m cli.ingest stats</code>
+        </div>
+
     </div>
 
     <script src="/admin/static/admin-common.js"></script>
-    <script>
-        // Page-specific JavaScript (none needed for this page)
-    </script>
 </body>
 </html>
