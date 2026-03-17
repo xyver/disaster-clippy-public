@@ -522,6 +522,30 @@ During metadata generation, internal links between documents are extracted and s
 
 ---
 
+## Admin UI Design Notes
+
+These notes are for the next significant admin UI update. The source tools admin (nav, jobs, sources pages) is due for a structural pass once the tooling itself is more stable.
+
+### Admin navigation grouping
+
+The current nav is a flat list with no hierarchy. Before the next admin UI update, group items into three visual sections:
+
+**Operational** (daily use) — Dashboard, Sources, Jobs
+
+**Configuration** (occasional) — Settings, Cloud, Pinecone
+
+**Exit** (clearly separated) — Chat link back to the public app
+
+Submissions and Visualise slot into Operational. The mode indicator (Local / Global) stays in the nav but should remain visually distinct from the navigation items.
+
+The grouping does not require a full redesign — CSS separator lines or a subtle background split between groups is sufficient. The key outcome is that a new operator can tell at a glance what to look at first.
+
+### Source creation
+
+The sources/create page was a step-indicator facade pointing at CLI commands. It has been replaced with an honest CLI reference page. The eventual goal is a real guided flow, but that requires the ingestion pipeline to be stable enough to wrap in a UI. Until then, the CLI reference page is the right answer.
+
+---
+
 ## Related Documentation
 
 - [Validation System](validation.md) - Source validation gates and checks
