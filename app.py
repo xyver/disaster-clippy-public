@@ -797,9 +797,9 @@ async def get_welcome():
             topics_str = ", ".join(topics_list[:-1]) + f", and {topics_list[-1]}"
         else:
             topics_str = topics_list[0]
-        message = f"Hello! I'm Disaster Clippy. I have {total_docs} guides available covering topics like {topics_str}.\n\nWhat situation do you need help with?"
+        message = f"The collection has {total_docs} articles covering {topics_str}. Ask what you need — if something in the results looks relevant, ask me to go deeper on it."
     else:
-        message = f"Hello! I'm Disaster Clippy. I have {total_docs} DIY guides and resources ready to help you.\n\nWhat situation do you need help with?"
+        message = f"The collection has {total_docs} articles. Ask what you need — if something in the results looks relevant, ask me to go deeper on it."
 
     return {
         "message": message,
