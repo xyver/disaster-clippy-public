@@ -25,11 +25,11 @@
 }
 
 .connection-dot.online { background: #45644d; }
-.connection-dot.checking { background: #7a9fb5; animation: pulse 0.5s infinite; }
+.connection-dot.checking { background: #8a9c8e; animation: pulse 0.5s infinite; }
 .connection-dot.unstable { background: #c8943a; }
 .connection-dot.disconnected { background: #ad4f2d; }
 .connection-dot.offline { background: #8a9c8e; animation: none; }
-.connection-dot.recovering { background: #7a9fb5; animation: pulse 0.5s infinite; }
+.connection-dot.recovering { background: #8a9c8e; animation: pulse 0.5s infinite; }
 
 @keyframes pulse {
     0%, 100% { opacity: 1; }
@@ -163,6 +163,14 @@
 .chat-input button:disabled {
     background: #8a9c8e;
     cursor: not-allowed;
+}
+
+/* Focus states for keyboard navigation */
+.chat-input button:focus-visible,
+.stats-bar button:focus-visible,
+.sources-actions button:focus-visible {
+    outline: 2px solid #ad4f2d;
+    outline-offset: 2px;
 }
 
 /* Inline references — attached below each assistant message */
