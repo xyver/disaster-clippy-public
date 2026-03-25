@@ -24,6 +24,7 @@ from .schemas import (
     get_vectors_file, get_vectors_768_file, get_backup_manifest_file,
     validate_source_files, html_filename_to_url
 )
+from .ocr import list_pdf_files
 
 
 @dataclass
@@ -890,7 +891,8 @@ class SourceManager:
             }
 
         # Count PDF files and total size
-        pdf_files = list(source_path.glob("*.pdf"))
+        logical_pdf_files = list_pdf_files(source_path, prefer_ocr=True)
+        pdf_files = list_pdf_files(source_path, include_ocr_derivatives=True)
         total_size = sum(f.stat().st_size for f in pdf_files)
 
         # Create backup manifest from collection data
@@ -903,6 +905,7 @@ class SourceManager:
             "collection_name": collection_info.get("name", source_id),
             "document_count": len(documents),
             "pdf_file_count": len(pdf_files),
+            "logical_pdf_count": len(logical_pdf_files),
             "total_size_bytes": total_size,
             "documents": documents
         }
@@ -1492,7 +1495,7 @@ class SourceManager:
                 return {"success": False, "error": str(e), "document_count": 0}
 
         # No _collection.json - process PDF files directly
-        pdf_files = list(source_path.glob("*.pdf"))
+        pdf_files = list_pdf_files(source_path, prefer_ocr=True)
         if not pdf_files:
             return {"success": False, "error": "No PDF files found. Add PDF files to the source folder.", "document_count": 0}
 

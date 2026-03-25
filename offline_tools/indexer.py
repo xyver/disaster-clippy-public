@@ -21,6 +21,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from offline_tools.vectordb import VectorStore, MetadataIndex
+from .ocr import list_pdf_files
 from .schemas import (
     get_manifest_file, get_metadata_file, get_index_file, get_vectors_file,
     get_backup_manifest_file, CURRENT_SCHEMA_VERSION,
@@ -1327,7 +1328,7 @@ class PDFIndexer:
         if self.source_path.is_file() and self.source_path.suffix.lower() == '.pdf':
             return [self.source_path]
         elif self.source_path.is_dir():
-            return list(self.source_path.glob("*.pdf"))
+            return list_pdf_files(self.source_path, prefer_ocr=True)
         return []
 
     def index(self, limit: int = 1000, progress_callback: Optional[Callable] = None,
