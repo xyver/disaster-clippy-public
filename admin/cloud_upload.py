@@ -925,6 +925,19 @@ def _run_publish_to_production(source_id: str, source_info: dict, sync_mode: str
 
     pinecone_result = _sync_source_to_pinecone(source_id, progress_callback, sync_mode=sync_mode)
 
+    # Regenerate public catalog so the collections page reflects the new source
+    if progress_callback:
+        progress_callback(95, "Regenerating public catalog...")
+    try:
+        from offline_tools.cloud.catalog import generate_public_catalog
+        catalog_result = generate_public_catalog()
+        if not catalog_result["uploaded"]:
+            print(f"[publish] Warning: catalog upload failed: {catalog_result.get('errors')}")
+        else:
+            print(f"[publish] Catalog updated ({len(catalog_result['included'])} sources)")
+    except Exception as e:
+        print(f"[publish] Warning: could not regenerate catalog: {e}")
+
     if progress_callback:
         progress_callback(100, "Publish complete")
 

@@ -53,16 +53,7 @@ class R2Config:
         """
         # First check local_settings.json personal_cloud
         try:
-            # Avoid circular import by importing inside function
-            import sys
-            from pathlib import Path
-
-            # Add admin directory to path if not already there
-            admin_dir = Path(__file__).parent.parent.parent / "admin"
-            if str(admin_dir) not in sys.path:
-                sys.path.insert(0, str(admin_dir))
-
-            from local_config import get_local_config
+            from admin.local_config import get_local_config
 
             config = get_local_config()
             cloud = config.get_personal_cloud_config()

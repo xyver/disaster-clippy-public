@@ -101,10 +101,26 @@ Here are some guides that can help:
         if config_path:
             self.config_path = Path(config_path)
         else:
-            # Default to root level local_settings.json
-            self.config_path = Path(__file__).parent.parent / "local_settings.json"
+            from admin.paths import get_config_path
+            self.config_path = get_config_path()
+            self._migrate_legacy_config()
 
         self.config = self._load_config()
+
+    def _migrate_legacy_config(self) -> None:
+        """
+        One-time migration: move local_settings.json from project root to app data dir.
+        Safe to call repeatedly - no-ops if already migrated or nothing to migrate.
+        """
+        legacy_path = Path(__file__).parent.parent / "local_settings.json"
+        if legacy_path.exists() and not self.config_path.exists():
+            try:
+                import shutil
+                self.config_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(legacy_path, self.config_path)
+                print(f"[CONFIG] Migrated settings from {legacy_path} to {self.config_path}")
+            except Exception as e:
+                print(f"[CONFIG] Migration failed, will use defaults: {e}")
 
     def _load_config(self) -> Dict[str, Any]:
         """Load config from file or create default"""
@@ -216,8 +232,12 @@ Here are some guides that can help:
         self._update_env_backup_path(path)
 
     def _update_env_backup_path(self, path: str) -> None:
-        """Update BACKUP_PATH in .env file"""
-        env_path = Path(__file__).parent.parent / ".env"
+        """Update BACKUP_PATH in env file (project .env in dev, runtime.env in installed runtime)"""
+        from admin.paths import get_runtime_env_path
+        # Prefer the app data runtime.env; fall back to project root .env for dev environments
+        runtime_env = get_runtime_env_path()
+        project_env = Path(__file__).parent.parent / ".env"
+        env_path = runtime_env if runtime_env.exists() else project_env
         if not env_path.exists():
             return
 

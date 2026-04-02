@@ -11,9 +11,16 @@ from dotenv import load_dotenv
 import logging
 import sys
 
-# Load .env from the same directory as this file (not cwd)
-_env_path = Path(__file__).parent / ".env"
-load_dotenv(_env_path)
+# Load env config. Priority:
+# 1. App data dir runtime.env (installed runtime)
+# 2. Project root .env (dev / git checkout)
+# load_dotenv is additive and won't override already-set env vars, so order matters.
+from admin.paths import get_runtime_env_path as _get_runtime_env_path
+_runtime_env = _get_runtime_env_path()
+if _runtime_env.exists():
+    load_dotenv(_runtime_env)
+_project_env = Path(__file__).parent / ".env"
+load_dotenv(_project_env)
 
 # =============================================================================
 # LOGGING CONFIGURATION - Timestamps on all logs, HTTP access logs disabled

@@ -90,8 +90,7 @@ class SourcePackRegistry:
     _metadata_cache_time = 0
     _cache_ttl = 60  # 60 second cache
 
-    def __init__(self, base_dir: Optional[Path] = None):
-        self.base_dir = base_dir or Path(__file__).parent.parent
+    def __init__(self):
         self.backup_folder = self._get_backup_folder()
         self.metadata_path = self._get_metadata_path()
 

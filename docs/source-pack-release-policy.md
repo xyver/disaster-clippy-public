@@ -29,12 +29,27 @@ A source is not just complete/incomplete; it moves through release states:
 
 ---
 
+## Manifest Requirements
+
+Every source requires these fields in `_manifest.json` before submission:
+
+- `name`: Human-readable display name used in the app and public site.
+- `description`: One to two sentences describing what the source is and what it covers. This is the public-facing text shown on the collections page at disasterclippy.com. Required before a source can appear in the public catalog.
+- `tags`: Array of topic tags used for filtering and discovery.
+- `license`: License identifier (CC-BY, CC0, Public Domain, etc.).
+- `license_verified`: Boolean, must be true before submission.
+- `base_url`: Canonical URL of the source.
+
+The `description` field is not validated automatically but is required for the public catalog. A source without a description will not appear correctly on the public site even if all other validation gates pass.
+
+---
+
 ## Gate 1: Ready to Submit (`can_submit`)
 
 For local admin -> submissions queue.
 
 Required:
-- `_manifest.json` exists and valid.
+- `_manifest.json` exists and valid (including `name`, `description`, `license`, `base_url`).
 - `_metadata.json` exists and valid.
 - Backup content exists and passes minimum size checks.
 - At least one vector dimension exists (`_vectors.json` or `_vectors_768.json`).
@@ -120,9 +135,11 @@ Reviewer checklist:
 2. Check available vector dimensions.
 3. Generate missing dimension if needed.
 4. Review tags/license/URLs/content quality.
-5. Run deep validation.
-6. Publish to cloud targets (R2 + Pinecone).
-7. Mark source `Published`.
+5. Confirm `description` field in `_manifest.json` is written and accurate.
+6. Run deep validation.
+7. Publish to cloud targets (R2 + Pinecone).
+8. Regenerate `published/catalog.json` via `generate_public_catalog()` in `cloud_upload.py`. This merges `_master.json` with per-source manifest data and uploads a single flat catalog file to R2 that the public site reads.
+9. Mark source `Published`.
 
 ---
 
