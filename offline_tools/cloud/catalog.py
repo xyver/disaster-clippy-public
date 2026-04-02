@@ -16,6 +16,7 @@ separate from this code.
 
 import json
 import logging
+import os
 from datetime import datetime
 from io import BytesIO
 from typing import Dict, Any, List, Optional
@@ -24,6 +25,78 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 CATALOG_KEY = "published/catalog.json"
+
+
+def _looks_like_backup_url(url: str) -> bool:
+    """Heuristic check for bucket/backup-hosted URLs."""
+    if not url:
+        return False
+    lowered = url.lower()
+    return (
+        "/backups/" in lowered
+        or ".r2.dev/" in lowered
+        or ".r2.cloudflarestorage.com/" in lowered
+    )
+
+
+def _load_first_document_url(source_dir: Path) -> str:
+    """Best-effort extraction of the first indexed document URL for a source."""
+    index_path = source_dir / "_index.json"
+    if not index_path.exists():
+        return ""
+    try:
+        with open(index_path, "r", encoding="utf-8-sig") as f:
+            index_data = json.load(f)
+        documents = index_data.get("documents", {})
+        if isinstance(documents, dict):
+            for doc in documents.values():
+                if isinstance(doc, dict) and doc.get("url"):
+                    return str(doc["url"])
+    except Exception as e:
+        logger.warning("Could not read first document URL for %s: %s", source_dir.name, e)
+    return ""
+
+
+def _derive_live_url(source_id: str, source_dir: Path, manifest: Dict[str, Any]) -> str:
+    """Pick the human-facing live/original URL for this source."""
+    for key in ("live_url", "source_url", "original_url", "homepage_url", "canonical_url", "public_url"):
+        value = str(manifest.get(key, "") or "").strip()
+        if value:
+            return value
+
+    zim_meta = manifest.get("zim_metadata", {})
+    if isinstance(zim_meta, dict):
+        source_url = str(zim_meta.get("source_url", "") or "").strip()
+        if source_url:
+            return source_url
+
+    base_url = str(manifest.get("base_url", "") or "").strip()
+    if base_url and not _looks_like_backup_url(base_url):
+        return base_url
+
+    source_type = str(manifest.get("source_type", "") or "").strip().lower()
+    if source_type == "pdf":
+        return _load_first_document_url(source_dir) or base_url
+
+    return base_url
+
+
+def _derive_backup_url(source_id: str, manifest: Dict[str, Any]) -> str:
+    """Pick the bucket/backup location for this source when one is available."""
+    for key in ("backup_url", "emergency_backup_url", "archive_url"):
+        value = str(manifest.get(key, "") or "").strip()
+        if value:
+            return value
+
+    base_url = str(manifest.get("base_url", "") or "").strip()
+    if _looks_like_backup_url(base_url):
+        return base_url
+
+    r2_public_url = str(os.getenv("R2_PUBLIC_URL", "") or "").strip().rstrip("/")
+    if r2_public_url:
+        return f"{r2_public_url}/backups/{source_id}"
+
+    return ""
 
 
 def _read_local_master(backup_path: Path) -> Dict[str, Any]:
@@ -61,7 +134,7 @@ def _read_local_manifest(source_dir: Path) -> Optional[Dict[str, Any]]:
         return None
 
 
-def _build_catalog_entry(source_id: str, manifest: Dict[str, Any], master_entry: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def _build_catalog_entry(source_id: str, source_dir: Path, manifest: Dict[str, Any], master_entry: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """
     Build a single catalog entry from manifest + _master metadata.
 
@@ -70,6 +143,9 @@ def _build_catalog_entry(source_id: str, manifest: Dict[str, Any], master_entry:
     description = manifest.get("description", "").strip()
     if not description:
         return None
+
+    live_url = _derive_live_url(source_id, source_dir, manifest)
+    backup_url = _derive_backup_url(source_id, manifest)
 
     return {
         "source_id": source_id,
@@ -80,6 +156,8 @@ def _build_catalog_entry(source_id: str, manifest: Dict[str, Any], master_entry:
         "tags": manifest.get("tags", []),
         "topics": master_entry.get("topics", []),
         "base_url": manifest.get("base_url", ""),
+        "live_url": live_url,
+        "backup_url": backup_url,
         "source_type": manifest.get("source_type", ""),
         "language": manifest.get("language", "en"),
         "doc_count": master_entry.get("count", manifest.get("total_docs", 0)),
@@ -171,7 +249,7 @@ def generate_public_catalog(source_ids: Optional[List[str]] = None) -> Dict[str,
             continue
 
         master_entry = master_sources.get(source_id, {})
-        entry = _build_catalog_entry(source_id, manifest, master_entry)
+        entry = _build_catalog_entry(source_id, source_dir, manifest, master_entry)
         if entry is None:
             result["skipped"].append(f"{source_id}: description is empty")
             continue

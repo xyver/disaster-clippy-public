@@ -2739,7 +2739,7 @@ async def upload_pdf_to_r2(request: UploadPDFToR2Request):
     if not uploaded_files:
         raise HTTPException(500, f"No files uploaded. Errors: {errors}")
 
-    # Update manifest with R2 base_url
+    # Update manifest with both a live/original URL and an emergency backup URL.
     r2_base_url = f"{r2_public_url.rstrip('/')}/backups/{source_id}"
     manifest_file = source_path / get_manifest_file()
     manifest = {}
@@ -2751,7 +2751,12 @@ async def upload_pdf_to_r2(request: UploadPDFToR2Request):
         except Exception:
             pass
 
+    previous_base_url = str(manifest.get("base_url", "") or "").strip()
+    if previous_base_url and "/backups/" not in previous_base_url and ".r2.dev/" not in previous_base_url:
+        manifest["live_url"] = previous_base_url
+
     manifest["base_url"] = r2_base_url
+    manifest["backup_url"] = r2_base_url
     manifest["r2_uploaded"] = True
     manifest["r2_uploaded_at"] = datetime.now().isoformat()
     manifest["r2_files"] = [f["filename"] for f in uploaded_files]
@@ -2766,6 +2771,8 @@ async def upload_pdf_to_r2(request: UploadPDFToR2Request):
         "uploaded_files": uploaded_files,
         "total_size_mb": round(total_size_mb, 2),
         "base_url": r2_base_url,
+        "backup_url": r2_base_url,
+        "live_url": manifest.get("live_url", ""),
         "errors": errors if errors else None,
         "message": f"Uploaded {len(uploaded_files)} PDF(s) to R2. Base URL set to {r2_base_url}"
     }
