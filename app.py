@@ -21,6 +21,7 @@ if _runtime_env.exists():
     load_dotenv(_runtime_env)
 _project_env = Path(__file__).parent / ".env"
 load_dotenv(_project_env)
+_active_env_path = _runtime_env if _runtime_env.exists() else _project_env
 
 # =============================================================================
 # LOGGING CONFIGURATION - Timestamps on all logs, HTTP access logs disabled
@@ -73,7 +74,7 @@ logging.basicConfig(
 
 # Debug: verify env loaded correctly
 _mode = os.getenv("VECTOR_DB_MODE", "NOT_SET")
-print(f"[STARTUP] .env path: {_env_path}, exists: {_env_path.exists()}, VECTOR_DB_MODE={_mode}")
+print(f"[STARTUP] .env path: {_active_env_path}, exists: {_active_env_path.exists()}, VECTOR_DB_MODE={_mode}")
 
 import json
 import re
