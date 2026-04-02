@@ -107,7 +107,7 @@ def _read_local_master(backup_path: Path) -> Dict[str, Any]:
         return {"sources": {}}
 
     try:
-        with open(master_path, "r", encoding="utf-8") as f:
+        with open(master_path, "r", encoding="utf-8-sig") as f:
             master = json.load(f)
     except Exception as e:
         logger.error("Could not read local _master.json at %s: %s", master_path, e)
