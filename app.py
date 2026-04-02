@@ -85,7 +85,7 @@ from collections import Counter
 
 from fastapi import FastAPI, Request, Header, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, HTMLResponse, StreamingResponse
+from fastapi.responses import JSONResponse, HTMLResponse, StreamingResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
@@ -396,6 +396,159 @@ class SimpleQueryResponse(BaseModel):
 
 
 # API Endpoints
+
+APP_ROBOTS_TXT = """User-agent: *
+Allow: /
+Disallow: /api/
+Disallow: /useradmin/
+Disallow: /health
+
+User-agent: GPTBot
+Allow: /
+
+User-agent: ClaudeBot
+Allow: /
+
+User-agent: Googlebot
+Allow: /
+
+User-agent: Bingbot
+Allow: /
+
+User-agent: PerplexityBot
+Allow: /
+
+User-agent: OAI-SearchBot
+Allow: /
+
+User-agent: ChatGPT-User
+Allow: /
+
+User-agent: Google-Extended
+Allow: /
+
+User-agent: meta-externalagent
+Allow: /
+
+User-agent: Applebot-Extended
+Allow: /
+
+User-agent: Amazonbot
+Allow: /
+
+User-agent: CCBot
+Allow: /
+
+# This subdomain is the live app surface.
+# Product, collections, docs, and self-hosting information live on the main site.
+# AI-readable summaries are available at /llms.txt and /llms-full.txt.
+
+Sitemap: https://app.disasterclippy.com/sitemap.xml
+"""
+
+APP_LLMS_TXT = """# Disaster Clippy App
+
+> This is the live application surface for Disaster Clippy. For product overview, collections, platform docs, and self-hosting information, start at https://www.disasterclippy.com
+
+The app at https://app.disasterclippy.com is the public demo and search interface for Disaster Clippy. It lets users ask questions against the current collection and inspect the sources behind each answer.
+
+This subdomain is intentionally not the full product or documentation site.
+
+- Main site: https://www.disasterclippy.com
+- About: https://www.disasterclippy.com/about
+- Collections: https://www.disasterclippy.com/packs
+- Docs: https://www.disasterclippy.com/docs
+- Platform overview: https://www.disasterclippy.com/docs/platform
+- Public GitHub repo: https://github.com/xyver/disaster-clippy-public
+
+## What this app is
+
+- A live demo of the search and citation experience
+- A bounded app surface over the current preparedness collection
+- The fastest way to understand how the interaction model works
+
+## What this app is not
+
+- Not the main explanation of the project
+- Not the primary source of deployment or architecture documentation
+- Not the installation path for self-hosting
+
+## Recommended path for crawlers, assistants, and technical readers
+
+- Use this subdomain to understand the app surface: https://app.disasterclippy.com
+- Use the main site for the product and platform story: https://www.disasterclippy.com
+- Use the platform page for hosted vs local context: https://www.disasterclippy.com/docs/platform
+- Use GitHub for the real getting-started path today: https://github.com/xyver/disaster-clippy-public
+
+Note: the hosted app is the demo. The public GitHub repository is the current install and deployment path.
+
+Full AI-readable reference text for this subdomain is available at: https://app.disasterclippy.com/llms-full.txt
+"""
+
+APP_LLMS_FULL_TXT = """# Disaster Clippy App - Full Text Reference
+
+> This file describes the app surface only. For the fuller product story, collections, technical docs, and self-hosting path, see https://www.disasterclippy.com and https://www.disasterclippy.com/llms.txt
+
+## App surface
+
+URL: https://app.disasterclippy.com/
+
+This is the live application surface for Disaster Clippy. It is a chat and search interface over the current collection. Users can ask questions, inspect the sources behind answers, and explore the collection boundaries through the app UI.
+
+The app is the proof-of-concept surface, not the whole product story. It exists to show the interaction model in practice: ask a question, search a bounded collection, get a cited answer, and inspect the references.
+
+## Scope
+
+The app is intentionally narrower than the main site.
+
+- It focuses on search, answers, citations, and collection filtering.
+- It does not try to explain the full platform, ingestion model, or deployment path.
+- It is not the primary destination for self-hosting instructions.
+
+## Where to send readers next
+
+- Main site: https://www.disasterclippy.com
+- About: https://www.disasterclippy.com/about
+- Collections: https://www.disasterclippy.com/packs
+- Docs index: https://www.disasterclippy.com/docs
+- Platform overview: https://www.disasterclippy.com/docs/platform
+- Hosted vs local runtime: https://www.disasterclippy.com/docs/hosted-vs-local
+- Public GitHub repo: https://github.com/xyver/disaster-clippy-public
+
+## Current install path
+
+The current install and deployment path is the public GitHub repository. The hosted app is the live demo. A simpler launcher or wrapper install path may come later, but GitHub is the path today.
+"""
+
+APP_SITEMAP_XML = """<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url>
+    <loc>https://app.disasterclippy.com/</loc>
+    <changefreq>weekly</changefreq>
+    <priority>1.0</priority>
+  </url>
+</urlset>
+"""
+
+
+@app.get("/robots.txt", response_class=PlainTextResponse)
+async def serve_robots_txt():
+    return APP_ROBOTS_TXT
+
+
+@app.get("/llms.txt", response_class=PlainTextResponse)
+async def serve_llms_txt():
+    return APP_LLMS_TXT
+
+
+@app.get("/llms-full.txt", response_class=PlainTextResponse)
+async def serve_llms_full_txt():
+    return APP_LLMS_FULL_TXT
+
+
+@app.get("/sitemap.xml")
+async def serve_sitemap_xml():
+    return Response(content=APP_SITEMAP_XML, media_type="application/xml")
 
 @app.get("/", response_class=HTMLResponse)
 async def serve_index():

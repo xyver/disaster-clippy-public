@@ -1,13 +1,13 @@
 """
 Public catalog generation.
 
-Builds published/catalog.json from local source manifests and uploads to R2.
+Builds published/catalog.json from local active source metadata and uploads to R2.
 The catalog is the data source for the /packs page on the public site.
 
-The R2 backups/ folder is the authoritative list of what has been published.
-Only sources that exist under backups/ in R2 are included in the catalog.
-Within that set, a source is only included if its local _manifest.json has a
-non-empty description field.
+Source selection rules:
+- Local _master.json is the authoritative list of active sources.
+- R2 backups/ is used as a publish check: the source must actually exist in R2.
+- Local _manifest.json provides the public-facing metadata for each source.
 
 The catalog object must be publicly readable. Public access is a bucket-level
 setting in Cloudflare R2 -- configure the bucket or use a public URL policy
@@ -26,22 +26,44 @@ logger = logging.getLogger(__name__)
 CATALOG_KEY = "published/catalog.json"
 
 
+def _read_local_master(backup_path: Path) -> Dict[str, Any]:
+    """Read local _master.json and return its parsed dict, or an empty shell."""
+    master_path = backup_path / "_master.json"
+    if not master_path.exists():
+        logger.warning("Local _master.json not found at %s", master_path)
+        return {"sources": {}}
+
+    try:
+        with open(master_path, "r", encoding="utf-8") as f:
+            master = json.load(f)
+    except Exception as e:
+        logger.error("Could not read local _master.json at %s: %s", master_path, e)
+        return {"sources": {}}
+
+    if not isinstance(master, dict):
+        logger.warning("Local _master.json has unexpected type: %s", type(master).__name__)
+        return {"sources": {}}
+
+    return master
+
+
 def _read_local_manifest(source_dir: Path) -> Optional[Dict[str, Any]]:
     """Read _manifest.json for a source. Returns None if missing or unreadable."""
     manifest_path = source_dir / "_manifest.json"
     if not manifest_path.exists():
         return None
     try:
-        with open(manifest_path, "r", encoding="utf-8") as f:
+        # Many existing manifests were written with a UTF-8 BOM.
+        with open(manifest_path, "r", encoding="utf-8-sig") as f:
             return json.load(f)
     except Exception as e:
         logger.warning("Could not read manifest for %s: %s", source_dir.name, e)
         return None
 
 
-def _build_catalog_entry(source_id: str, manifest: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def _build_catalog_entry(source_id: str, manifest: Dict[str, Any], master_entry: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """
-    Build a single catalog entry from a manifest dict.
+    Build a single catalog entry from manifest + _master metadata.
 
     Returns None if the source is not catalog-ready (missing description).
     """
@@ -54,13 +76,15 @@ def _build_catalog_entry(source_id: str, manifest: Dict[str, Any]) -> Optional[D
         "name": manifest.get("name", source_id),
         "description": description,
         "license": manifest.get("license", "Unknown"),
+        "license_verified": manifest.get("license_verified", False),
         "tags": manifest.get("tags", []),
+        "topics": master_entry.get("topics", []),
         "base_url": manifest.get("base_url", ""),
         "source_type": manifest.get("source_type", ""),
         "language": manifest.get("language", "en"),
-        "doc_count": manifest.get("total_docs", 0),
-        "size_bytes": manifest.get("total_size_bytes", 0),
-        "last_updated": manifest.get("created_at", ""),
+        "doc_count": master_entry.get("count", manifest.get("total_docs", 0)),
+        "size_bytes": master_entry.get("size_bytes", manifest.get("total_size_bytes", 0)),
+        "last_updated": master_entry.get("last_sync", manifest.get("created_at", "")),
     }
 
 
@@ -69,10 +93,13 @@ def generate_public_catalog(source_ids: Optional[List[str]] = None) -> Dict[str,
     Build published/catalog.json from local manifests and upload to R2.
 
     Discovery:
-      - If source_ids is None, lists R2 backups/ to find published source IDs.
+      - If source_ids is None, uses local _master.json as the active source list.
       - If source_ids is given explicitly, uses that list (for testing or manual runs).
+      - In both cases, sources must also exist in R2 backups/ to be included.
 
     Inclusion criteria (per source):
+      - Source exists in local _master.json (unless source_ids explicitly provided)
+      - Source exists in R2 backups/{source_id}/
       - Local _manifest.json exists under BACKUP_PATH/{source_id}/
       - description field is non-empty
 
@@ -93,6 +120,8 @@ def generate_public_catalog(source_ids: Optional[List[str]] = None) -> Dict[str,
 
     backup_path = get_backup_path()
     storage = get_backups_storage()
+    master = _read_local_master(backup_path)
+    master_sources = master.get("sources", {})
 
     result: Dict[str, Any] = {
         "included": [],
@@ -102,29 +131,33 @@ def generate_public_catalog(source_ids: Optional[List[str]] = None) -> Dict[str,
         "catalog_key": CATALOG_KEY,
     }
 
-    # Discover published source IDs from R2 if not provided
+    if not storage.is_configured():
+        result["errors"].append("R2 not configured -- cannot discover published sources")
+        logger.error("R2 not configured, cannot discover published sources")
+        return result
+
+    files = storage.list_files("backups/")
+    published_source_ids: set[str] = set()
+    for f in files:
+        parts = f["key"].split("/")
+        # Keys look like "backups/{source_id}/..."
+        if len(parts) >= 2 and parts[1] and not parts[1].startswith("_"):
+            published_source_ids.add(parts[1])
+
+    logger.info("Discovered %d published sources from R2", len(published_source_ids))
+
+    # Discover active source IDs from local _master.json if not provided
     if source_ids is None:
-        if not storage.is_configured():
-            result["errors"].append("R2 not configured -- cannot discover published sources")
-            logger.error("R2 not configured, cannot discover published sources")
-            return result
-
-        files = storage.list_files("backups/")
-        seen: set = set()
-        source_ids = []
-        for f in files:
-            parts = f["key"].split("/")
-            # Keys look like "backups/{source_id}/..."
-            if len(parts) >= 2 and parts[1] and not parts[1].startswith("_"):
-                if parts[1] not in seen:
-                    seen.add(parts[1])
-                    source_ids.append(parts[1])
-
-        logger.info("Discovered %d published sources from R2: %s", len(source_ids), source_ids)
+        source_ids = list(master_sources.keys())
+        logger.info("Loaded %d active sources from local _master.json", len(source_ids))
 
     # Build catalog entries
     entries = []
     for source_id in source_ids:
+        if source_id not in published_source_ids:
+            result["skipped"].append(f"{source_id}: not present in R2 backups/")
+            continue
+
         source_dir = backup_path / source_id
         if not source_dir.exists():
             msg = f"{source_id}: local directory not found at {source_dir}"
@@ -137,7 +170,8 @@ def generate_public_catalog(source_ids: Optional[List[str]] = None) -> Dict[str,
             result["skipped"].append(f"{source_id}: no _manifest.json")
             continue
 
-        entry = _build_catalog_entry(source_id, manifest)
+        master_entry = master_sources.get(source_id, {})
+        entry = _build_catalog_entry(source_id, manifest, master_entry)
         if entry is None:
             result["skipped"].append(f"{source_id}: description is empty")
             continue
