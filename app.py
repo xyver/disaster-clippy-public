@@ -865,13 +865,21 @@ async def get_welcome():
     topics_counter = Counter()  # Track tag frequency for better display order
     last_updated = None
     master = None
+    public_mode = is_public_mode()
+    curated_catalog_sources = get_public_catalog_sources() if public_mode else []
+    curated_catalog_by_id = {
+        source.get("source_id"): source
+        for source in curated_catalog_sources
+        if source.get("source_id")
+    }
+    curated_ids = set(curated_catalog_by_id.keys())
 
     # 1. Try local _master.json
     if backup_folder:
         master_file = Path(backup_folder) / "_master.json"
         if master_file.exists():
             try:
-                with open(master_file, 'r', encoding='utf-8') as f:
+                with open(master_file, 'r', encoding='utf-8-sig') as f:
                     master = json.load(f)
             except Exception as e:
                 print(f"Warning: Could not load local _master.json: {e}")
@@ -895,6 +903,17 @@ async def get_welcome():
         sources = master.get("sources", {})
         last_updated = master.get("last_updated")
 
+        if curated_ids:
+            sources = {
+                source_id: source_info
+                for source_id, source_info in sources.items()
+                if source_id in curated_ids
+            }
+            total_docs = sum(
+                int(curated_catalog_by_id.get(source_id, {}).get("doc_count", source_info.get("count", 0)) or 0)
+                for source_id, source_info in sources.items()
+            )
+
         # Collect topics from all sources (check both "tags" and "topics" for compatibility)
         for source_id, source_info in sources.items():
             if isinstance(source_info, dict):
@@ -908,6 +927,16 @@ async def get_welcome():
         stats = store.get_stats()
         total_docs = stats.get("total_documents", 0)
         sources = stats.get("sources", {})
+        if curated_ids:
+            sources = {
+                source_id: count
+                for source_id, count in sources.items()
+                if source_id in curated_ids
+            }
+            total_docs = sum(
+                int(curated_catalog_by_id.get(source_id, {}).get("doc_count", count) or 0)
+                for source_id, count in sources.items()
+            )
 
     if total_docs == 0:
         return {
@@ -919,6 +948,12 @@ async def get_welcome():
             }
         }
 
+    # In public mode, prefer catalog topics/tags from the curated source set.
+    if curated_catalog_sources:
+        topics_counter.clear()
+        for source in curated_catalog_sources:
+            topics_counter.update(source.get("topics") or source.get("tags") or [])
+
     # If no topics from _master.json, extract from source manifests
     if not topics_counter and backup_folder:
         backup_path = Path(backup_folder)
@@ -926,7 +961,7 @@ async def get_welcome():
             manifest_file = backup_path / source_id / get_manifest_file()
             if manifest_file.exists():
                 try:
-                    with open(manifest_file, 'r', encoding='utf-8') as f:
+                    with open(manifest_file, 'r', encoding='utf-8-sig') as f:
                         manifest = json.load(f)
                     tags = manifest.get("tags", [])
                     if tags:
@@ -993,6 +1028,24 @@ async def get_sources():
     stats = store.get_stats()
     sources_counts = stats.get("sources", {})
     total_docs = stats.get("total_documents", 0)
+    curated_catalog_sources = get_public_catalog_sources() if is_public_mode() else []
+    curated_catalog_by_id = {
+        source.get("source_id"): source
+        for source in curated_catalog_sources
+        if source.get("source_id")
+    }
+    curated_ids = set(curated_catalog_by_id.keys())
+
+    if curated_ids:
+        sources_counts = {
+            source_id: count
+            for source_id, count in sources_counts.items()
+            if source_id in curated_ids
+        }
+        total_docs = sum(
+            int(curated_catalog_by_id.get(source_id, {}).get("doc_count", count) or 0)
+            for source_id, count in sources_counts.items()
+        )
 
     # Load source names and check vector availability from backup folder
     local_config = get_local_config()
@@ -1011,9 +1064,9 @@ async def get_sources():
                 display_name = source_id
                 if manifest_file.exists():
                     try:
-                        with open(manifest_file) as f:
+                        with open(manifest_file, 'r', encoding='utf-8-sig') as f:
                             source_data = json.load(f)
-                            display_name = source_data.get("name", source_id)
+                            display_name = get_source_display_name(source_id, source_data)
                     except Exception:
                         pass
 
@@ -1022,17 +1075,27 @@ async def get_sources():
     # Build sources dict - check both vector files for accurate status
     # File existence is source of truth (metadata index may include sources not yet indexed)
     sources = {}
-    for source_id, count in sources_counts.items():
+    source_ids_in_order = list(sources_counts.keys())
+    if curated_catalog_sources:
+        source_ids_in_order = [
+            source.get("source_id")
+            for source in curated_catalog_sources
+            if source.get("source_id") in sources_counts
+        ]
+
+    for source_id in source_ids_in_order:
+        count = sources_counts[source_id]
         info = source_info.get(source_id, {})
         folder = info.get("folder")
+        catalog_source = curated_catalog_by_id.get(source_id, {})
 
         # Check both vector files (2 fast stat calls per source)
         has_1536 = folder and (folder / get_vectors_file()).exists()
         has_768 = folder and (folder / get_vectors_768_file()).exists()
 
         sources[source_id] = {
-            "name": info.get("name", source_id.replace("_", " ").replace("-", " ").title()),
-            "count": count,
+            "name": catalog_source.get("name", info.get("name", source_id.replace("_", " ").replace("-", " ").title())),
+            "count": int(catalog_source.get("doc_count", count) or 0),
             "has_1536": has_1536,
             "has_768": has_768
         }
@@ -1085,6 +1148,76 @@ _source_cache: Dict[str, Any] = {
 }
 _SOURCE_CACHE_TTL = timedelta(hours=1)
 
+_public_catalog_cache: Dict[str, Any] = {
+    "catalog": None,
+    "expires": None,
+}
+_PUBLIC_CATALOG_TTL = timedelta(minutes=15)
+
+
+def is_public_mode() -> bool:
+    """Return True when the app is running in the public/demo deployment mode."""
+    return os.getenv("VECTOR_DB_MODE", "local").lower() == "pinecone"
+
+
+def _refresh_public_catalog_cache() -> None:
+    """Load published/catalog.json from R2 for public-mode source gating."""
+    global _public_catalog_cache
+
+    try:
+        from offline_tools.cloud.r2 import get_backups_storage
+
+        storage = get_backups_storage()
+        if not storage.is_configured():
+            return
+
+        raw = storage.download_file_content("published/catalog.json")
+        if not raw:
+            return
+
+        catalog = json.loads(raw)
+        _public_catalog_cache = {
+            "catalog": catalog,
+            "expires": datetime.now(timezone.utc) + _PUBLIC_CATALOG_TTL
+        }
+    except Exception as e:
+        print(f"[PUBLIC_CATALOG] Error refreshing cache: {e}")
+
+
+def get_public_catalog() -> Dict[str, Any]:
+    """Get the published public catalog, refreshing cache when needed."""
+    expires = _public_catalog_cache["expires"]
+    if expires is None or datetime.now(timezone.utc) > expires:
+        _refresh_public_catalog_cache()
+    return _public_catalog_cache["catalog"] or {}
+
+
+def get_public_catalog_sources() -> List[Dict[str, Any]]:
+    """Get public catalog sources in published order."""
+    catalog = get_public_catalog()
+    sources = catalog.get("sources", [])
+    return sources if isinstance(sources, list) else []
+
+
+def get_public_catalog_ids() -> set:
+    """Get the curated source IDs approved for the public app."""
+    return {
+        str(source.get("source_id", "")).strip()
+        for source in get_public_catalog_sources()
+        if str(source.get("source_id", "")).strip()
+    }
+
+
+def get_source_display_name(source_id: str, manifest: Optional[Dict[str, Any]] = None) -> str:
+    """Get the preferred display title for a source."""
+    manifest = manifest or {}
+    return (
+        manifest.get("display_title")
+        or manifest.get("display_name")
+        or manifest.get("name")
+        or source_id.replace("_", " ").replace("-", " ").title()
+    )
+
 
 def _refresh_source_cache() -> None:
     """Refresh the source cache from vector store stats."""
@@ -1093,6 +1226,20 @@ def _refresh_source_cache() -> None:
         store = get_vector_store()
         stats = store.get_stats()
         sources_counts = stats.get("sources", {})
+        public_catalog_sources = get_public_catalog_sources() if is_public_mode() else []
+        public_catalog_by_id = {
+            source.get("source_id"): source
+            for source in public_catalog_sources
+            if source.get("source_id")
+        }
+        public_catalog_ids = set(public_catalog_by_id.keys())
+
+        if public_catalog_ids:
+            sources_counts = {
+                source_id: count
+                for source_id, count in sources_counts.items()
+                if source_id in public_catalog_ids
+            }
 
         # Get display names from manifests
         from admin.local_config import get_local_config
@@ -1102,22 +1249,26 @@ def _refresh_source_cache() -> None:
         source_list = []
         for source_id, count in sources_counts.items():
             display_name = source_id.replace("_", " ").replace("-", " ").title()
+            catalog_source = public_catalog_by_id.get(source_id, {})
+            count_for_display = int(catalog_source.get("doc_count", count) or 0)
 
             # Try to get better name from manifest
             if backup_folder:
                 manifest_path = Path(backup_folder) / source_id / get_manifest_file()
                 if manifest_path.exists():
                     try:
-                        with open(manifest_path) as f:
+                        with open(manifest_path, 'r', encoding='utf-8-sig') as f:
                             manifest = json.load(f)
-                            display_name = manifest.get("name", display_name)
+                            display_name = get_source_display_name(source_id, manifest)
                     except Exception:
                         pass
+            elif catalog_source:
+                display_name = catalog_source.get("name", display_name)
 
             source_list.append({
                 "id": source_id,
                 "name": display_name,
-                "count": count
+                "count": count_for_display
             })
 
         _source_cache = {
@@ -1153,6 +1304,7 @@ def resolve_source_filter(
     """
     warnings = []
     _, available_ids = get_available_sources()
+    public_default_ids = sorted(available_ids) if is_public_mode() else None
 
     # Legacy sources field takes precedence (backwards compatibility)
     if legacy_sources is not None:
@@ -1170,9 +1322,9 @@ def resolve_source_filter(
                 else:
                     warnings.append(f"Note: Source '{src}' not found.")
         if not valid_sources and warnings:
-            warnings.append("Searching all sources instead.")
-            return None, warnings
-        return valid_sources if valid_sources else None, warnings
+            warnings.append("Searching all available public sources instead.")
+            return public_default_ids, warnings
+        return valid_sources if valid_sources else public_default_ids, warnings
 
     # Mode-based filtering
     mode = (source_mode or "all").lower()
@@ -1210,7 +1362,7 @@ def resolve_source_filter(
 
         # If all sources remain, return None (no filter needed)
         if result_ids == available_ids:
-            return None, warnings
+            return public_default_ids, warnings
         return list(result_ids), warnings
 
     elif mode == "none":
@@ -1228,15 +1380,15 @@ def resolve_source_filter(
         if not result_ids:
             # No valid sources - fall back to all sources with warning
             if warnings:
-                warnings.append("Searching all sources instead.")
-            return None, warnings
+                warnings.append("Searching all available public sources instead.")
+            return public_default_ids, warnings
 
         return list(result_ids), warnings
 
     else:
         # Invalid mode - treat as "all"
         warnings.append(f"Note: Invalid source_mode '{source_mode}'. Using 'all'.")
-        return None, warnings
+        return public_default_ids, warnings
 
 
 def _fuzzy_match_source(typo: str, available_ids: set) -> Optional[str]:
@@ -1392,6 +1544,7 @@ async def chat(request: Request, body: ChatRequest):
         # Search using appropriate method based on connection mode
         # body.sources: None = all, [] = none, [ids] = specific
         source_filter = None
+        default_public_sources = sorted(get_public_catalog_ids()) if is_public_mode() else None
         if body.sources is not None:
             if len(body.sources) == 0:
                 # Empty list = no sources selected, return empty results
@@ -1402,6 +1555,8 @@ async def chat(request: Request, body: ChatRequest):
                                           source_filter=source_filter, mode=mode,
                                           language=search_language)
         else:
+            if default_public_sources is not None:
+                source_filter = {"source": {"$in": default_public_sources}}
             articles = search_articles(message, n_results=15,
                                        source_filter=source_filter, mode=mode,
                                        language=search_language)
@@ -1409,6 +1564,9 @@ async def chat(request: Request, body: ChatRequest):
     # Filter by sources if specified (post-filter for similarity queries)
     if body.sources is not None and len(body.sources) > 0:
         articles = [a for a in articles if a.get("metadata", {}).get("source") in body.sources]
+    elif is_public_mode():
+        public_ids = get_public_catalog_ids()
+        articles = [a for a in articles if a.get("metadata", {}).get("source") in public_ids]
 
     articles = prepare_articles_for_chat(message, articles, preferred_doc_type)
 
