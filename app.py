@@ -2171,6 +2171,62 @@ async def cloud_sources(request: Request):
         )
 
 
+@app.get("/api/cloud/catalog")
+@limiter.limit("30/minute")
+async def cloud_catalog(request: Request):
+    """
+    Return the live published source-pack catalog from R2.
+    """
+    try:
+        from offline_tools.cloud.r2 import get_backups_storage
+        storage = get_backups_storage()
+
+        if not storage.is_configured():
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "error": "cloud_not_configured",
+                    "message": "Cloud storage not available on this server"
+                }
+            )
+
+        conn_status = storage.test_connection()
+        if not conn_status["connected"]:
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "error": "cloud_connection_failed",
+                    "message": conn_status.get("error", "Failed to connect to cloud storage")
+                }
+            )
+
+        raw = storage.download_file_content("published/catalog.json")
+        if not raw:
+            return JSONResponse(
+                status_code=404,
+                content={
+                    "error": "catalog_not_found",
+                    "message": "published/catalog.json not found"
+                }
+            )
+
+        catalog = json.loads(raw)
+        return {
+            "catalog": catalog,
+            "connected": True,
+            "total": len(catalog.get("sources", [])) if isinstance(catalog, dict) else 0
+        }
+
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": "cloud_error",
+                "message": str(e)
+            }
+        )
+
+
 @app.get("/api/cloud/download/{source_id}")
 @limiter.limit("10/minute")
 async def cloud_download(request: Request, source_id: str):

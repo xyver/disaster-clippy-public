@@ -2209,6 +2209,17 @@ def _run_delete_job(source_id: str, delete_files: bool, progress_callback=None, 
     except Exception as e:
         errors.append(f"Failed to remove from installed_packs: {e}")
 
+    # 1b. Remove from selected_sources in local config
+    try:
+        selected_sources = config.get_selected_sources()
+        if source_id in selected_sources:
+            selected_sources = [src for src in selected_sources if src != source_id]
+            config.set_selected_sources(selected_sources)
+            config.save()
+            deleted_items.append("selected_sources entry")
+    except Exception as e:
+        errors.append(f"Failed to remove from selected_sources: {e}")
+
     # 2. Delete local backup folder if requested
     freed_mb = 0
     if delete_files:
@@ -3194,13 +3205,11 @@ async def list_cloud_sources():
 
     Returns sources that can be installed locally.
     """
-    from offline_tools.source_manager import list_cloud_sources as _list_cloud_sources
+    from admin.routes.packs import list_available_cloud_sources_data
 
-    result = _list_cloud_sources()
-
+    result = list_available_cloud_sources_data()
     if result.get("error"):
         raise HTTPException(500, result["error"])
-
     return result
 
 
@@ -3212,40 +3221,9 @@ async def list_available_cloud_sources():
     Used by Job Builder's install_source dropdown to show only sources
     that the user doesn't already have locally.
     """
-    from offline_tools.source_manager import list_cloud_sources as _list_cloud_sources
+    from admin.routes.packs import list_uninstalled_cloud_sources_data
 
-    # Get cloud sources
-    cloud_result = _list_cloud_sources()
-    if cloud_result.get("error"):
-        return {"sources": [], "error": cloud_result["error"]}
-
-    cloud_sources = cloud_result.get("sources", [])
-
-    # Get local sources
-    config = get_local_config()
-    backup_folder = config.get_backup_folder()
-    local_source_ids = set()
-
-    if backup_folder:
-        backup_path = Path(backup_folder)
-        if backup_path.exists():
-            for source_folder in backup_path.iterdir():
-                if source_folder.is_dir() and not source_folder.name.startswith("_"):
-                    if not is_system_folder(source_folder.name):
-                        local_source_ids.add(source_folder.name.lower())
-
-    # Filter out already-installed sources
-    available_sources = []
-    for src in cloud_sources:
-        src_id = src.get("source_id", "").lower()
-        if src_id and src_id not in local_source_ids:
-            available_sources.append(src)
-
-    return {
-        "sources": available_sources,
-        "total_cloud": len(cloud_sources),
-        "already_installed": len(cloud_sources) - len(available_sources)
-    }
+    return list_uninstalled_cloud_sources_data()
 
 
 @router.get("/available-zim-files")
@@ -3600,58 +3578,17 @@ class InstallSourceRequest(BaseModel):
 
 
 def _run_install_job(source_id: str, include_backup: bool, sync_mode: str = "update", progress_callback=None, cancel_checker=None, job_id=None):
-    """Background job function for source installation"""
-    from offline_tools.source_manager import install_source_from_cloud
-    from offline_tools.vectordb.metadata import MetadataIndex
-    from offline_tools.vectordb import get_vector_store
+    """Backward-compatible install worker delegated to packs.py."""
+    from admin.routes.packs import _run_install_source_pack_job
 
-    deleted_count = 0
-
-    # If replace mode, delete existing vectors first
-    if sync_mode == "replace":
-        if progress_callback:
-            progress_callback(5, f"Deleting old vectors for {source_id}...")
-
-        try:
-            # read_only=True - delete doesn't need embeddings
-            store = get_vector_store(mode="local", read_only=True)
-            delete_result = store.delete_by_source(source_id)
-            deleted_count = delete_result.get("deleted_count", 0)
-            print(f"[install] Deleted {deleted_count} old vectors for {source_id}")
-        except Exception as e:
-            print(f"[install] Warning: Failed to delete old vectors: {e}")
-
-    def progress_wrapper(stage, current, total):
-        if progress_callback:
-            # Job manager expects (percent, message) not (current, total)
-            # Offset by 10% if we did a delete first
-            base = 10 if sync_mode == "replace" else 0
-            percent = base + int((current / max(total, 1)) * (100 - base))
-            progress_callback(percent, stage)
-            print(f"[install] {stage}: {current}/{total} ({percent}%)")
-
-    result = install_source_from_cloud(
-        source_id=source_id,
-        include_backup=include_backup,
-        progress_callback=progress_wrapper
+    return _run_install_source_pack_job(
+        source_id,
+        include_backup,
+        sync_mode=sync_mode,
+        progress_callback=progress_callback,
+        cancel_checker=cancel_checker,
+        job_id=job_id
     )
-
-    # Add deletion stats to result
-    if result.get("success"):
-        result["sync_mode"] = sync_mode
-        result["deleted_count"] = deleted_count
-
-    # Verify metadata index can read the new source
-    if result.get("success"):
-        try:
-            # Creating new MetadataIndex reads fresh _master.json from disk
-            metadata_index = MetadataIndex()
-            stats = metadata_index.get_stats()
-            print(f"[install] Metadata index updated: {stats.get('total_documents', 0)} total documents")
-        except Exception as e:
-            print(f"[install] Warning: Failed to verify metadata index: {e}")
-
-    return result
 
 
 @router.post("/install-source")
@@ -3665,32 +3602,16 @@ async def install_source_from_cloud(request: InstallSourceRequest):
     Args:
         sync_mode: "update" (add/merge) or "replace" (delete old vectors first)
     """
-    from admin.job_manager import get_job_manager
-
-    source_id = request.source_id.strip().lower()
-    manager = get_job_manager()
+    from admin.routes.packs import submit_install_source_pack
 
     try:
-        job_id = manager.submit(
-            "install_source",
-            source_id,
-            _run_install_job,
-            source_id,
-            request.include_backup,
-            request.sync_mode  # "update" or "replace"
+        return submit_install_source_pack(
+            request.source_id,
+            include_backup=request.include_backup,
+            sync_mode=request.sync_mode
         )
     except ValueError as e:
         raise HTTPException(409, str(e))
-
-    mode_text = "Replacing" if request.sync_mode == "replace" else "Installing"
-    return {
-        "status": "submitted",
-        "job_id": job_id,
-        "source_id": source_id,
-        "include_backup": request.include_backup,
-        "sync_mode": request.sync_mode,
-        "message": f"{mode_text} source '{source_id}' from cloud"
-    }
 
 
 # Alias for sources.html compatibility

@@ -2,12 +2,13 @@
 Pack Management API
 
 Endpoints for browsing, installing, and downloading source packs.
-Handles both local pack management and cloud (R2) downloads.
+Handles both the shared source-pack catalog and local pack state.
 """
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from pathlib import Path
+from typing import Any, Dict, List, Tuple
 import json
 import os
 
@@ -15,6 +16,7 @@ from offline_tools.schemas import (
     get_manifest_file, get_metadata_file, get_index_file, get_vectors_file,
     get_vectors_768_file
 )
+from offline_tools.validation import is_system_folder
 
 router = APIRouter(prefix="/api", tags=["Pack Management"])
 
@@ -69,6 +71,316 @@ def get_local_config():
     return _get_config()
 
 
+def _normalize_source_id(source_id: str) -> str:
+    return source_id.strip().lower()
+
+
+def _require_backup_path(config) -> Path:
+    return Path(config.require_backup_folder())
+
+
+def _list_installed_source_ids(config) -> List[str]:
+    try:
+        backup_path = _require_backup_path(config)
+    except Exception:
+        return []
+
+    if not backup_path.exists():
+        return []
+
+    source_ids = []
+    for source_folder in backup_path.iterdir():
+        if source_folder.is_dir() and not source_folder.name.startswith("_") and not is_system_folder(source_folder.name):
+            source_ids.append(source_folder.name)
+
+    return sorted(source_ids, key=str.lower)
+
+
+def _sync_installed_packs(config, installed_ids: List[str]) -> None:
+    normalized = [_normalize_source_id(source_id) for source_id in installed_ids]
+    if config.get("installed_packs", []) != normalized:
+        config.set("installed_packs", normalized)
+        config.save()
+
+
+def _get_active_source_ids(config, installed_ids: List[str]) -> Tuple[List[str], str]:
+    installed_set = {_normalize_source_id(source_id) for source_id in installed_ids}
+    selected = [_normalize_source_id(source_id) for source_id in config.get_selected_sources()]
+
+    if not selected:
+        return sorted(installed_set), "all_installed"
+
+    active = [source_id for source_id in selected if source_id in installed_set]
+    if active != selected:
+        config.set_selected_sources(active)
+        config.save()
+
+    return active, "selected"
+
+
+def _read_live_catalog(config) -> Dict[str, Any]:
+    if config.should_use_proxy():
+        from admin.cloud_proxy import get_proxy_client
+
+        proxy = get_proxy_client()
+        result = proxy.get_catalog()
+        if "error" in result and not result.get("connected", False):
+            return {"catalog": {}, "connected": False, "error": result["error"], "via": "proxy"}
+
+        catalog = result.get("catalog", {})
+        return {
+            "catalog": catalog if isinstance(catalog, dict) else {},
+            "connected": True,
+            "via": "proxy"
+        }
+
+    from dotenv import load_dotenv
+    load_dotenv()
+    from offline_tools.cloud.r2 import get_backups_storage
+
+    storage = get_backups_storage()
+    if not storage.is_configured():
+        return {"catalog": {}, "connected": False, "error": "R2 not configured"}
+
+    conn_status = storage.test_connection()
+    if not conn_status["connected"]:
+        return {"catalog": {}, "connected": False, "error": conn_status.get("error", "Connection failed")}
+
+    raw = storage.download_file_content("published/catalog.json")
+    if not raw:
+        return {"catalog": {}, "connected": False, "error": "published/catalog.json not found"}
+
+    try:
+        catalog = json.loads(raw)
+    except Exception as e:
+        return {"catalog": {}, "connected": False, "error": f"Failed to parse published/catalog.json: {e}"}
+
+    return {"catalog": catalog if isinstance(catalog, dict) else {}, "connected": True, "via": "r2"}
+
+
+def load_catalog_packs_data() -> Dict[str, Any]:
+    config = get_local_config()
+    catalog_result = _read_live_catalog(config)
+    if not catalog_result.get("connected"):
+        return {"packs": [], "connected": False, "error": catalog_result.get("error", "Catalog unavailable")}
+
+    catalog = catalog_result.get("catalog", {})
+    catalog_sources = catalog.get("sources", [])
+    installed_ids = _list_installed_source_ids(config)
+    _sync_installed_packs(config, installed_ids)
+    active_ids, selection_mode = _get_active_source_ids(config, installed_ids)
+    installed_set = {_normalize_source_id(source_id) for source_id in installed_ids}
+    active_set = {_normalize_source_id(source_id) for source_id in active_ids}
+
+    packs = []
+    for source in catalog_sources if isinstance(catalog_sources, list) else []:
+        if not isinstance(source, dict):
+            continue
+        source_id = _normalize_source_id(str(source.get("source_id", "") or ""))
+        if not source_id:
+            continue
+
+        size_bytes = int(source.get("size_bytes", 0) or 0)
+        packs.append({
+            "source_id": source_id,
+            "name": source.get("name", source_id.replace("-", " ").replace("_", " ").title()),
+            "description": source.get("description", ""),
+            "license": source.get("license", "Unknown"),
+            "license_verified": source.get("license_verified", False),
+            "tags": source.get("tags", []),
+            "topics": source.get("topics", []),
+            "document_count": int(source.get("doc_count", 0) or 0),
+            "size_bytes": size_bytes,
+            "total_size_mb": round(size_bytes / (1024 * 1024), 1) if size_bytes else 0,
+            "live_url": source.get("live_url", ""),
+            "backup_url": source.get("backup_url", ""),
+            "base_url": source.get("base_url", ""),
+            "last_updated": source.get("last_updated", ""),
+            "installed": source_id in installed_set,
+            "active": source_id in active_set
+        })
+
+    return {
+        "packs": packs,
+        "connected": True,
+        "total": len(packs),
+        "selection_mode": selection_mode,
+        "source": "published_catalog",
+        "via": catalog_result.get("via", "r2")
+    }
+
+
+def load_installed_packs_data() -> Dict[str, Any]:
+    config = get_local_config()
+    installed_ids = _list_installed_source_ids(config)
+    _sync_installed_packs(config, installed_ids)
+    active_ids, selection_mode = _get_active_source_ids(config, installed_ids)
+    active_set = {_normalize_source_id(source_id) for source_id in active_ids}
+
+    try:
+        backup_path = _require_backup_path(config)
+    except Exception:
+        return {"packs": [], "count": 0, "selection_mode": selection_mode}
+
+    packs = []
+    for source_id in installed_ids:
+        source_config = {}
+        manifest_file = backup_path / source_id / get_manifest_file()
+        if manifest_file.exists():
+            try:
+                with open(manifest_file, 'r', encoding='utf-8-sig') as f:
+                    source_config = json.load(f)
+            except Exception:
+                pass
+
+        doc_count = 0
+        metadata_path = backup_path / source_id / get_metadata_file()
+        if metadata_path.exists():
+            try:
+                with open(metadata_path, 'r', encoding='utf-8') as f:
+                    meta = json.load(f)
+                doc_count = int(meta.get("document_count", 0) or 0)
+            except Exception:
+                pass
+
+        packs.append({
+            "source_id": source_id,
+            "name": source_config.get("name", source_id),
+            "license": source_config.get("license", "Unknown"),
+            "description": source_config.get("description", ""),
+            "document_count": doc_count,
+            "installed": True,
+            "active": source_id in active_set
+        })
+
+    return {"packs": packs, "count": len(packs), "selection_mode": selection_mode}
+
+
+def load_active_packs_data() -> Dict[str, Any]:
+    installed_result = load_installed_packs_data()
+    active_packs = [pack for pack in installed_result.get("packs", []) if pack.get("active")]
+    return {
+        "packs": active_packs,
+        "count": len(active_packs),
+        "selection_mode": installed_result.get("selection_mode", "all_installed")
+    }
+
+
+def list_available_cloud_sources_data() -> Dict[str, Any]:
+    catalog_result = load_catalog_packs_data()
+    if not catalog_result.get("connected"):
+        return {"sources": [], "connected": False, "error": catalog_result.get("error", "Catalog unavailable")}
+
+    sources = []
+    for pack in catalog_result.get("packs", []):
+        sources.append({
+            "source_id": pack["source_id"],
+            "name": pack["name"],
+            "description": pack.get("description", ""),
+            "license": pack.get("license", "Unknown"),
+            "document_count": pack.get("document_count", 0),
+            "base_url": pack.get("base_url", ""),
+            "installed": pack.get("installed", False),
+            "active": pack.get("active", False)
+        })
+
+    return {
+        "sources": sources,
+        "connected": True,
+        "total": len(sources),
+        "selection_mode": catalog_result.get("selection_mode", "all_installed"),
+        "source": catalog_result.get("source", "published_catalog"),
+        "via": catalog_result.get("via", "r2")
+    }
+
+
+def list_uninstalled_cloud_sources_data() -> Dict[str, Any]:
+    sources_result = list_available_cloud_sources_data()
+    if not sources_result.get("connected"):
+        return {"sources": [], "connected": False, "error": sources_result.get("error", "Catalog unavailable")}
+
+    available_sources = [source for source in sources_result.get("sources", []) if not source.get("installed")]
+    return {
+        "sources": available_sources,
+        "connected": True,
+        "total_cloud": len(sources_result.get("sources", [])),
+        "already_installed": len(sources_result.get("sources", [])) - len(available_sources)
+    }
+
+
+def _run_install_source_pack_job(source_id: str, include_backup: bool, sync_mode: str = "update", progress_callback=None, cancel_checker=None, job_id=None):
+    from offline_tools.source_manager import install_source_from_cloud
+    from offline_tools.vectordb.metadata import MetadataIndex
+    from offline_tools.vectordb import get_vector_store
+
+    deleted_count = 0
+    source_id = _normalize_source_id(source_id)
+
+    if sync_mode == "replace":
+        if progress_callback:
+            progress_callback(5, f"Deleting old vectors for {source_id}...")
+
+        try:
+            store = get_vector_store(mode="local", read_only=True)
+            delete_result = store.delete_by_source(source_id)
+            deleted_count = delete_result.get("deleted_count", 0)
+        except Exception as e:
+            print(f"[install] Warning: Failed to delete old vectors: {e}")
+
+    def progress_wrapper(stage, current, total):
+        if progress_callback:
+            base = 10 if sync_mode == "replace" else 0
+            percent = base + int((current / max(total, 1)) * (100 - base))
+            progress_callback(percent, stage)
+
+    result = install_source_from_cloud(
+        source_id=source_id,
+        include_backup=include_backup,
+        progress_callback=progress_wrapper
+    )
+
+    if result.get("success"):
+        result["sync_mode"] = sync_mode
+        result["deleted_count"] = deleted_count
+
+        try:
+            metadata_index = MetadataIndex()
+            metadata_index.get_stats()
+        except Exception as e:
+            print(f"[install] Warning: Failed to verify metadata index: {e}")
+
+        config = get_local_config()
+        installed_ids = _list_installed_source_ids(config)
+        _sync_installed_packs(config, installed_ids)
+
+    return result
+
+
+def submit_install_source_pack(source_id: str, include_backup: bool = False, sync_mode: str = "update") -> Dict[str, Any]:
+    from admin.job_manager import get_job_manager
+
+    source_id = _normalize_source_id(source_id)
+    manager = get_job_manager()
+    job_id = manager.submit(
+        "install_source",
+        source_id,
+        _run_install_source_pack_job,
+        source_id,
+        include_backup,
+        sync_mode
+    )
+
+    mode_text = "Replacing" if sync_mode == "replace" else "Installing"
+    return {
+        "status": "submitted",
+        "job_id": job_id,
+        "source_id": source_id,
+        "include_backup": include_backup,
+        "sync_mode": sync_mode,
+        "message": f"{mode_text} source pack '{source_id}' from the catalog"
+    }
+
+
 # =============================================================================
 # REQUEST MODELS
 # =============================================================================
@@ -82,49 +394,60 @@ class ReindexPackRequest(BaseModel):
     source_id: str
 
 
+class InstallSourceRequest(BaseModel):
+    source_id: str
+    include_backup: bool = False
+    sync_mode: str = "update"  # "update" (add/merge) or "replace" (delete old vectors first)
+
+
+class SetActivePacksRequest(BaseModel):
+    source_ids: List[str] = []
+
+
 # =============================================================================
 # INSTALLED PACKS
 # =============================================================================
 
 @router.get("/installed-packs")
 async def get_installed_packs():
-    """Get list of locally installed packs"""
+    """Get list of locally installed source packs."""
+    return load_installed_packs_data()
+
+
+@router.get("/packs/installed")
+async def get_installed_packs_canonical():
+    """Canonical installed source-pack catalog for the local machine."""
+    return load_installed_packs_data()
+
+
+@router.get("/packs/active")
+async def get_active_packs():
+    """Get the active runtime source-pack catalog."""
+    return load_active_packs_data()
+
+
+@router.post("/packs/active")
+async def set_active_packs(request: SetActivePacksRequest):
+    """Set the active runtime source-pack catalog using selected_sources."""
     config = get_local_config()
-    installed = config.get("installed_packs", [])
+    installed_ids = _list_installed_source_ids(config)
+    installed_set = set(_normalize_source_id(source_id) for source_id in installed_ids)
+    requested = []
+    for source_id in request.source_ids:
+        normalized = _normalize_source_id(source_id)
+        if normalized and normalized not in requested:
+            requested.append(normalized)
 
-    backup_folder = config.get_backup_folder()
-    packs = []
-    for source_id in installed:
-        source_config = {}
-        if backup_folder:
-            manifest_file = Path(backup_folder) / source_id / get_manifest_file()
-            if manifest_file.exists():
-                try:
-                    with open(manifest_file, 'r', encoding='utf-8') as f:
-                        source_config = json.load(f)
-                except Exception:
-                    pass
+    invalid = [source_id for source_id in requested if source_id not in installed_set]
+    if invalid:
+        raise HTTPException(400, f"Cannot activate uninstalled source packs: {', '.join(invalid)}")
 
-        doc_count = 0
-        metadata_path = Path(backup_folder) / source_id / get_metadata_file() if backup_folder else None
+    config.set_selected_sources(requested)
+    config.save()
 
-        if metadata_path and metadata_path.exists():
-            try:
-                with open(metadata_path, 'r', encoding='utf-8') as f:
-                    meta = json.load(f)
-                    doc_count = meta.get("document_count", 0)
-            except Exception:
-                pass
-
-        packs.append({
-            "source_id": source_id,
-            "name": source_config.get("name", source_id),
-            "license": source_config.get("license", "Unknown"),
-            "document_count": doc_count,
-            "installed": True
-        })
-
-    return {"packs": packs, "count": len(packs)}
+    result = load_active_packs_data()
+    result["message"] = "Active source-pack catalog updated"
+    return result
 
 
 @router.post("/install-pack")
@@ -162,11 +485,12 @@ async def install_pack(request: InstallPackRequest):
 
             metadata = meta_response.json()
 
-        backup_folder = config.get_backup_folder()
-        if not backup_folder:
-            raise HTTPException(400, "No backup folder configured. Set it in Settings first.")
+        try:
+            backup_path = _require_backup_path(config)
+        except Exception:
+            raise HTTPException(400, "No BACKUP_PATH configured. Set it in Settings first.")
 
-        metadata_dir = Path(backup_folder) / request.source_id
+        metadata_dir = backup_path / request.source_id
         metadata_dir.mkdir(parents=True, exist_ok=True)
 
         metadata_file = metadata_dir / get_metadata_file()
@@ -183,7 +507,7 @@ async def install_pack(request: InstallPackRequest):
             "status": "success",
             "source_id": request.source_id,
             "document_count": manifest.get("pack_info", {}).get("document_count", 0),
-            "message": f"Installed {request.source_id} pack successfully"
+            "message": f"Installed source pack {request.source_id} successfully"
         }
 
     except httpx.RequestError as e:
@@ -191,187 +515,45 @@ async def install_pack(request: InstallPackRequest):
 
 
 # =============================================================================
-# CLOUD SOURCES (R2)
+# CATALOG SOURCES (R2)
 # =============================================================================
 
 @router.get("/cloud-sources")
 async def get_cloud_sources():
     """
-    Get sources available from the Global Cloud (R2 backups/ folder).
+    Get sources available from the shared catalog in R2.
     Returns sources in a format compatible with the sources page filtering.
 
     Uses Railway proxy if R2 keys aren't configured locally.
     """
-    try:
-        # Check if we should use proxy (no R2 keys, but proxy URL configured)
-        config = get_local_config()
-        if config.should_use_proxy():
-            from admin.cloud_proxy import get_proxy_client
-            proxy = get_proxy_client()
-            result = proxy.get_sources()
-            if "error" in result and not result.get("connected", False):
-                return {"sources": [], "connected": False, "error": result["error"], "via": "proxy"}
-            result["via"] = "proxy"
-            return result
-
-        # Direct R2 access
-        from dotenv import load_dotenv
-        load_dotenv()
-        from offline_tools.cloud.r2 import get_r2_storage
-        storage = get_r2_storage()
-
-        if not storage.is_configured():
-            # No R2 keys and no proxy - show helpful message
-            proxy_url = config.get_railway_proxy_url()
-            if not proxy_url:
-                return {
-                    "sources": [],
-                    "connected": False,
-                    "error": "R2 not configured. Set RAILWAY_PROXY_URL to use cloud through Railway proxy."
-                }
-            return {"sources": [], "connected": False, "error": "R2 not configured"}
-
-        conn_status = storage.test_connection()
-        if not conn_status["connected"]:
-            return {"sources": [], "connected": False, "error": conn_status.get("error", "Connection failed")}
-
-        # Try to load _master.json for source metadata (cached)
-        master_data = _get_cached_cloud_master(storage)
-
-        master_sources = master_data.get("sources", {})
-        if master_sources:
-            sources = []
-            for source_id, source_info in master_sources.items():
-                sources.append({
-                    "source_id": source_id,
-                    "name": source_info.get("name", source_id.replace("-", " ").replace("_", " ").title()),
-                    "description": source_info.get("description", ""),
-                    "license": source_info.get("license", "Unknown"),
-                    "document_count": source_info.get("count", source_info.get("document_count", 0)),
-                    "backup_type": source_info.get("backup_type", "cloud"),
-                    "base_url": source_info.get("base_url", "")
-                })
-            sources.sort(key=lambda x: x["name"].lower())
-            return {
-                "sources": sources,
-                "connected": True,
-                "total": len(sources),
-                "source": "master_json"
-            }
-
-        # Fallback: List files in backups/ folder
-        files = storage.list_files("backups/")
-        root_files = storage.list_files("")
-        root_prefixes = set()
-        for f in root_files[:100]:
-            key = f["key"]
-            if "/" in key:
-                root_prefixes.add(key.split("/")[0])
-
-        skip_files = {"_master.json", "sources.json", "backups.json"}
-        source_ids = set()
-        sample_keys = []
-        for f in files:
-            key = f["key"]
-            if len(sample_keys) < 10:
-                sample_keys.append(key)
-            parts = key.split("/")
-            if len(parts) >= 2:
-                source_id = parts[1]
-                if source_id and source_id not in skip_files and not source_id.startswith("_"):
-                    source_ids.add(source_id)
-
-        sources = []
-        for source_id in source_ids:
-            sources.append({
-                "source_id": source_id,
-                "name": source_id.replace("-", " ").replace("_", " ").title(),
-                "description": "",
-                "license": "Unknown",
-                "document_count": 0,
-                "backup_type": "cloud",
-                "base_url": ""
-            })
-
-        sources.sort(key=lambda x: x["name"].lower())
-
-        return {
-            "sources": sources,
-            "connected": True,
-            "total": len(sources),
-            "source": "file_listing",
-            "files_found": len(files),
-            "root_prefixes": list(root_prefixes),
-            "sample_keys": sample_keys,
-            "debug": {
-                "master_found": False,
-                "backups_files_count": len(files),
-                "root_files_count": len(root_files)
-            }
-        }
-
-    except ImportError:
-        return {"sources": [], "connected": False, "error": "Storage module not available"}
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return {"sources": [], "connected": False, "error": str(e)}
+    return list_available_cloud_sources_data()
 
 
 @router.get("/available-packs")
 async def get_available_packs():
     """
-    Get packs available from the Global Cloud Backup (R2 backups/ folder).
+    Get source packs available from the shared catalog in R2.
     """
+    return load_catalog_packs_data()
+
+
+@router.get("/packs/catalog")
+async def get_catalog_packs():
+    """Canonical live source-pack catalog."""
+    return load_catalog_packs_data()
+
+
+@router.post("/packs/install")
+async def install_catalog_pack(request: InstallSourceRequest):
+    """Canonical source-pack install endpoint."""
     try:
-        from dotenv import load_dotenv
-        load_dotenv()
-        from offline_tools.cloud.r2 import get_r2_storage
-        storage = get_r2_storage()
-
-        if not storage.is_configured():
-            return {"packs": [], "connected": False, "error": "R2 not configured"}
-
-        conn_status = storage.test_connection()
-        if not conn_status["connected"]:
-            return {"packs": [], "connected": False, "error": conn_status.get("error", "Connection failed")}
-
-        files = storage.list_files("backups/")
-
-        skip_files = {"_master.json", "sources.json", "backups.json"}
-        packs = {}
-        for f in files:
-            key = f["key"]
-            parts = key.split("/")
-            if len(parts) >= 2:
-                source_id = parts[1]
-                if source_id in skip_files or source_id.startswith("_"):
-                    continue
-                if source_id and source_id not in packs:
-                    packs[source_id] = {
-                        "source_id": source_id,
-                        "name": source_id.replace("-", " ").replace("_", " ").title(),
-                        "files": [],
-                        "total_size_mb": 0,
-                        "tier": "official",
-                        "description": "Official backup from Global Cloud Storage"
-                    }
-                if source_id:
-                    packs[source_id]["files"].append(f)
-                    packs[source_id]["total_size_mb"] += f.get("size_mb", 0)
-
-        pack_list = list(packs.values())
-
-        return {
-            "packs": pack_list,
-            "connected": True,
-            "total": len(pack_list)
-        }
-
-    except ImportError:
-        return {"packs": [], "connected": False, "error": "Storage module not available"}
-    except Exception as e:
-        return {"packs": [], "connected": False, "error": str(e)}
+        return submit_install_source_pack(
+            request.source_id,
+            include_backup=request.include_backup,
+            sync_mode=request.sync_mode
+        )
+    except ValueError as e:
+        raise HTTPException(409, str(e))
 
 
 # NOTE: Download pack functionality has been consolidated into source_tools.py
@@ -385,13 +567,13 @@ async def reindex_pack(request: ReindexPackRequest):
     Prefers 768-dim vectors for offline use.
     """
     config = get_local_config()
-    backup_folder = config.get_backup_folder()
-
-    if not backup_folder:
-        raise HTTPException(400, "No backup folder configured. Set it in Settings first.")
+    try:
+        backup_path = _require_backup_path(config)
+    except Exception:
+        raise HTTPException(400, "No BACKUP_PATH configured. Set it in Settings first.")
 
     source_id = request.source_id
-    source_folder = Path(backup_folder) / source_id
+    source_folder = backup_path / source_id
 
     if not source_folder.exists():
         raise HTTPException(404, f"Source folder not found: {source_id}")
