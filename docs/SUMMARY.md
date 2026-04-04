@@ -86,6 +86,7 @@ This keeps the core engine open and reusable while allowing a richer hosted prod
 
 - [`README.md`](../README.md)
 - [`deployment.md`](deployment.md)
+- [`distribution-alignment.md`](distribution-alignment.md)
 - [`architecture.md`](architecture.md)
 - [`source-tools.md`](source-tools.md)
 - [`language-packs.md`](language-packs.md)

@@ -433,6 +433,11 @@ When users choose tags for their sources (including novel terms from content ana
 
 Sources go through a multi-step processing pipeline before they're ready for distribution.
 
+For the full lifecycle and quality gates after this preparation work, including
+`Workable Locally`, `Ready to Submit`, `Production Ready`, `Published`, and the
+post-publication `Available` / `Installed` / `Active` consumption states, see
+[source-pack-release-policy.md](source-pack-release-policy.md).
+
 ### Pipeline Steps
 
 | Step | Action | Output File(s) | Completion Marker |

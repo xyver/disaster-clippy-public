@@ -2,7 +2,7 @@
 
 **Conversational search over your own data, online, offline, and locally.**
 
-Disaster Clippy is an offline-capable AI search system for any curated body of knowledge. It combines a hosted demo, a local runtime, and advanced local admin/source tools around a shared collection and source-pack model.
+Disaster Clippy is an offline-capable AI search system for any curated body of knowledge. It combines a hosted demo, a local runtime, and advanced local admin/source tools around a shared catalog and source-pack model.
 
 It is not just a chat app and not just an admin tool. The project is meant to support four related surfaces:
 
@@ -25,7 +25,7 @@ That approach works for any curated body of knowledge. The same engine has been 
 - **Pandemic preparedness** — flu response protocols and field guidance for organizational planning
 - **Humanitarian reference** — offline-capable search across Appropedia, Akvo, and similar open knowledge bases
 
-The source pack model is what makes this portable. On the public site and in the app, people explore collections. Under the hood, a pack is the discrete, versioned bundle of knowledge — HTML backups, ZIM archives, PDFs, embeddings, and metadata — that can be installed locally, carried offline, or swapped out entirely. The runtime does not care what the pack contains.
+The source pack model is what makes this portable. On the public site and in the app, people explore collections through a catalog. Under the hood, a source pack is the discrete, versioned bundle of knowledge — HTML backups, ZIM archives, PDFs, embeddings, and metadata — that can be installed locally, carried offline, or swapped out entirely. The runtime does not care what the pack contains.
 
 If you are a developer thinking about building something similar for your own domain, the architecture is designed with that in mind. See [`docs/clippy-core-extraction.md`](docs/clippy-core-extraction.md) for the direction the portable core is heading, and [`docs/template-deployments.md`](docs/template-deployments.md) for the planned plug-and-play deployment path.
 
@@ -33,7 +33,7 @@ If you are a developer thinking about building something similar for your own do
 
 ## What It Does
 
-Users ask questions in plain language and get grounded answers from curated collections.
+Users ask questions in plain language and get grounded answers from curated source packs.
 
 Example questions:
 
@@ -59,7 +59,7 @@ The hosted demo is the easiest way to experience Disaster Clippy.
 It is intended for:
 
 - people exploring the system for the first time
-- teams validating a collection before self-hosting
+- teams validating a source pack catalog before self-hosting
 - users who want search/chat without running admin tooling
 
 ### Local Runtime
@@ -70,7 +70,7 @@ It is intended for:
 
 - offline setups
 - LAN/Raspberry Pi deployments
-- organizations or individuals carrying selected collections locally
+- organizations or individuals carrying selected source packs locally
 
 ### Advanced Local Admin
 
@@ -103,10 +103,10 @@ A source pack may include:
 This lets users:
 
 - understand what content they are using
-- choose which sources to install or sync
+- choose which source packs to install or sync
 - carry the same pack choices between hosted and local use
 
-On the public site and in the app, these are presented as collections. In the runtime and tooling, packs are the portable unit underneath.
+On the public site and in the app, these are presented as collections in a catalog. In the runtime and tooling, source packs are the portable unit underneath.
 
 ---
 
@@ -119,6 +119,9 @@ Current hosted demo:
 - `https://app.disasterclippy.com`
 
 ### 2. Run Locally
+
+The current local install path is still the public GitHub repo and `python app.py`.
+The wrapper/installer path is planned, but it is not the default install flow yet.
 
 ```bash
 # Clone the repository
@@ -186,6 +189,7 @@ Use the cloud install when you want:
 
 ### For Users
 
+- source-pack-aware search across a curated catalog
 - natural language search across curated collections
 - grounded responses with source attribution
 - source filtering
@@ -197,7 +201,7 @@ Use the cloud install when you want:
 - local source storage
 - offline semantic search
 - local model support
-- pack-based content installation
+- source-pack installation from the catalog or local files
 
 ### For Advanced Local Admins
 
@@ -240,6 +244,7 @@ Where:
 ## Docs To Read Next
 
 - [`docs/deployment.md`](docs/deployment.md) - runtime model, public/private split, hosted vs local
+- [`docs/distribution-alignment.md`](docs/distribution-alignment.md) - what recent DaedalMap distribution updates imply for Clippy
 - [`docs/architecture.md`](docs/architecture.md) - system architecture and runtime layers
 - [`docs/source-tools.md`](docs/source-tools.md) - source creation and ingestion tools
 - [`docs/language-packs.md`](docs/language-packs.md) - translation system

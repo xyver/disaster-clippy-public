@@ -2,6 +2,12 @@
 
 This document makes Disaster Clippy source-pack release expectations explicit, using the existing validation model (`can_submit` and `can_publish`) as the primary quality gates.
 
+Terminology in this doc:
+
+- `source`: the content set being prepared by a contributor
+- `source pack`: the distributable artifact and catalog unit derived from that source
+- `public catalog`: the published list of source packs visible to users
+
 ---
 
 ## Purpose
@@ -10,6 +16,7 @@ This document makes Disaster Clippy source-pack release expectations explicit, u
 - Keep local-admin contribution flow fast.
 - Keep production publish flow strict and repeatable.
 - Make source quality visible to contributors and reviewers.
+- Clarify the full lifecycle from raw source preparation to published-pack consumption.
 
 Primary references:
 - `docs/validation.md`
@@ -23,9 +30,76 @@ Primary references:
 A source is not just complete/incomplete; it moves through release states:
 
 1. `Incomplete`
-2. `Ready to Submit` (`can_submit = true`)
-3. `Production Ready` (`can_publish = true`)
-4. `Published`
+2. `Workable Locally`
+3. `Ready to Submit` (`can_submit = true`)
+4. `Production Ready` (`can_publish = true`)
+5. `Published`
+
+---
+
+## End-To-End Lifecycle
+
+The full source-pack lifecycle has two distinct sides:
+
+### Side 1: Preparing A Source Pack
+
+```text
+raw source data
+  ->
+source tools prepare backup, metadata, manifest, and at least one index
+  ->
+workable locally
+  ->
+ready to submit
+  ->
+production ready
+  ->
+published
+```
+
+### Side 2: Consuming A Published Source Pack
+
+```text
+published source-pack catalog
+  ->
+user installs pack to local machine
+  ->
+pack appears in local installed catalog
+  ->
+pack is activated in the runtime catalog
+  ->
+app uses it for search/chat/offline browsing
+```
+
+This document defines the quality gates for Side 1 and the publication/consumption
+handoff point between both sides.
+
+---
+
+## What "Workable Locally" Means
+
+`Workable Locally` is the practical middle state between raw preparation and formal
+release gating.
+
+It means the source is useful enough for local testing in the app, even if it is not
+yet ready for submission or publication.
+
+Typical characteristics:
+
+- backup content exists locally
+- `_manifest.json` exists with enough identity/config fields to work on the source
+- `_metadata.json` exists
+- at least one usable index/vector path exists
+- the source can be searched, inspected, or spot-checked in the local runtime
+
+Not guaranteed yet:
+
+- full human verification
+- both vector dimensions
+- deep integrity validation
+- catalog-ready quality for publication
+
+This is the important "good enough to use and iterate on" stage for local admins.
 
 ---
 
@@ -34,7 +108,7 @@ A source is not just complete/incomplete; it moves through release states:
 Every source requires these fields in `_manifest.json` before submission:
 
 - `name`: Human-readable display name used in the app and public site.
-- `description`: One to two sentences describing what the source is and what it covers. This is the public-facing text shown on the collections page at disasterclippy.com. Required before a source can appear in the public catalog.
+- `description`: One to two sentences describing what the source is and what it covers. This is the public-facing text shown on the source-pack catalog page at disasterclippy.com. Required before a source can appear in the public catalog.
 - `tags`: Array of topic tags used for filtering and discovery.
 - `license`: License identifier (CC-BY, CC0, Public Domain, etc.).
 - `license_verified`: Boolean, must be true before submission.
@@ -63,6 +137,12 @@ Not required:
 
 Why: local contributors can submit useful work without paying full global processing cost.
 
+Interpretation:
+
+- `Workable Locally` means "I can test and improve this source in the app."
+- `Ready to Submit` means "This source is standardized enough to hand off for global
+  review."
+
 ---
 
 ## Gate 2: Production Ready (`can_publish`)
@@ -78,6 +158,11 @@ Required:
 - Integrity checks pass.
 
 Why: production users need reliable behavior across online/offline modes.
+
+Interpretation:
+
+- `Production Ready` means the source pack is clean enough to publish repeatably into
+  the shared download/catalog system.
 
 ---
 
@@ -143,12 +228,54 @@ Reviewer checklist:
 
 ---
 
+## Publication Handoff
+
+Once a source reaches `Published`, it crosses from the preparation side into the
+consumption side of the system.
+
+That handoff means:
+
+- the source pack is now allowed to appear in the public catalog
+- local users can discover it through the catalog/storefront flow
+- local installs should treat it as a stable published artifact, not an editable working
+  folder
+- future fixes or improvements should produce a revised published source-pack version,
+  not mutate the meaning of the already-published gate
+
+This is the boundary between:
+
+- Source Tools workflow
+- Pack catalog / install / activate workflow
+
+---
+
+## Consumption States After Publication
+
+After publication, a source pack moves through a different set of states on a user's
+machine:
+
+1. `Available`
+   Present in the published catalog.
+2. `Installed`
+   Present in the local `BACKUP_PATH` data root.
+3. `Active`
+   Selected for the local runtime catalog and used by the app.
+
+These are not QA gates. They are consumption states.
+
+That distinction matters:
+
+- `can_submit` and `can_publish` standardize preparation quality
+- available / installed / active standardize runtime consumption behavior
+
+---
+
 ## Operational Rules
 
 - Never publish without deep validation.
 - Never publish without both vector dimensions.
 - Cache light validation for UI responsiveness; bypass cache for final publish decisions.
-- Treat published pack versions as immutable artifacts.
+- Treat published source-pack versions as immutable artifacts.
 
 ---
 
@@ -157,6 +284,7 @@ Reviewer checklist:
 Use concise contributor-facing status text:
 
 - `Incomplete`: missing required files/flags.
+- `Workable Locally`: usable for local testing, but not yet standardized for handoff.
 - `Ready to Submit`: acceptable for queue handoff.
 - `Production Ready`: publishable now.
 - `Published`: live in production distribution.
