@@ -433,13 +433,18 @@ When users choose tags for their sources (including novel terms from content ana
 
 Sources go through a multi-step processing pipeline before they're ready for distribution.
 
+For the full lifecycle and quality gates after this preparation work, including
+`Workable Locally`, `Ready to Submit`, `Production Ready`, `Published`, and the
+post-publication `Available` / `Installed` / `Active` consumption states, see
+[source-pack-release-policy.md](source-pack-release-policy.md).
+
 ### Pipeline Steps
 
 | Step | Action | Output File(s) | Completion Marker |
 |------|--------|----------------|-------------------|
 | 1.1 | Get backup files (folder/download/scrape) | `pages/` or `.zim` | Files exist |
 | 1.2 | Scan backup / Generate backup manifest | `backup_manifest.json` | `pages` dict populated |
-| 2.1 | Configure source (name, description, license) | `_manifest.json` | `source_id`, `name`, `license` set |
+| 2.1 | Configure source (name, description, license, base_url) | `_manifest.json` | `source_id`, `name`, `description`, `license`, `base_url` set. `description` is required for the source to appear on the public collections page. |
 | 3.1 | Generate metadata (with language filter) | `_metadata.json` | `documents` dict, `document_count > 0` |
 | 3.2 | Set base URL | `_manifest.json` | `base_url` set |
 | 4.1 | Detect language | `_manifest.json` | `language` field set |

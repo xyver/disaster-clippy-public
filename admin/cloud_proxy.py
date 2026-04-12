@@ -88,6 +88,34 @@ class CloudProxyClient:
             self._last_error = str(e)
             return {"error": self._last_error, "sources": [], "connected": False}
 
+    def get_catalog(self) -> Dict[str, Any]:
+        """
+        Get the live published source-pack catalog from cloud.
+
+        Returns:
+            Dict with 'catalog' object and 'connected' bool
+        """
+        if not self.is_configured():
+            return {"error": "Proxy URL not configured", "catalog": {}, "connected": False}
+
+        try:
+            response = requests.get(
+                f"{self.proxy_url}/api/cloud/catalog",
+                timeout=self.timeout
+            )
+            return self._handle_response(response)
+        except requests.exceptions.Timeout:
+            get_connection_manager().on_global_system_error()
+            self._last_error = "Connection timeout"
+            return {"error": self._last_error, "catalog": {}, "connected": False}
+        except requests.exceptions.ConnectionError:
+            get_connection_manager().on_global_system_error()
+            self._last_error = "Connection failed"
+            return {"error": self._last_error, "catalog": {}, "connected": False}
+        except Exception as e:
+            self._last_error = str(e)
+            return {"error": self._last_error, "catalog": {}, "connected": False}
+
     def get_source_files(self, source_id: str) -> Dict[str, Any]:
         """
         Get list of files for a source.

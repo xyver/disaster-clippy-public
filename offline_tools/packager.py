@@ -56,11 +56,6 @@ SCRAPER_TYPES = [
 ]
 
 
-def get_project_root() -> Path:
-    """Get project root directory"""
-    return Path(__file__).parent.parent
-
-
 def get_backup_path() -> Path:
     """Get backup path from local_config (GUI setting) or BACKUP_PATH env var"""
     # Try local_config first (user's GUI setting)
@@ -1110,8 +1105,8 @@ def export_chromadb_index(source_id: str) -> Dict[str, Any]:
 
 def save_index_export(source_id: str, export_data: Dict[str, Any]) -> Path:
     """Save exported index to file"""
-    # Save in data/indexes folder
-    index_dir = get_project_root() / "data" / "indexes"
+    from admin.paths import get_cache_dir
+    index_dir = get_cache_dir() / "indexes"
     index_dir.mkdir(parents=True, exist_ok=True)
 
     index_file = index_dir / f"{source_id}_index.json"
@@ -1148,7 +1143,6 @@ def get_source_completeness(source_id: str, backup_folder: str = None) -> Dict[s
         "ready_for_upload": False
     }
 
-    root = get_project_root()
     backup_folder = get_backup_path()
 
     # Check source config from _manifest.json

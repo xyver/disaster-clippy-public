@@ -13,7 +13,7 @@ Disaster Clippy is no longer just "a FastAPI app you can run locally."
 It now needs to support four related surfaces:
 
 1. Hosted public app
-2. Marketing and catalog site
+2. Marketing and source-pack catalog site
 3. Downloadable offline/local runtime
 4. Downloadable advanced local admin/source-creation toolkit
 
@@ -93,7 +93,7 @@ This should feel like "use Disaster Clippy now."
 
 ### `.com`
 
-The product, catalog, and download site.
+The product, source-pack catalog, and download site.
 
 Responsibilities:
 
@@ -136,13 +136,13 @@ Audience:
 - offline users
 - preparedness groups
 - Raspberry Pi and LAN deployments
-- users syncing selected packs for offline use
+- users syncing selected source packs for offline use
 
 Behavior:
 
 - runs in `local` mode
 - supports local models and offline search
-- can sync or install chosen packs from the global registry
+- can sync or install chosen source packs from the global catalog
 - should work without the hosted service once set up
 
 ### 3. Advanced Local Admin Toolkit
@@ -170,7 +170,7 @@ Audience:
 
 Behavior:
 
-- manages update manifests, pack catalog metadata, account linkage, and hosted operational concerns
+- manages update manifests, source-pack catalog metadata, account linkage, and hosted operational concerns
 - belongs in the private repo
 
 ---
@@ -180,9 +180,9 @@ Behavior:
 The intended user flow is:
 
 1. User discovers Disaster Clippy on `.com`
-2. User explores the pack library and product docs
+2. User explores the source-pack catalog and product docs
 3. User optionally creates an account
-4. User selects packs, languages, and preferences from the global registry
+4. User selects source packs, languages, and preferences from the global catalog
 5. User can:
    - use the hosted `.io` app with that profile
    - download the local runtime and sync that same profile offline
@@ -201,18 +201,18 @@ There are at least four distinct update channels:
 | Update type | Examples |
 |-------------|----------|
 | App updates | new code release, bug fixes, UI changes |
-| Source pack updates | new packs, revised packs, metadata updates |
+| Source pack updates | new source packs, revised packs, metadata updates |
 | Model updates | embeddings, local LLM packs, language packs |
-| Control/catalog updates | pack manifests, compatibility flags, deprecations |
+| Control/catalog updates | source-pack manifests, compatibility flags, deprecations |
 
 ### Recommended approach
 
-Use signed or trusted manifests/catalogs rather than ad hoc download links.
+Use signed or trusted manifests and catalogs rather than ad hoc download links.
 
 Local installs should be able to check for:
 
 - app updates
-- pack updates
+- source-pack updates
 - model/language pack updates
 - compatibility notices
 

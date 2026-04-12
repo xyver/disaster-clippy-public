@@ -1,13 +1,13 @@
 # Disaster Clippy
 
-**Preparedness knowledge you can use online, offline, and locally.**
+**Conversational search over your own data, online, offline, and locally.**
 
-Disaster Clippy is an offline-capable AI search system for emergency preparedness, resilience, survival skills, medical references, and practical DIY knowledge. It combines a hosted app, a local runtime, and advanced local admin/source tools around a shared source-pack model.
+Disaster Clippy is an offline-capable AI search system for any curated body of knowledge. It combines a hosted demo, a local runtime, and advanced local admin/source tools around a shared catalog and source-pack model.
 
 It is not just a chat app and not just an admin tool. The project is meant to support four related surfaces:
 
-- hosted public app
-- product and catalog site
+- hosted demo app
+- product and documentation site
 - downloadable local runtime
 - downloadable advanced local admin toolkit
 
@@ -15,17 +15,17 @@ It is not just a chat app and not just an admin tool. The project is meant to su
 
 ## The Platform Behind It
 
-Disaster preparedness is the first vertical. The engine underneath is general purpose.
+Disaster preparedness is the first example deployment. The engine underneath is general purpose.
 
 The core idea is simple: most AI systems hide what they know and you have to trust them. This one makes the knowledge layer visible, swappable, and verifiable. Every answer cites its source. You control what goes in. If something looks wrong, you can check it yourself.
 
-That approach works for any curated body of knowledge, not just preparedness. The same engine has been used for:
+That approach works for any curated body of knowledge. The same engine has been used for:
 
 - **Building codes** — searchable local and regional code references for construction and compliance
 - **Pandemic preparedness** — flu response protocols and field guidance for organizational planning
 - **Humanitarian reference** — offline-capable search across Appropedia, Akvo, and similar open knowledge bases
 
-The source pack model is what makes this portable. A pack is a discrete, versioned bundle of knowledge — HTML backups, ZIM archives, PDFs, embeddings, and metadata — that can be installed locally, carried offline, or swapped out entirely. The runtime does not care what the pack contains.
+The source pack model is what makes this portable. On the public site and in the app, people explore collections through a catalog. Under the hood, a source pack is the discrete, versioned bundle of knowledge — HTML backups, ZIM archives, PDFs, embeddings, and metadata — that can be installed locally, carried offline, or swapped out entirely. The runtime does not care what the pack contains.
 
 If you are a developer thinking about building something similar for your own domain, the architecture is designed with that in mind. See [`docs/clippy-core-extraction.md`](docs/clippy-core-extraction.md) for the direction the portable core is heading, and [`docs/template-deployments.md`](docs/template-deployments.md) for the planned plug-and-play deployment path.
 
@@ -37,14 +37,14 @@ Users ask questions in plain language and get grounded answers from curated sour
 
 Example questions:
 
-- "How do I purify water in an emergency?"
-- "What should I keep in a first aid kit?"
-- "Show me practical guides on food preservation"
-- "How can I heat a room safely during a winter outage?"
+- "What are the main code requirements for rooftop solar in this jurisdiction?"
+- "Show me the strongest references in this internal operations manual"
+- "What does this humanitarian guide say about water storage?"
+- "Find practical how-to material across this archive"
 
 The system is designed so the same general experience can work:
 
-- in a hosted public app
+- in a hosted demo app
 - on a laptop or local server
 - on a Raspberry Pi or air-gapped node
 
@@ -52,19 +52,19 @@ The system is designed so the same general experience can work:
 
 ## Product Model
 
-### Hosted App
+### Hosted Demo
 
-The hosted app is the easiest way to use Disaster Clippy.
+The hosted demo is the easiest way to experience Disaster Clippy.
 
 It is intended for:
 
-- normal end users
 - people exploring the system for the first time
+- teams validating a source pack catalog before self-hosting
 - users who want search/chat without running admin tooling
 
 ### Local Runtime
 
-The local runtime is for users who want resilience and control.
+The local runtime is for people who want resilience, control, and their own data.
 
 It is intended for:
 
@@ -103,20 +103,25 @@ A source pack may include:
 This lets users:
 
 - understand what content they are using
-- choose which sources to install or sync
+- choose which source packs to install or sync
 - carry the same pack choices between hosted and local use
+
+On the public site and in the app, these are presented as collections in a catalog. In the runtime and tooling, source packs are the portable unit underneath.
 
 ---
 
 ## Quick Start
 
-### 1. Use the Hosted App
+### 1. Use the Hosted Demo
 
-Current hosted app:
+Current hosted demo:
 
 - `https://app.disasterclippy.com`
 
 ### 2. Run Locally
+
+The current local install path is still the public GitHub repo and `python app.py`.
+The wrapper/installer path is planned, but it is not the default install flow yet.
 
 ```bash
 # Clone the repository
@@ -184,7 +189,8 @@ Use the cloud install when you want:
 
 ### For Users
 
-- natural language search across curated preparedness knowledge
+- source-pack-aware search across a curated catalog
+- natural language search across curated collections
 - grounded responses with source attribution
 - source filtering
 - multi-turn conversation
@@ -195,7 +201,7 @@ Use the cloud install when you want:
 - local source storage
 - offline semantic search
 - local model support
-- pack-based content installation
+- source-pack installation from the catalog or local files
 
 ### For Advanced Local Admins
 
@@ -238,6 +244,7 @@ Where:
 ## Docs To Read Next
 
 - [`docs/deployment.md`](docs/deployment.md) - runtime model, public/private split, hosted vs local
+- [`docs/distribution-alignment.md`](docs/distribution-alignment.md) - what recent DaedalMap distribution updates imply for Clippy
 - [`docs/architecture.md`](docs/architecture.md) - system architecture and runtime layers
 - [`docs/source-tools.md`](docs/source-tools.md) - source creation and ingestion tools
 - [`docs/language-packs.md`](docs/language-packs.md) - translation system

@@ -254,7 +254,7 @@
     <header>
         <div>
             <h1>Source Packs</h1>
-            <p>Browse and install curated content packs</p>
+            <p>Browse the source-pack catalog and manage local installs</p>
         </div>
         {% with active_page='sources' %}{% include '_nav.html' %}{% endwith %}
     </header>
@@ -262,10 +262,10 @@
     <div class="container">
         <!-- Parent Server Connection -->
         <div class="section">
-            <h2>Global Cloud Backup</h2>
+            <h2>Source-Pack Catalog</h2>
             <p class="description">
-                Official and community-verified source packs hosted on the global R2 cloud storage.
-                These packs are curated and verified before being made available for download.
+                Official and community-verified source packs published to global R2 storage.
+                This is the available catalog. Downloaded packs are stored under your configured <code>BACKUP_PATH</code>.
             </p>
 
             <div id="connectionStatus">
@@ -276,18 +276,18 @@
 
         <!-- Available Packs -->
         <div class="section">
-            <h2>Available Packs</h2>
-            <p class="description">Official and community-verified source packs ready for download</p>
+            <h2>Available Catalog</h2>
+            <p class="description">Source packs available to download from the shared catalog</p>
 
             <div id="availablePacks" class="pack-grid">
-                <div class="empty-state">Enter a parent server URL and click Connect to browse packs</div>
+                <div class="empty-state">Loading source-pack catalog...</div>
             </div>
         </div>
 
         <!-- Local Sources -->
         <div class="section">
-            <h2>Local Sources</h2>
-            <p class="description">All sources configured on your local system. Green = complete (ready for upload), Yellow = incomplete (missing requirements)</p>
+            <h2>Installed Local Sources</h2>
+            <p class="description">Source packs and editable local sources currently present in your <code>BACKUP_PATH</code>. Green = production ready, Yellow = missing release requirements.</p>
 
             <div id="localSources" class="pack-grid">
                 <div class="loading">Loading local sources...</div>
@@ -301,7 +301,7 @@
         let availablePacks = [];
         let localSources = [];
 
-        // Load local sources with completeness status
+        // Load locally installed sources and editable local source folders
         async function loadLocalSources() {
             try {
                 const response = await fetch('/useradmin/api/local-sources');
@@ -311,17 +311,17 @@
             } catch (e) {
                 console.error('Failed to load local sources:', e);
                 document.getElementById('localSources').innerHTML =
-                    '<div class="empty-state">Failed to load local sources</div>';
+                    '<div class="empty-state">Failed to load installed local sources</div>';
             }
         }
 
-        // Fetch available packs from R2 backups/ folder
+        // Fetch the available source-pack catalog from R2
         async function fetchAvailablePacks() {
             const statusEl = document.getElementById('connectionStatus');
             const packsEl = document.getElementById('availablePacks');
 
             statusEl.innerHTML = '<span class="status-indicator" style="background:#f9a825"></span> Connecting to Global Cloud...';
-            packsEl.innerHTML = '<div class="loading">Loading available packs...</div>';
+            packsEl.innerHTML = '<div class="loading">Loading source-pack catalog...</div>';
 
             try {
                 const response = await fetch('/useradmin/api/available-packs');
@@ -329,34 +329,34 @@
 
                 if (!data.connected) {
                     statusEl.innerHTML = `<span class="status-indicator status-offline"></span> ${data.error || 'Not connected'}`;
-                    packsEl.innerHTML = '<div class="empty-state">Could not connect to Global Cloud Backup</div>';
+                    packsEl.innerHTML = '<div class="empty-state">Could not connect to the source-pack catalog</div>';
                     return;
                 }
 
                 availablePacks = data.packs || [];
 
-                statusEl.innerHTML = `<span class="status-indicator status-online"></span> Connected to Global Cloud Backup`;
+                statusEl.innerHTML = `<span class="status-indicator status-online"></span> Connected to source-pack catalog`;
 
                 renderAvailablePacks();
 
             } catch (e) {
-                console.error('Failed to fetch packs:', e);
+                console.error('Failed to fetch source-pack catalog:', e);
                 statusEl.innerHTML = '<span class="status-indicator status-offline"></span> Connection failed';
                 packsEl.innerHTML = `<div class="empty-state">Error: ${e.message}</div>`;
             }
         }
 
-        // Render available packs from cloud
+        // Render source packs available from the catalog
         function renderAvailablePacks() {
             const container = document.getElementById('availablePacks');
 
             if (availablePacks.length === 0) {
-                container.innerHTML = '<div class="empty-state">No packs available in Global Cloud Backup yet. Submit your sources via Cloud Upload to contribute!</div>';
+                container.innerHTML = '<div class="empty-state">No source packs are available in the shared catalog yet. Submit your source through Cloud Upload to contribute.</div>';
                 return;
             }
 
             container.innerHTML = availablePacks.map(pack => {
-                // Check if we have this source locally
+                // Check if we already have this source installed locally
                 const localSource = localSources.find(s => s.source_id === pack.source_id);
                 const hasLocal = !!localSource;
 
@@ -374,8 +374,8 @@
                         <div class="pack-actions">
                             ${hasLocal
                                 ? `<button class="btn btn-installed" disabled>Installed</button>
-                                   <button class="btn btn-secondary" onclick="redownloadPack('${pack.source_id}')">Redownload</button>`
-                                : `<button class="btn btn-primary" onclick="downloadPack('${pack.source_id}')">Download</button>`
+                                   <button class="btn btn-secondary" onclick="redownloadPack('${pack.source_id}')">Reinstall</button>`
+                                : `<button class="btn btn-primary" onclick="downloadPack('${pack.source_id}')">Install</button>`
                             }
                         </div>
                     </div>
@@ -383,12 +383,12 @@
             }).join('');
         }
 
-        // Render local sources with completeness status
+        // Render installed local sources with release-readiness status
         function renderLocalSources() {
             const container = document.getElementById('localSources');
 
             if (localSources.length === 0) {
-                container.innerHTML = '<div class="empty-state">No local sources installed. Download packs from the Cloud Packs section above.</div>';
+                container.innerHTML = '<div class="empty-state">No local source packs found. Install one from the catalog above.</div>';
                 return;
             }
 
@@ -412,10 +412,10 @@
                 let actionButtons = '';
                 if (source.production_ready) {
                     // Ready for upload - show upload button
-                    actionButtons = `<a href="/useradmin/cloud-upload" class="btn btn-primary">Upload to Cloud</a>`;
+                    actionButtons = `<a href="/useradmin/cloud-upload" class="btn btn-primary">Publish to Catalog</a>`;
                 } else {
-                    // Not ready - show edit button to fix issues
-                    actionButtons = `<a href="/useradmin/source-tools?source=${source.source_id}" class="btn btn-secondary">Edit Source</a>`;
+                    // Not ready - show edit button to fix release issues
+                    actionButtons = `<a href="/useradmin/source-tools?source=${source.source_id}" class="btn btn-secondary">Fix Source</a>`;
                 }
 
                 return `
@@ -490,11 +490,11 @@
             }
         }
 
-        // Redownload a pack - delete local first, then download fresh
+        // Reinstall a pack by deleting the local copy first, then downloading fresh
         async function redownloadPack(sourceId) {
             const btn = event.target;
 
-            if (!confirm(`Redownload ${sourceId}?\n\nThis will delete your local copy and download fresh from the cloud. Any local changes will be lost.`)) {
+            if (!confirm(`Reinstall ${sourceId}?\n\nThis will delete your local copy and install a fresh copy from the catalog. Any local changes will be lost.`)) {
                 return;
             }
 
@@ -545,14 +545,14 @@
             }
         }
 
-        // Download a pack from R2 cloud storage
+        // Install a pack from the source-pack catalog
         async function downloadPack(sourceId) {
             const btn = event.target;
             const originalText = btn.textContent;
 
             // Check if a job is already running for this source
             if (window.jobMonitor && window.jobMonitor.hasActiveJob(sourceId)) {
-                showToast('Download already in progress for this source', true);
+                showToast('Install already in progress for this source', true);
                 return;
             }
 
@@ -569,12 +569,12 @@
                 const data = await response.json();
 
                 if (!response.ok) {
-                    throw new Error(data.detail || 'Download failed');
+                    throw new Error(data.detail || 'Install failed');
                 }
 
                 if (data.status === 'submitted') {
                     // Job submitted - it will run in background
-                    showToast(`Download started for ${sourceId} - check progress below`);
+                    showToast(`Install started for ${sourceId} - check progress below`);
                     btn.textContent = 'Downloading...';
 
                     // Trigger job monitor refresh
@@ -597,7 +597,7 @@
                     }
                 } else {
                     // Synchronous completion (fallback)
-                    showToast(data.message || `Downloaded ${sourceId} successfully!`, false);
+                    showToast(data.message || `Installed ${sourceId} successfully!`, false);
                     loadLocalSources();
                     btn.textContent = 'Installed';
                     btn.classList.remove('btn-primary');
@@ -605,7 +605,7 @@
                 }
 
             } catch (error) {
-                showToast('Download failed: ' + error.message, true);
+                showToast('Install failed: ' + error.message, true);
                 btn.textContent = originalText;
                 btn.disabled = false;
             }
