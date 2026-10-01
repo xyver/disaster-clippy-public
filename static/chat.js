@@ -24,6 +24,33 @@ function selectedCollectionNames(ids) {
     return readableList(names);
 }
 
+function displayTopic(topic) {
+    const labels = {
+        solar: 'Solar Energy', medical: 'Health', emergency: 'Emergency',
+        sanitation: 'Sanitation', agriculture: 'Agriculture',
+        construction: 'Construction', water: 'Water', energy: 'Energy',
+        food: 'Food', shelter: 'Shelter',
+    };
+    return labels[topic] || topic.replace(/[-_]/g, ' ').replace(/\b\w/g, letter => letter.toUpperCase());
+}
+
+function selectedCollectionTopics(ids) {
+    const counts = new Map();
+    ids.forEach(id => {
+        const topics = availableSources[id].topics || [];
+        new Set(topics.filter(topic => typeof topic === 'string').map(topic => topic.trim().toLowerCase()).filter(Boolean))
+            .forEach(topic => counts.set(topic, (counts.get(topic) || 0) + 1));
+    });
+    const ordered = [...counts].sort((a, b) => b[1] - a[1]);
+    const labels = [];
+    for (const [topic] of ordered) {
+        const label = displayTopic(topic);
+        if (!labels.includes(label)) labels.push(label);
+        if (labels.length === 6) break;
+    }
+    return labels;
+}
+
 const chatMessages = document.getElementById('chatMessages');
 const chatForm = document.getElementById('chatForm');
 const userInput = document.getElementById('userInput');
@@ -64,11 +91,13 @@ function renderCollectionContext() {
         opening = `You are searching all ${allIds.length} collections (${total.toLocaleString('en-US')} passages)${topics.length ? `, covering ${readableList(topics)}` : ''}. Ask what you need and check the references in each answer.`;
     } else if (chosen.length === 1) {
         const name = availableSources[chosen[0]].name || chosen[0];
+        const topics = selectedCollectionTopics(chosen);
         indexStats.textContent = `${total} passages selected`;
-        opening = `You are searching ${name} (${total} passages). Ask a question about this collection; I will cite the sources I use.`;
+        opening = `You are searching ${name} (${total.toLocaleString('en-US')} passages)${topics.length ? `, covering ${readableList(topics)}` : ''}. Ask a question about this collection; I will cite the sources I use.`;
     } else {
+        const topics = selectedCollectionTopics(chosen);
         indexStats.textContent = `${total} passages across ${chosen.length} selected collections`;
-        opening = `You are searching ${chosen.length} collections: ${selectedCollectionNames(chosen)} (${total.toLocaleString('en-US')} passages). Ask what you need and check the references in each answer.`;
+        opening = `You are searching ${chosen.length} collections: ${selectedCollectionNames(chosen)} (${total.toLocaleString('en-US')} passages)${topics.length ? `, covering ${readableList(topics)}` : ''}. Ask what you need and check the references in each answer.`;
     }
 
     if (chatMessages.children.length === 1) {

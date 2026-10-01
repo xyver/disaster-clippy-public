@@ -14,7 +14,7 @@ def test_public_source_routes_use_catalog(monkeypatch):
     monkeypatch.setattr(
         app_module,
         "get_public_catalog_sources",
-        lambda: [{"source_id": "test-rules", "name": "Test Rules 2026", "short_name": "Rules", "doc_count": 12}],
+        lambda: [{"source_id": "test-rules", "name": "Test Rules 2026", "short_name": "Rules", "topics": ["sports", "rules"], "doc_count": 12}],
     )
     monkeypatch.setattr(
         app_module,
@@ -32,6 +32,7 @@ def test_public_source_routes_use_catalog(monkeypatch):
     assert sources.status_code == 200
     assert sources.json()["sources"]["test-rules"]["count"] == 12
     assert sources.json()["sources"]["test-rules"]["short_name"] == "Rules"
+    assert sources.json()["sources"]["test-rules"]["topics"] == ["sports", "rules"]
     assert sources.json()["sources"]["test-rules"]["has_1536"] is True
 
     simple_sources = client.get("/api/v1/sources")
