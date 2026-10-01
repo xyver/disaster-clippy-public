@@ -3324,6 +3324,16 @@ class PrepareVideoTranscriptRequest(BaseModel):
     chunk_duration_seconds: float = 60.0
 
 
+class PrepareVideoFromUrlRequest(BaseModel):
+    source_id: str
+    source_url: str
+    video_id: Optional[str] = None
+    title: Optional[str] = None
+    language: Optional[str] = None
+    asr_video_path: Optional[str] = None
+    chunk_duration_seconds: float = 60.0
+
+
 def _run_translate_source_job(source_id: str, language: str, batch_size: int = 10,
                                skip_cached: bool = True, progress_callback=None,
                                cancel_checker=None, job_id=None):
@@ -3538,6 +3548,64 @@ def _run_prepare_video_transcript_job(
     }
 
 
+def _run_prepare_video_from_url_job(
+    source_id: str,
+    source_url: str,
+    video_id: Optional[str] = None,
+    title: Optional[str] = None,
+    language: Optional[str] = None,
+    asr_video_path: Optional[str] = None,
+    chunk_duration_seconds: float = 60.0,
+    progress_callback=None,
+    cancel_checker=None,
+    job_id=None,
+):
+    """Background job for URL-first video transcript preparation."""
+    from offline_tools.video_analysis import prepare_video_from_url
+
+    config = get_local_config()
+    backup_folder = config.get_backup_folder()
+    if not backup_folder:
+        return {"success": False, "error": "No backup folder configured"}
+
+    source_path = Path(backup_folder) / source_id
+    if not source_path.exists():
+        return {"success": False, "error": f"Source not found: {source_id}"}
+
+    if progress_callback:
+        progress_callback(5, 100, "Inspecting pasted video URL...")
+
+    if cancel_checker and cancel_checker():
+        return {"success": False, "error": "Job cancelled"}
+
+    result = prepare_video_from_url(
+        source_path,
+        source_url,
+        video_id=video_id,
+        title=title,
+        language=language,
+        asr_video_path=asr_video_path,
+        chunk_duration_seconds=chunk_duration_seconds,
+        write_artifacts=True,
+    )
+
+    if progress_callback:
+        progress_callback(100, 100, "Video URL preparation complete")
+
+    if not result.get("success"):
+        return {
+            **result,
+            "source_id": source_id,
+            "message": result.get("next_action", "Video URL preparation did not complete"),
+        }
+
+    return {
+        **result,
+        "source_id": source_id,
+        "message": result.get("next_action", "Prepared transcript artifacts from pasted URL"),
+    }
+
+
 @router.post("/prepare-video-transcript")
 async def prepare_video_transcript(request: PrepareVideoTranscriptRequest):
     """Prepare transcript artifacts for one video using acquisition-first routing."""
@@ -3568,6 +3636,39 @@ async def prepare_video_transcript(request: PrepareVideoTranscriptRequest):
         "source_id": source_id,
         "video_id": request.video_id,
         "message": f"Started transcript preparation for video '{request.video_id}'"
+    }
+
+
+@router.post("/prepare-video-from-url")
+async def prepare_video_from_url_route(request: PrepareVideoFromUrlRequest):
+    """Prepare transcript artifacts for a pasted video URL with explicit outcome tracking."""
+    from admin.job_manager import get_job_manager
+
+    source_id = request.source_id.strip().lower()
+    manager = get_job_manager()
+
+    try:
+        job_id = manager.submit(
+            "prepare_video_from_url",
+            source_id,
+            _run_prepare_video_from_url_job,
+            source_id,
+            request.source_url,
+            request.video_id,
+            request.title,
+            request.language,
+            request.asr_video_path,
+            request.chunk_duration_seconds,
+        )
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+
+    return {
+        "status": "submitted",
+        "job_id": job_id,
+        "source_id": source_id,
+        "source_url": request.source_url,
+        "message": "Started URL-first video transcript preparation"
     }
 
 

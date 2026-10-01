@@ -1,542 +1,256 @@
 # Video Processing Implementation Plan
 
-This is the first implementation draft for expanding Disaster Clippy's video pipeline from offline ZIM transcription into a broader transcript acquisition, translation, and indexing system.
+This plan reflects the current implementation state of the video pipeline and narrows the remaining work to the parts that are still unfinished.
 
-It is intentionally practical:
-- what we already have
-- what we can reuse
-- where the new pieces should integrate
-- what order to build in
-- what decisions still need to be finalized
+## Current Baseline
 
-## Goal
+The following pieces already exist:
+- `offline_tools/video_models.py`
+- `offline_tools/transcript_acquisition.py`
+- `offline_tools/youtube_transcript.py`
+- `offline_tools/video_analysis.py` acquisition-first routing
+- `offline_tools/video_analysis.py` URL-first wrapper and outcome tracking
+- English transcript normalization before chunking
+- source-owned artifact writing under `raw_data/videos/<video_id>/`
+- admin job entrypoint in `admin/routes/source_tools.py`
 
-Build a video-processing pipeline that:
-- preserves full offline transcription capability
-- acquires existing transcripts/captions before generating new ones
-- supports archived/offline and still-live video sources
-- reuses the existing language-pack system at the transcript layer
-- stores transcript, translation, and index layers explicitly
+The current pipeline already supports:
+- packaged transcript/subtitle detection
+- optional live YouTube transcript acquisition
+- explicit URL-first preparation for pasted links
+- Faster-Whisper fallback when local media is available
+- transcript normalization into shared dataclasses
+- English transcript generation
+- chunk generation
+- optional Ollama topic enrichment
 
-## Decisions Locked In
+## What Changed Since The First Draft
 
-These decisions are now the default implementation direction:
+The earlier plan treated several pieces as future work that are now implemented:
+- transcript acquisition layer
+- YouTube transcript module
+- shared video dataclasses
+- acquisition-first routing in `video_analysis.py`
+- URL-first wrapper around pasted links
+- translation before chunking
+- normalized English transcript artifacts
+- source-owned raw-data artifacts
+- first admin job path for video transcript preparation
 
-- all generated video-processing artifacts stay inside the source folder
-- each source gets a `raw_data/` subfolder for intermediate and derived artifacts
-- the original-language transcript is the canonical transcript layer
-- transcripts are normalized to English before chunking and indexing
-- chunking happens after translation, not before
-- original transcript timing is the canonical timing layer
-- translated and indexed layers may vary by a few seconds as long as they preserve lineage back to original segments
-- the first implementation should support all three source families together:
-  - video-heavy ZIMs
-  - still-live YouTube-backed sources
-  - direct blending of both through one shared pipeline
+Because of that, this document is now focused on remaining gaps rather than re-planning the whole foundation.
 
-## Current Assets We Can Reuse
+## Implemented Architecture
 
-### 1. Offline video tooling
-
-Primary file:
-- `offline_tools/video_analysis.py`
-
-Reusable pieces:
-- `VideoZIMReader`
-- `transcribe_with_timestamps()`
-- `group_segments_by_duration()`
-- `identify_topics_with_ollama()`
-
-Fit:
-- strong base for archive-only and offline-first processing
-- already aligned with ZIM-style video bundles
-
-Limitations:
-- no transcript acquisition layer yet
-- no subtitle parsing yet
-- no transcript provenance model yet
-- chunking is time-window based, not semantic-aware
-
-### 2. Translation infrastructure
-
-Primary files:
-- `offline_tools/translation.py`
-- `offline_tools/language_registry.py`
-- `offline_tools/source_localizer.py`
-
-Reusable pieces:
-- MarianMT loading and language-pack detection
-- translation caching pattern under `BACKUP_PATH/translations`
-- batch translation flow
-- localization/checkpointing patterns from `source_localizer.py`
-
-Fit:
-- very good base for transcript translation
-- translation already works on text content, which matches the planned video model
-
-Limitations:
-- cache naming is article-oriented today
-- translation service is mostly framed around HTML/article translation
-- chat/query translation is still partial in docs and architecture
-
-### 3. Background jobs and resumability
-
-Primary files:
-- `admin/job_manager.py`
-- `admin/routes/source_tools.py`
-
-Reusable pieces:
-- background job submission
-- conflict prevention by source
-- checkpoint persistence in `BACKUP_PATH/_jobs`
-- progress callbacks
-- partial work file patterns
-
-Fit:
-- strong match for long-running video workflows
-- especially useful for transcription, chunking, translation, and enrichment stages
-
-Limitations:
-- no dedicated video job types yet
-- most route helpers assume document/source workflows, not media-oriented ones
-
-### 4. Source management and validation
-
-Primary files:
-- `offline_tools/source_manager.py`
-- `offline_tools/validation.py`
-
-Reusable pieces:
-- source-path conventions
-- backup scanning
-- metadata/index lifecycle concepts
-- validation gates and actionable issues
-
-Fit:
-- useful for storing processed video outputs as first-class source artifacts
-
-Limitations:
-- current `_detect_source_type()` only recognizes `html` and `pdf`
-- generic index flow does not yet have a `video` or `video_archive` path
-- ZIM handling still centers on HTML extraction/import rather than transcript-native indexing
-
-Direction:
-- keep source handling hybrid rather than splitting video into a separate top-level source category
-- the long-term goal is to point the system at a website, archive, or source folder and let it automatically detect and process mixed content types
-- this should eventually cover HTML, PDFs, videos, subtitles/transcripts, and future content types through one preparation flow
-
-### 5. Existing translation UI integration
-
-Primary files:
-- `admin/zim_server.py`
-- `admin/local_config.py`
-
-Reusable pieces:
-- active-language configuration
-- translation enable/disable flags
-- translated-content badges and display cues
-
-Fit:
-- useful when later exposing translated transcript playback/browsing
-
-## External Ideas Worth Adopting
-
-From `sluice-main`, the main ideas worth bringing in are conceptual rather than 1:1 code reuse:
-- transcript acquisition before ASR
-- multi-strategy online transcript retrieval
-- multiple fallback clients for live YouTube transcript access
-- normalization into timestamped segments before chunking
-- short-lived caching of transcript fetch results, including failures
-- explicit transcript failure categories
-
-We do not need the full Sluice app architecture.
-
-## Recommended Architecture
-
-Build the pipeline as four clear layers:
+Current layered flow:
 
 1. Transcript acquisition
-- packaged subtitles/transcripts
-- live online transcript retrieval
-- imported transcript text
+- packaged `.json`, `.srt`, `.vtt`, and `.txt` assets
+- optional live YouTube transcript retrieval
 
 2. Local transcription fallback
-- Faster-Whisper from media bytes when acquisition fails
+- Faster-Whisper from `asr_video_path` when no transcript was acquired
 
 3. Transcript normalization and storage
-- canonical segment schema
-- provenance fields
-- optional translated layers
+- `TranscriptDocument`, `TranscriptSegment`, and `TranscriptChunk`
+- artifact writing to `raw_data/videos/<video_id>/`
 
-4. Chunking, enrichment, and indexing
-- chunk generation
-- topic extraction
-- vector generation
-- metadata/index output
+4. Translation, chunking, and enrichment
+- translate or normalize to English
+- chunk after English normalization
+- optionally enrich with Ollama topics/keywords
 
-Canonical order:
+Cross-cutting entrypoint:
+- URL-first preparation now wraps the existing pipeline and returns explicit outcome states for pasted links
 
-1. Acquire transcript in original language
-2. Preserve full raw transcript with timing
-3. Translate to English when needed
-4. Chunk the normalized English transcript
-5. Enrich and index the English chunks
+## Remaining Priorities
 
-This avoids damaging sentence structure by chunking before translation.
+### 1. Strengthen transcript provenance
 
-## Recommended Integration Strategy
+Still needed:
+- decide whether to emit a distinct `online_auto_caption` source kind
+- standardize provenance metadata across packaged, online, and ASR sources
+- make sure downstream indexing surfaces provenance cleanly
 
-### Phase 1: Add transcript acquisition without changing the whole source system
+### 2. Improve chunk quality
 
-Add a new standalone module first:
-- `offline_tools/transcript_acquisition.py`
+Still needed:
+- replace pure duration-window chunking with sentence-aware or semantic chunking
+- preserve stable lineage back to original segment IDs
+- decide whether overlap windows are needed for embeddings
 
-Responsibilities:
-- inspect local assets for transcript data
-- detect YouTube/live identifiers
-- attempt live transcript retrieval when allowed
-- return normalized segment objects
+### 3. Add durable caching
 
-Why start here:
-- lowest-risk improvement
-- keeps current `video_analysis.py` useful
-- avoids overcommitting to a new source type too early
+Still needed:
+- on-disk cache for transcript fetch results
+- optional persistence of failed fetch states to avoid repeated retries
+- alignment between transcript caching and existing translation cache patterns
 
-### Phase 2: Extend `video_analysis.py` around a shared segment model
+Current limitation:
+- YouTube transcript caching is only in-memory with a short TTL
 
-Refactor `offline_tools/video_analysis.py` to:
-- accept acquired transcript segments
-- run local ASR only as fallback
-- annotate transcript provenance
-- output consistent chunk objects
+### 4. Extend online/live handling
 
-Likely additions:
-- `normalize_transcript_segments(...)`
-- `load_packaged_subtitles(...)`
-- `process_video_record(...)`
+Still needed:
+- explicit connectivity checks or policy wiring around live fetch attempts
+- clearer handling of non-YouTube live-backed sources
+- decide whether media download should ever be added for ASR fallback from URL-only inputs
 
-### Phase 3: Add video-aware caching
+Current limitation:
+- URL-only processing can fetch captions, but it cannot download media for ASR
+- URL-only processing is now observable, but not yet self-sufficient
 
-Extend the translation/transcript cache approach with video-specific caches under `BACKUP_PATH`.
+### 5. Add CLI and QA tooling
 
-Suggested new cache families:
-- `transcripts/` for acquisition results
-- `translations/<lang>/videos/` for translated transcript layers
+Still needed:
+- transcript inspection CLI/debug entrypoint
+- simple developer workflow to test packaged, online, and ASR paths
+- QA fixtures for online-first versus offline fallback behavior
 
-Why:
-- avoid repeated online fetch attempts
-- avoid retranslating transcript chunks
-- make retries and QA cheap
+### 6. Broaden system integration
 
-Inside each source folder, prefer source-owned artifacts first.
+Still needed:
+- validation hooks for transcript artifacts
+- indexing/vector integration for transcript chunks
+- mixed-content source scanning in `offline_tools/source_manager.py`
+- eventual convergence into a unified source-preparation flow
 
-Recommended stage files under each source:
-- `raw_data/transcript_original.json`
-- `raw_data/transcript_english.json`
-- `raw_data/chunks_english.json`
-- `raw_data/topics_english.json`
+### 7. Add bulk video processing
 
-For English-language videos, still generate `transcript_english.json` as a normalized downstream artifact so later stages do not need special-case branching.
+Still needed:
+- folder-level batch processing for local media files
+- ZIM-level batch processing using `VideoZIMReader`
+- batch summary outputs and retry-friendly reporting
+- admin/job wrappers for long-running bulk video preparation
 
-Recommended contents:
-- `raw_data/transcript_original.json`
-  - canonical original-language transcript record
-  - segment-level timing data
-  - full transcript text assembled from the original segments
-  - transcript provenance metadata
-- `raw_data/transcript_english.json`
-  - normalized English transcript record
-  - translated text when source language is non-English
-  - copied/normalized text when source language is already English
-  - links back to original segments or segment ranges
-- `raw_data/chunks_english.json`
-  - post-translation chunk records used for embedding/indexing
-  - approximate timing windows derived from source segments
-  - source/provenance references
-- `raw_data/topics_english.json`
-  - optional enrichment outputs such as topic labels and keywords
-  - references back to chunk IDs
-
-### Phase 4: Introduce a dedicated video job path
-
-Add new job helpers through `admin/routes/source_tools.py` and `admin/job_manager.py`.
-
-Recommended first job types:
-- `inspect_video_source`
-- `acquire_transcripts`
-- `transcribe_video`
-- `translate_video_transcripts`
-- `index_video_transcripts`
-- `enrich_video_topics`
-
-Recommended first combined flow:
-- inspect -> acquire transcript -> transcribe fallback -> chunk -> optional translate -> enrich -> index
-
-### Phase 5: Decide whether to formalize a new source type
-
-Do not force this first.
-
-Two paths are possible:
-
-Option A:
-- keep video processing as a specialized pipeline attached to existing source folders
-
-Option B:
-- add a true `video` or `video_archive` source type to `offline_tools/source_manager.py`
-
-Current recommendation:
-- start with Option A
-- promote to Option B after the transcript pipeline stabilizes
-
-Reason:
-- `source_manager.py` currently assumes mostly HTML/PDF indexing
-- a premature source-type expansion will create more churn than value
-
-Updated direction:
-- prefer a hybrid "prepare everything" pipeline over rigid source-type branching
-- sources may contain mixed content such as HTML, PDFs, videos, and subtitles
-- the preparation flow should scan the source, detect what is present, and run the correct tools automatically
-- explicit sub-pipelines can still exist internally, but the user-facing model should remain unified
-
-## Proposed New Modules
-
-### `offline_tools/transcript_acquisition.py`
-
-Purpose:
-- choose the best available transcript source before ASR
-
-Suggested functions:
-- `detect_live_video_identity(...)`
-- `load_packaged_transcript(...)`
-- `load_packaged_subtitles(...)`
-- `fetch_online_transcript(...)`
-- `acquire_best_transcript(...)`
-
-### `offline_tools/youtube_transcript.py`
-
-Purpose:
-- live YouTube-specific transcript retrieval
-
-Suggested responsibilities:
-- parse URLs/video IDs
-- try multiple fetch strategies
-- normalize standard and ASR-like transcript formats
-- return categorized failures
-
-Policy note:
-- online transcript retrieval should be optional and controlled by connectivity plus explicit app/source policy
-- the pipeline must still succeed without any online fetch capability
+## Current File Reuse Map
 
 ### `offline_tools/video_models.py`
 
-Recommended early helper module:
-- dataclasses for metadata records, transcript segments, translated layers, chunk records
+Already used for:
+- `VideoRecord`
+- `TranscriptSegment`
+- `TranscriptDocument`
+- `TranscriptChunk`
 
-This should be created early so the shared schema is centralized before multiple modules start defining overlapping structures.
+### `offline_tools/transcript_acquisition.py`
 
-## Reuse Mapping by Existing File
+Already used for:
+- packaged transcript discovery
+- transcript normalization
+- optional live fetch routing
+
+### `offline_tools/youtube_transcript.py`
+
+Already used for:
+- YouTube URL parsing
+- InnerTube-based transcript retrieval
+- short-lived caching
+- categorized transcript fetch failures
 
 ### `offline_tools/video_analysis.py`
 
-Reuse:
-- offline ASR
-- ZIM video metadata extraction
+Already used for:
+- acquisition-first transcript preparation
+- URL-first result tracking for pasted links
+- ASR fallback
+- translation to English
+- chunk generation
 - topic enrichment
-
-Integrate by:
-- calling transcript acquisition before `transcribe_with_timestamps()`
-- replacing direct ASR-only assumptions with acquired-or-generated transcript handling
-
-### `offline_tools/translation.py`
-
-Reuse:
-- model loading
-- language-pack detection
-- batch translation
-- cache path conventions
-
-Integrate by:
-- adding transcript/chunk translation methods
-- adding video-specific cache helpers
-- reusing batch translation against transcript blocks before chunking
-
-### `offline_tools/source_localizer.py`
-
-Reuse:
-- checkpointing approach
-- phased workflow structure
-- batch processing patterns
-
-Integrate by:
-- borrowing its staged processing model for long-running video pipelines
-
-### `admin/job_manager.py`
-
-Reuse:
-- checkpoint model
-- job queue
-- progress reporting
-
-Integrate by:
-- creating video-specific job wrappers
-- saving partial transcript/chunk outputs during long runs
+- artifact writing
 
 ### `admin/routes/source_tools.py`
 
-Reuse:
-- existing background job route style
-- translation job submission patterns
+Already used for:
+- background job wrapper around `prepare_video_transcripts(...)`
+- background job wrapper around `prepare_video_from_url(...)`
 
-Integrate by:
-- adding video processing endpoints that match the current admin job UX
-
-### `offline_tools/source_manager.py`
-
-Reuse:
-- source folder conventions
-- validation lifecycle
-
-Integrate later by:
-- improving scan/detect logic so one source can route mixed content to the right processing tools
-- exposing video pipeline outputs as standard source artifacts without forcing a separate source type
-
-## Suggested Build Order
+## Updated Build Order
 
 ### Step 1
-- finalize transcript segment schema
-- finalize chunk schema
-- finalize transcript provenance values
-- finalize translated-layer storage shape
-- finalize source-folder `raw_data/` file layout
-- create `offline_tools/video_models.py` to centralize shared dataclasses and schema helpers
-- define the config key(s) and policy shape for whether live online transcript retrieval is allowed
+- add validation and tests around the current acquisition-first and URL-first flows
+- document the artifact contract and provenance behavior more explicitly
 
 ### Step 2
-- build `offline_tools/transcript_acquisition.py`
-- support packaged subtitles/transcripts first
-- support online transcript retrieval second
-- add an explicit policy/config check for whether live online retrieval is allowed
+- improve chunking quality beyond duration-only grouping
+- keep timing lineage stable while improving text boundaries
 
 ### Step 3
-- update `offline_tools/video_analysis.py`
-- route to acquisition first, ASR second
-- add normalized chunk output
+- add durable transcript cache storage
+- align cache layout with source-owned artifact patterns and existing translation caching
 
 ### Step 4
-- add a simple CLI/debug harness for transcript inspection and processing
-- validate acquisition, translation, fallback, and timing lineage before wiring everything into admin jobs
+- add CLI/debug tooling for transcript inspection and troubleshooting
 
 ### Step 5
-- extend `offline_tools/translation.py` for transcript/chunk translation
-- add video transcript cache storage
-- translate before chunking
-- emit normalized English transcript artifacts even for English originals
+- wire transcript chunks into indexing and validation flows
 
 ### Step 6
-- add first background job endpoints for video workflows
-- keep them separate from generic indexing at first, but design them so they can later plug into a unified "prepare everything" pipeline
+- expand mixed-content source detection so video assets participate in a unified preparation workflow
 
 ### Step 7
-- add indexing integration and metadata output
-- add validation and QA hooks
+- add folder-batch and ZIM-batch runners on top of the existing per-video pipeline
+- expose both through admin jobs with progress reporting and summary artifacts
 
-### Step 8
-- expand source scanning so mixed-content sources can automatically route HTML, PDF, video, and transcript assets to the right preparation stages
+## Updated Checklist
 
-## First-Draft Checklist
+### Already implemented
+- [x] Create `offline_tools/video_models.py`
+- [x] Add `offline_tools/transcript_acquisition.py`
+- [x] Add packaged subtitle/transcript detection
+- [x] Add YouTube-specific transcript retrieval module
+- [x] Add policy/config gate for live online transcript retrieval
+- [x] Refactor `video_analysis.py` to use acquisition-first routing
+- [x] Add URL-first preparation wrapper with explicit outcome states
+- [x] Keep Faster-Whisper fallback intact
+- [x] Preserve transcript JSON with both segments and full-text fields
+- [x] Translate transcript before chunk generation
+- [x] Emit `transcript_english.json` for English and non-English paths
+- [x] Add first video-processing admin job endpoint
+- [x] Add URL-first admin job endpoint
 
-### Data model
-- [ ] Finalize canonical transcript segment schema
-- [ ] Finalize chunk schema
-- [ ] Finalize transcript provenance values
-- [ ] Finalize translated transcript layer schema
-- [ ] Finalize `raw_data/` stage file names and contents
-- [x] Transcript JSON files should store both segment arrays and assembled full-text fields
-- [ ] Create `offline_tools/video_models.py`
-
-### Acquisition
-- [ ] Add `offline_tools/transcript_acquisition.py`
-- [ ] Add packaged subtitle/transcript detection
-- [ ] Add online transcript retrieval abstraction
-- [ ] Add YouTube-specific transcript retrieval module
-- [ ] Add categorized acquisition errors
-- [ ] Add transcript acquisition cache
-- [ ] Add policy/config gate for live online transcript retrieval
-
-### Offline transcription
-- [ ] Refactor `video_analysis.py` to use acquisition-first routing
-- [ ] Keep Faster-Whisper fallback intact
-- [ ] Preserve provenance on generated transcript segments
-
-### Chunking and enrichment
+### Still to do
+- [ ] Finalize transcript provenance values and metadata conventions
+- [ ] Distinguish `online_caption` vs `online_auto_caption` if needed
+- [ ] Add durable transcript acquisition cache storage
 - [ ] Upgrade chunking beyond pure duration windows
-- [ ] Preserve start/end timestamps on all chunks
-- [ ] Keep topic enrichment optional and retryable
-
-### Translation
-- [ ] Add transcript/chunk translation methods to `offline_tools/translation.py`
-- [ ] Add translated transcript cache storage
-- [ ] Preserve `text_original` and `text_translated`
-- [ ] Track original and target language metadata
-- [ ] Translate transcript before chunk generation
-- [ ] Emit `transcript_english.json` for all videos, including English originals
-
-### Policy and config
-- [ ] Define config key(s) for whether live online transcript retrieval is allowed
-- [ ] Decide where the setting lives and how modules read it
-- [ ] Ensure acquisition code respects connectivity plus explicit policy/config
-
-### CLI and debugging
-- [ ] Add a CLI/debug entrypoint for transcript inspection
-- [ ] Add a CLI path to test acquisition-first and ASR-fallback behavior
-- [ ] Add a CLI path to inspect timing lineage across original transcript, English transcript, and chunks
-
-### Jobs and admin
-- [ ] Add first video-processing job endpoint
-- [ ] Add checkpoint support for transcript acquisition/transcription
-- [ ] Add admin visibility for transcript source and fallback usage
-- [ ] Design toward a single "prepare everything" flow for mixed-content sources
-
-### Validation and QA
-- [ ] Add checks for transcript presence/source/provenance
-- [ ] Add checks for translated transcript layers when present
+- [ ] Add CLI/debug entrypoint for transcript inspection
+- [ ] Add validation checks for transcript artifacts
 - [ ] Add QA fixtures for online-first vs offline-fallback behavior
+- [ ] Integrate transcript chunks into indexing/vector flows
+- [ ] Improve mixed-content source scanning and routing
+- [ ] Decide whether URL-only media download should be supported for ASR fallback
+- [ ] Add folder-batch video processing
+- [ ] Add ZIM-batch video processing
+- [ ] Add batch summary and retry/reporting artifacts
 
 ## Open Decisions
 
-These should be finalized before implementation starts in earnest.
-
-### 1. Should video become a first-class source_type, or stay part of a hybrid source-preparation flow?
+### 1. Should URL-only processing ever download media for ASR fallback?
 
 Current recommendation:
-- keep it hybrid
-- improve mixed-content detection and routing instead of adding a separate top-level video source type first
+- do not assume this yet
+- keep caption retrieval optional and lightweight
+- only add media download if the product really needs URL-only no-caption transcription
 
-### 2. How exact do translated/indexed timings need to be?
+### 2. Should `online_auto_caption` be a real first-class provenance value?
 
 Current recommendation:
-- original transcript segments are the canonical timed layer
-- translated transcript layers can tolerate a few seconds of drift
-- indexed chunks should use approximate time windows, not exact subtitle sync
-- preserve references back to original segment IDs whenever practical
+- likely yes, if the pipeline can reliably distinguish auto-generated YouTube captions from other caption tracks
 
-Timing policy:
-- use precise timings where available on original transcript segments
-- derive translated/indexed chunk windows from the underlying source segments
-- optimize for stable lineage and "jump near this moment" behavior, not frame-accurate alignment
+### 3. Should video become a first-class `source_type`?
+
+Current recommendation:
+- not yet
+- prefer hybrid mixed-content routing before introducing a rigid new top-level source type
 
 ## Current Recommendation
 
-Start with a narrow but high-value first implementation:
-- packaged transcript/subtitle detection
-- optional live YouTube transcript acquisition
-- offline ASR fallback
-- normalized segment schema
-- translation before chunking
-- chunk translation support
-- source-owned `raw_data/` artifacts
-- hybrid integration that can later plug into a unified "prepare everything" source workflow
+The foundation is in place. The next best work is not more architectural scaffolding; it is tightening the current implementation:
+- improve chunk quality
+- strengthen provenance
+- add persistent caching
+- add validation and QA
+- decide how URL-first media acquisition should plug into the current outcome model
+- connect transcript outputs to indexing and broader source preparation
 
-English originals should still move through the same normalization pipeline, just without a translation step. That keeps all downstream processing uniform.
-
-That gives the project the biggest architectural upgrade with the least churn.
+That keeps momentum high while avoiding another round of speculative redesign.

@@ -8,14 +8,16 @@ existing job pipelines without taking any orchestration-specific code.
 from __future__ import annotations
 
 import json
+import hashlib
 import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from .transcript_acquisition import acquire_best_transcript
+from .transcript_acquisition import acquire_best_transcript, is_live_transcript_fetch_allowed
 from .translation import TranslationService
 from .video_models import TranscriptChunk, TranscriptDocument, TranscriptSegment, VideoRecord
+from .youtube_transcript import parse_youtube_video_id
 
 
 class VideoZIMReader:
@@ -486,6 +488,135 @@ def prepare_video_transcripts(
         "chunks_english": chunks_english,
         "topics_english": topics_english,
         "warnings": acquisition.warnings,
+    }
+
+
+def build_video_record_from_url(
+    source_url: str,
+    *,
+    video_id: Optional[str] = None,
+    title: Optional[str] = None,
+    language: Optional[str] = None,
+) -> VideoRecord:
+    """Build a lightweight video record from a pasted URL."""
+    normalized_url = str(source_url or "").strip()
+    youtube_video_id = parse_youtube_video_id(normalized_url) if normalized_url else None
+    resolved_video_id = (
+        str(video_id or "").strip()
+        or youtube_video_id
+        or f"url_{hashlib.sha1(normalized_url.encode('utf-8')).hexdigest()[:12]}"
+    )
+
+    return VideoRecord(
+        video_id=resolved_video_id,
+        title=(title or resolved_video_id).strip() or resolved_video_id,
+        source_url=normalized_url,
+        language=(language or "").strip(),
+    )
+
+
+def prepare_video_from_url(
+    source_path: str | Path,
+    source_url: str,
+    *,
+    video_id: Optional[str] = None,
+    title: Optional[str] = None,
+    language: Optional[str] = None,
+    asr_video_path: Optional[str] = None,
+    asr_model_name: str = "small",
+    chunk_duration_seconds: float = 60.0,
+    write_artifacts: bool = True,
+    allow_live_fetch: Optional[bool] = None,
+    enrich_topics: bool = False,
+    ollama_url: str = "http://localhost:11434",
+    topic_model: str = "qwen2.5:7b",
+) -> Dict[str, Any]:
+    """
+    URL-first wrapper around transcript preparation.
+
+    This function makes pasted-link handling explicit by returning a clear
+    outcome state even when transcript acquisition fails.
+    """
+    normalized_url = str(source_url or "").strip()
+    if not normalized_url:
+        return {
+            "success": False,
+            "outcome": "failed_invalid_url",
+            "error": "No source URL provided",
+            "source_url": normalized_url,
+        }
+
+    youtube_video_id = parse_youtube_video_id(normalized_url)
+    source_platform = "youtube" if youtube_video_id else "unknown"
+    transcript_fetch_allowed = is_live_transcript_fetch_allowed() if allow_live_fetch is None else bool(allow_live_fetch)
+    video = build_video_record_from_url(
+        normalized_url,
+        video_id=video_id,
+        title=title,
+        language=language,
+    )
+
+    result = prepare_video_transcripts(
+        source_path,
+        video,
+        asr_video_path=asr_video_path,
+        asr_model_name=asr_model_name,
+        chunk_duration_seconds=chunk_duration_seconds,
+        write_artifacts=write_artifacts,
+        allow_live_fetch=allow_live_fetch,
+        enrich_topics=enrich_topics,
+        ollama_url=ollama_url,
+        topic_model=topic_model,
+    )
+
+    tracking: Dict[str, Any] = {
+        "source_url": normalized_url,
+        "video_id": video.video_id,
+        "source_platform": source_platform,
+        "recognized_source": bool(youtube_video_id),
+        "transcript_fetch_allowed": transcript_fetch_allowed,
+        "attempted_live_fetch": bool(youtube_video_id and transcript_fetch_allowed),
+        "asr_video_path_provided": bool(asr_video_path),
+    }
+
+    if result.get("success"):
+        source_kind = str(result.get("source_kind", "") or "")
+        used_asr = bool(result.get("used_asr", False))
+        if used_asr:
+            outcome = "media_acquired_asr_used"
+            next_action = "Review generated transcript artifacts"
+        elif source_kind.startswith("online_"):
+            outcome = "transcript_acquired_online"
+            next_action = "Review generated transcript artifacts"
+        elif source_kind in {"packaged_caption", "imported_text"}:
+            outcome = "transcript_acquired_packaged"
+            next_action = "Review generated transcript artifacts"
+        else:
+            outcome = "transcript_prepared"
+            next_action = "Review generated transcript artifacts"
+
+        return {
+            **result,
+            **tracking,
+            "outcome": outcome,
+            "next_action": next_action,
+        }
+
+    if not youtube_video_id and not asr_video_path:
+        outcome = "failed_unsupported_source"
+        next_action = "Provide a supported video URL or a local media file for ASR"
+    elif result.get("requires_asr") and not asr_video_path:
+        outcome = "transcript_missing_media_required"
+        next_action = "Provide a local media file path to run ASR fallback"
+    else:
+        outcome = "failed_processing"
+        next_action = "Inspect the reported error and warnings"
+
+    return {
+        **result,
+        **tracking,
+        "outcome": outcome,
+        "next_action": next_action,
     }
 
 
