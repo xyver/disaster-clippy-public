@@ -40,12 +40,16 @@
     color: #5f6b61;
 }
 
+.header-inner {
+    max-width: 1000px;
+}
+
 .container {
     display: flex;
-    max-width: 1400px;
+    max-width: 1000px;
     margin: 0 auto;
-    width: 100%;
-    height: calc(100vh - 140px);
+    width: calc(100% - 2rem);
+    flex: 1;
     min-height: 400px;
 }
 
@@ -54,7 +58,8 @@
     flex: 1;
     display: flex;
     flex-direction: column;
-    height: 100%;
+    height: auto;
+    min-height: 0;
     overflow: hidden;
 }
 
@@ -318,12 +323,17 @@
 .stats-bar {
     padding: 0.5rem 1rem;
     background: #ead9b8;
-    border-bottom: 1px solid #d5c8a9;
+    border: 1px solid #d5c8a9;
+    border-radius: 6px;
     font-size: 0.8rem;
     color: #5f6b61;
     display: flex;
     justify-content: space-between;
     align-items: center;
+    gap: 1rem;
+    max-width: 1000px;
+    width: calc(100% - 2rem);
+    margin: 0.75rem auto 0.5rem;
 }
 
 .stats-bar button {
@@ -344,7 +354,10 @@
 /* Collection Panel */
 .sources-panel {
     background: #fff6e7;
-    border-bottom: 1px solid #d5c8a9;
+    border-radius: 6px;
+    max-width: 1000px;
+    width: calc(100% - 2rem);
+    margin: 0 auto;
     padding: 0;
     max-height: 0;
     overflow: hidden;
@@ -354,6 +367,8 @@
 .sources-panel.open {
     max-height: 70vh;
     padding: 1rem;
+    margin-bottom: 0.5rem;
+    border: 1px solid #d5c8a9;
     overflow-y: auto;
 }
 
@@ -467,8 +482,7 @@
 /* Responsive */
 @media (max-width: 900px) {
     .container {
-        height: auto;
-        min-height: calc(100vh - 140px);
+        min-height: 500px;
     }
     .chat-panel {
         height: auto;
@@ -486,6 +500,14 @@
 }
 
 @media (max-width: 600px) {
+    .stats-bar {
+        flex-wrap: wrap;
+    }
+
+    .stats-bar-controls {
+        margin-left: auto;
+    }
+
     .reference-cards {
         grid-template-columns: repeat(2, 1fr);
     }
