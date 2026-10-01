@@ -612,7 +612,7 @@ Focus on actionable, practical solutions."""
 Relevant articles from knowledge base:
 {context}
 
-Based on these search results, help the user find what they need. If the results don't seem relevant, acknowledge that and suggest how they might refine their search.""")
+Based on these search results, help the user find what they need. Apply only rules for the discipline or subject the user asked about. Do not borrow a numeric requirement from another discipline. If the cited excerpts do not state a requested value, say so and point to the most relevant source. If the results don't seem relevant, acknowledge that and suggest how they might refine their search.""")
         ])
 
     # =========================================================================

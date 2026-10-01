@@ -29,10 +29,12 @@ async function loadWelcome() {
         const data = await response.json();
 
         // Update stats bar
-        const stats = data.stats;
-        if (stats.total_documents > 0) {
-            const topicsStr = stats.topics.length > 0 ? ` | Topics: ${stats.topics.join(', ')}` : '';
-            indexStats.textContent = `${stats.total_documents} articles indexed${topicsStr}`;
+        const stats = data.stats || {};
+        const sourceTotal = Object.values(availableSources).reduce((sum, source) => sum + (Number(source.count) || 0), 0);
+        const totalDocuments = Math.max(Number(stats.total_documents) || 0, sourceTotal);
+        if (totalDocuments > 0) {
+            const topicsStr = (stats.topics || []).length > 0 ? ` | Topics: ${stats.topics.join(', ')}` : '';
+            indexStats.textContent = `${totalDocuments} articles indexed${topicsStr}`;
         } else {
             indexStats.textContent = 'No articles indexed yet';
         }
@@ -40,7 +42,9 @@ async function loadWelcome() {
         // Update welcome message in chat
         const welcomeDiv = chatMessages.querySelector('.message.assistant .message-content');
         if (welcomeDiv && data.message) {
-            welcomeDiv.textContent = data.message;
+            welcomeDiv.textContent = totalDocuments > 0 && !stats.total_documents
+                ? `The collection has ${totalDocuments} searchable passages. Ask what you need and check the references in each answer.`
+                : data.message;
         }
 
     } catch (e) {
@@ -281,6 +285,13 @@ async function loadSources() {
 
         renderSourcesGrid();
         updateToggleButton();
+        if (data.total > 0 && indexStats.textContent === 'No articles indexed yet') {
+            indexStats.textContent = `${data.total} articles indexed`;
+            const welcomeDiv = chatMessages.querySelector('.message.assistant .message-content');
+            if (welcomeDiv && welcomeDiv.textContent.includes('knowledge base is currently empty')) {
+                welcomeDiv.textContent = `The collection has ${data.total} searchable passages. Ask what you need and check the references in each answer.`;
+            }
+        }
 
     } catch (e) {
         console.error('Failed to load sources:', e);

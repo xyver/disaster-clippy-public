@@ -79,6 +79,7 @@ print(f"[STARTUP] .env path: {_active_env_path}, exists: {_active_env_path.exist
 import json
 import re
 import difflib
+from threading import Lock
 from typing import List, Optional, Dict, Any, Tuple
 from datetime import datetime, timedelta, timezone
 from collections import Counter
@@ -348,7 +349,7 @@ def get_chat_prompt(mode: str = "online"):
 Relevant articles from knowledge base:
 {context}
 
-Based on these search results, help the user find what they need. If the results don't seem relevant, acknowledge that and suggest how they might refine their search.""")
+Based on these search results, help the user find what they need. Apply only rules for the discipline or subject the user asked about. Do not borrow a numeric requirement from another discipline. If the cited excerpts do not state a requested value, say so and point to the most relevant source. If the results don't seem relevant, acknowledge that and suggest how they might refine their search.""")
     ])
 
 # In-memory session storage (for MVP - use Redis/DB in production)
@@ -1174,6 +1175,7 @@ _public_catalog_cache: Dict[str, Any] = {
     "catalog": None,
     "expires": None,
 }
+_public_catalog_lock = Lock()
 _PUBLIC_CATALOG_TTL = timedelta(minutes=15)
 
 
@@ -1186,34 +1188,35 @@ def _refresh_public_catalog_cache() -> None:
     """Load published/catalog.json from R2 for public-mode source gating."""
     global _public_catalog_cache
 
-    # A failed request gets a short cooldown, so each page load does not retry
-    # a slow cloud call. Preserve the last good catalog during an outage.
-    _public_catalog_cache["expires"] = datetime.now(timezone.utc) + timedelta(minutes=1)
     try:
         from offline_tools.cloud.r2 import get_backups_storage
 
         storage = get_backups_storage()
-        if not storage.is_configured():
-            return
-
-        raw = storage.download_file_content("published/catalog.json", timeout_seconds=3)
-        if not raw:
-            return
-
-        catalog = json.loads(raw)
-        _public_catalog_cache = {
-            "catalog": catalog,
-            "expires": datetime.now(timezone.utc) + _PUBLIC_CATALOG_TTL
-        }
+        if storage.is_configured():
+            raw = storage.download_file_content("published/catalog.json", timeout_seconds=3)
+            if raw:
+                catalog = json.loads(raw)
+                _public_catalog_cache = {
+                    "catalog": catalog,
+                    "expires": datetime.now(timezone.utc) + _PUBLIC_CATALOG_TTL
+                }
+                return
     except Exception as e:
         print(f"[PUBLIC_CATALOG] Error refreshing cache: {e}")
+
+    # Preserve the last good catalog and avoid repeating a failed cloud call on
+    # every page load. Set the cooldown only after the request finishes.
+    _public_catalog_cache["expires"] = datetime.now(timezone.utc) + timedelta(minutes=1)
 
 
 def get_public_catalog() -> Dict[str, Any]:
     """Get the published public catalog, refreshing cache when needed."""
     expires = _public_catalog_cache["expires"]
     if expires is None or datetime.now(timezone.utc) > expires:
-        _refresh_public_catalog_cache()
+        with _public_catalog_lock:
+            expires = _public_catalog_cache["expires"]
+            if expires is None or datetime.now(timezone.utc) > expires:
+                _refresh_public_catalog_cache()
     return _public_catalog_cache["catalog"] or {}
 
 
@@ -1553,6 +1556,9 @@ def chat(request: Request, body: ChatRequest):
     """
     session_id = body.session_id or datetime.now(timezone.utc).isoformat()
     message = body.message.strip()
+    direct_response = build_chat_presence_response(message)
+    if direct_response:
+        return ChatResponse(response=direct_response, articles=[], session_id=session_id)
 
     # Get connection mode
     mode = get_connection_mode()
@@ -1676,6 +1682,10 @@ def simple_chat(request: Request, body: SimpleQueryRequest):
             session_id=session_id
         )
 
+    direct_response = build_chat_presence_response(message)
+    if direct_response:
+        return SimpleQueryResponse(response=direct_response, session_id=session_id)
+
     # Sync connection mode from config
     sync_mode_from_config()
 
@@ -1785,6 +1795,14 @@ def stream_chat(request: Request, body: SimpleQueryRequest):
             yield "data: Please enter a question.\n\n"
             yield "data: [DONE]\n\n"
         return StreamingResponse(empty_response(), media_type="text/event-stream")
+
+    direct_response = build_chat_presence_response(message)
+    if direct_response:
+        def presence_response():
+            yield "data: [ARTICLES][]\n\n"
+            yield f"data: {direct_response}\n\n"
+            yield "data: [DONE]\n\n"
+        return StreamingResponse(presence_response(), media_type="text/event-stream")
 
     # Sync connection mode from config
     sync_mode_from_config()
@@ -2482,7 +2500,7 @@ async def ingest_content(request: IngestRequest, _admin: bool = Depends(verify_a
 
 
 @app.get("/stats")
-async def get_stats():
+def get_stats():
     """Get system statistics"""
     return get_vector_store().get_stats()
 
@@ -2811,6 +2829,17 @@ def is_generic_help_query(message: str) -> bool:
         return True
 
     return False
+
+
+def build_chat_presence_response(message: str) -> Optional[str]:
+    """Answer simple availability checks without retrieving unrelated articles."""
+    normalized = re.sub(r"[^a-z ]", "", message.lower()).strip()
+    if normalized in {
+        "are you there", "can you hear me", "can you still talk",
+        "do you talk still", "hello", "hi",
+    }:
+        return "Yes, I'm here. Ask me about one of the listed collections, and I'll show the references behind my answer."
+    return None
 
 
 def is_binaryish_article(article: dict) -> bool:
