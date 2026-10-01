@@ -285,11 +285,18 @@ def get_llm():
                 print("Install with: pip install langchain-anthropic")
 
             model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-            llm = ChatOpenAI(
-                model=model,
-                temperature=0.7,
-                max_tokens=1024
-            )
+            if model == "gpt-6-luna":
+                llm = ChatOpenAI(
+                    model=model,
+                    reasoning_effort="none",
+                    max_completion_tokens=1024,
+                )
+            else:
+                llm = ChatOpenAI(
+                    model=model,
+                    temperature=0.7,
+                    max_tokens=1024,
+                )
     return llm
 
 # Default prompts (fallback if config not available)

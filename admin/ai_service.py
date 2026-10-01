@@ -143,11 +143,18 @@ class AIService:
                 else:
                     from langchain_openai import ChatOpenAI
                     model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-                    self._llm = ChatOpenAI(
-                        model=model,
-                        temperature=0.7,
-                        max_tokens=1024
-                    )
+                    if model == "gpt-6-luna":
+                        self._llm = ChatOpenAI(
+                            model=model,
+                            reasoning_effort="none",
+                            max_completion_tokens=1024,
+                        )
+                    else:
+                        self._llm = ChatOpenAI(
+                            model=model,
+                            temperature=0.7,
+                            max_tokens=1024,
+                        )
             except Exception as e:
                 logger.error("Failed to initialize LLM: %s", e)
                 self._llm = None
