@@ -29,7 +29,7 @@ from typing import Any, AsyncGenerator, Dict, List, Optional, Union
 
 from .config import ClippyConfig
 from .context import ContextFormatter, extractive_answer
-from .llm import LLMService
+from .llm import LLMBackend, LLMService
 from .schemas import (ChatMessage, ChatResponse, ResponseMethod, SearchMethod, SearchResponse,
                       SearchResult, SourceInfo)
 
@@ -42,7 +42,7 @@ def load_prompt(path: Optional[str | Path]) -> str:
 
 class ChatService:
     def __init__(self, vector_store=None, config: Optional[ClippyConfig] = None,
-                 llm_service: Optional[LLMService] = None,
+                 llm_service: Optional[LLMBackend] = None,
                  formatter: Optional[ContextFormatter] = None,
                  system_prompt: Optional[str] = None):
         self.config = config or ClippyConfig.from_env()
@@ -58,6 +58,8 @@ class ChatService:
                      filters: Optional[Dict[str, Any]] = None, mode: Optional[str] = None) -> SearchResponse:
         mode = mode or self.config.search_mode
         limit = limit or self.config.n_results
+        if sources is not None and not sources:
+            return SearchResponse([], query, SearchMethod.KEYWORD)
         if self.vector_store is None:
             return SearchResponse([], query, SearchMethod.KEYWORD, error="No vector store configured")
 
@@ -79,6 +81,9 @@ class ChatService:
             results = [SearchResult.from_chromadb(r) if isinstance(r, dict) else r for r in results]
             method = {"keyword": SearchMethod.KEYWORD, "semantic": SearchMethod.SEMANTIC}.get(
                 mode, SearchMethod.HYBRID)
+            if sources is not None and any(r.source_id not in sources for r in results):
+                return SearchResponse([], query, method,
+                                      error="Search returned passages outside the selected corpus")
             return SearchResponse(results, query, method)
         except Exception as e:  # surface store errors instead of crashing the caller
             return SearchResponse([], query, SearchMethod.HYBRID, error=str(e))
@@ -101,18 +106,21 @@ class ChatService:
 
         return await self.answer(message, found.results, system_prompt=system_prompt,
                                  conversation_history=conversation_history, stream=stream,
-                                 host_context=host_context)
+                                 host_context=host_context, sources=sources)
 
     async def answer(self, message: str, results: List[SearchResult],
                      system_prompt: Optional[str] = None,
                      conversation_history: Optional[List[ChatMessage]] = None,
                      stream: bool = False, host_context: str = "",
-                     max_evidence: Optional[int] = None) -> Union[ChatResponse, AsyncGenerator[str, None]]:
+                     max_evidence: Optional[int] = None,
+                     sources: Optional[List[str]] = None) -> Union[ChatResponse, AsyncGenerator[str, None]]:
         """Answer over prepared passages supplied by a host app, without searching.
 
         The returned references are exactly the passages included in the model
         context. The host owns source authorization before passing ``results``.
         """
+        if sources is not None and any(r.source_id not in sources for r in results):
+            raise ValueError("Passages outside the selected corpus were supplied")
         evidence = results[:max_evidence] if max_evidence is not None else results
         evidence = self.formatter.used(evidence)
 

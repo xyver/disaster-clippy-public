@@ -41,7 +41,8 @@ RUNTIME_README = """# clippy-core runtime
 
 This folder is the consumer-only export of `clippy-core`. Supply a prepared
 SQLite index, search it, and generate cited answers through a server-side
-OpenAI or Anthropic API key. It contains no PDF builders, source tools,
+OpenAI or Anthropic API key, or inject a host-owned local/cloud model adapter.
+It contains no PDF builders, source tools,
 evaluation commands, local LLM, or public API server.
 
 Install with `pip install -e ".[openai]"` (or `[anthropic]`). Keep API keys in
@@ -65,6 +66,8 @@ calling the runtime.
 
 Keyword mode uses no local embedding model. Hybrid search needs the same
 query embedding model that produced the prepared index.
+Each project can supply its own index path or prepared search results. The
+host selects authorized documents and model provider for each user/session.
 """
 
 

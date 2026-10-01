@@ -9,7 +9,7 @@ Adding a provider (e.g. Ollama for offline use): add a branch to
 subclass LLMService and pass it to ChatService(llm_service=...).
 """
 
-from typing import AsyncGenerator, Dict, Generator, List, Optional
+from typing import AsyncGenerator, Dict, Generator, List, Optional, Protocol
 
 from .config import ClippyConfig
 from .schemas import ChatMessage
@@ -26,6 +26,18 @@ When answering:
 - Cite passages by their number, like [1] or [2][3].
 - If the passages don't answer the question, say so plainly.
 - Be concise but complete."""
+
+
+class LLMBackend(Protocol):
+    """Host-supplied model adapter; cloud and local runtimes use the same seam."""
+
+    provider: str
+
+    async def generate_async(self, messages: List[ChatMessage],
+                             system_prompt: Optional[str] = None) -> str: ...
+
+    def generate_stream_async(self, messages: List[ChatMessage],
+                              system_prompt: Optional[str] = None) -> AsyncGenerator[str, None]: ...
 
 
 class LLMService:

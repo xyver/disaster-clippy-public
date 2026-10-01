@@ -44,6 +44,19 @@ them to core. Citation validation and carrying prior-turn passages into the
 latest reference list are still planned; see
 [`docs/portable-core-strategy.md`](../docs/portable-core-strategy.md).
 
+Each project can point `ClippyConfig.index_path` at its own prepared index or
+pass its own database results to `answer_sync`. `sources=` and `filters=` narrow
+search within an index; the host decides which indexes and source IDs a user
+may access. Pass `sources=` with host-retrieved passages too: the core rejects
+passages outside that explicit selection, and an empty selection searches
+nothing. Keep personal documents separate from official source packs.
+
+The host can also inject any model adapter that implements `LLMBackend`:
+`provider`, `generate_async(messages, system_prompt)`, and
+`generate_stream_async(messages, system_prompt)`. This works for a host's local
+model server or a different cloud provider without adding that provider to
+the core package. The exported runtime bundles no local inference engine.
+
 Keep the model key in the host app's backend. The host app should authenticate callers, limit usage, and enforce a spending budget before calling chat. `clippy_core.server` is a local demonstration API with no such controls. Hybrid/semantic search needs the same query embedder that built the index; a prepared index built with local sentence-transformers embeddings still needs that model for semantic queries. Keyword mode opens that index without it.
 
 To copy just this consumer runtime into another project, run `python export_runtime.py --output /path/to/clippy-runtime`. The export contains the read-and-chat modules and their package metadata; it omits ingestion, source tools, evaluation, the CLI, and the unauthenticated demo server. The target path must not already exist.

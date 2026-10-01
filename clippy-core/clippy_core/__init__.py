@@ -25,12 +25,13 @@ from .context import ContextFormatter
 from .schemas import (Chunk, ChatMessage, ChatResponse, DocType, ResponseMethod, SearchMethod,
                       SearchResponse, SearchResult, SourceInfo)
 from .chat import ChatService
+from .llm import LLMBackend
 from .vectordb import SQLiteHybridStore, SyncVectorStoreBase, VectorStoreBase, get_vector_store
 
 __version__ = "0.2.0"
 
 __all__ = [
-    "ChatService", "ClippyConfig", "ContextFormatter",
+    "ChatService", "ClippyConfig", "ContextFormatter", "LLMBackend",
     "Chunk", "ChatMessage", "ChatResponse", "SearchResult", "SearchResponse", "SourceInfo",
     "SearchMethod", "ResponseMethod", "DocType",
     "VectorStoreBase", "SyncVectorStoreBase", "SQLiteHybridStore", "get_vector_store",

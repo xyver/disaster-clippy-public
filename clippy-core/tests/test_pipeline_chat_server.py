@@ -122,6 +122,37 @@ def test_extractive_answer_exposes_only_passages_it_lists():
     assert "Passage 5" not in answer.text
 
 
+def test_host_can_inject_local_model_without_cloud_key():
+    class LocalModel:
+        provider = "local"
+
+        async def generate_async(self, messages, system_prompt=None):
+            assert "Local project passage" in messages[-1].content
+            return "The project passage says so [1]."
+
+        async def generate_stream_async(self, messages, system_prompt=None):
+            yield "The project passage says so [1]."
+
+    chat = ChatService(config=ClippyConfig(llm_provider="none"), llm_service=LocalModel())
+    passage = SearchResult(id="personal-1", source_id="my-documents",
+                           content="Local project passage")
+
+    answer = chat.answer_sync("What does my document say?", [passage])
+
+    assert answer.text == "The project passage says so [1]."
+    assert answer.search_results[0].source_id == "my-documents"
+
+
+def test_explicit_corpus_rejects_outside_passages_and_empty_selection(built_index):
+    chat = ChatService(SQLiteHybridStore(built_index),
+                       config=ClippyConfig(llm_provider="none"))
+    assert not chat.search_sync("rules", sources=[]).results
+
+    outside = SearchResult(id="outside-1", source_id="other-project", content="Private text")
+    with pytest.raises(ValueError, match="outside the selected corpus"):
+        chat.answer_sync("What does it say?", [outside], sources=["my-project"])
+
+
 def test_server_endpoints(built_index):
     pytest.importorskip("fastapi")
     from fastapi.testclient import TestClient
