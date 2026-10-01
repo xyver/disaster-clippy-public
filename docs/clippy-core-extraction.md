@@ -42,7 +42,8 @@ See [`clippy-core/README.md`](../clippy-core/README.md) for the install and quic
 2. The rulebook has been built as a 1,888-chunk SQLite index with local `all-MiniLM-L6-v2` embeddings. An ignored local manifest points at the supplied PDF; the PDF and index are not committed.
 3. Eight verified rule questions are recorded in `clippy-core/examples/skating/golden.yaml`. Expand them with real user questions, especially where several disciplines use similar wording.
 4. Add the separate competition and test requirement charts that the publisher maintains outside the rulebook PDF.
-5. Test a real LLM answer path and check citation grounding before exposing it to users.
+5. A separate, temporary hosted reference of the same 1,888 chunks now uses OpenAI embeddings in the official Pinecone index. It is listed in the public catalog as `usfs-rulebook-2026-27` and links to the publisher's PDF. It is not a downloadable pack and does not change the portable SQLite index.
+6. Test a real LLM answer path and check citation grounding before relying on generated skating answers.
 
 Scanned pages need OCR before this package can index them. The existing Disaster Clippy OCR tooling is a possible producer of searchable PDF copies, but the portable package does not import it.
 

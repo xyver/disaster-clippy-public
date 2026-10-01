@@ -40,3 +40,17 @@ python -m clippy_core.cli search 'senior synchronized short program time' -m exa
 Once the model is downloaded, set `HF_HUB_OFFLINE=1` and `TRANSFORMERS_OFFLINE=1` to prevent network checks during local builds and queries. Set `CLIPPY_MODEL_CACHE` each time so queries load the same model. The index records its embedder and refuses a mismatched one.
 
 The starter [golden.yaml](golden.yaml) has eight questions with rule IDs checked against this PDF. It tests retrieval, not LLM answer quality. Expand it with real skater, coach, and official questions before relying on generated answers.
+
+## Temporary hosted reference demo
+
+The official Disaster Clippy hosted app uses Pinecone and 1,536-dimensional OpenAI embeddings. Its skating reference is separate from this portable SQLite index. The [publish_hosted.py](publish_hosted.py) helper verifies the inspected PDF hash, prepares hosted embeddings in ignored `clippy-core/build/`, uploads the chunks to the existing Pinecone index, checks sample records, and adds a `reference_only` entry to the published catalog. It does not upload the PDF or create a downloadable pack. All search results link to the publisher's PDF. The catalog entry labels the rulebook as copyrighted and sets `license_verified: false`.
+
+From the public repo root, with maintainer cloud credentials configured:
+
+```powershell
+python clippy-core/examples/skating/publish_hosted.py inspect
+python clippy-core/examples/skating/publish_hosted.py prepare
+python clippy-core/examples/skating/publish_hosted.py publish
+```
+
+The hosted source ID is `usfs-rulebook-2026-27`. The user-facing name says “demo,” and this source should be removed from the catalog and Pinecone when the temporary reference is retired. A later full catalog rebuild from local `_master.json` will omit this hosted-only reference unless it is explicitly preserved there.
