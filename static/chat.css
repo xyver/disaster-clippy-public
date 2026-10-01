@@ -41,12 +41,12 @@
 }
 
 .header-inner {
-    max-width: 1000px;
+    max-width: 1200px;
 }
 
 .container {
     display: flex;
-    max-width: 1000px;
+    max-width: 1200px;
     margin: 0 auto;
     width: calc(100% - 2rem);
     flex: 1;
@@ -331,7 +331,7 @@
     justify-content: space-between;
     align-items: center;
     gap: 1rem;
-    max-width: 1000px;
+    max-width: 1200px;
     width: calc(100% - 2rem);
     margin: 0.75rem auto 0.5rem;
 }
@@ -355,7 +355,7 @@
 .sources-panel {
     background: #fff6e7;
     border-radius: 6px;
-    max-width: 1000px;
+    max-width: 1200px;
     width: calc(100% - 2rem);
     margin: 0 auto;
     padding: 0;
