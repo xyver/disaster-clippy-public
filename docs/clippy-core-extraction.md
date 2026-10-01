@@ -64,3 +64,13 @@ The first supported path is keyword search against the prepared SQLite index wit
 ## Migration rule
 
 Keep this as a parallel, reusable package while the Disaster Clippy app continues to use its existing paths. Move app call sites onto the package only after behavior and deployment parity are demonstrated. Preserve one package implementation and make app-specific adapters above it rather than copying its code into a second runtime.
+
+## Citation continuity across chat turns
+
+The hosted app retrieves up to 15 candidates and reduces them to five before building both the current model context and the visible reference cards. It also passes recent conversation history to the model. A model can therefore repeat a rule and link from an earlier answer even when that rule is absent from the current five cards. This happened in the skating demo: an answer mentioned Rules 8373 and 2712, while its current cards listed other rules.
+
+For the portable core and its host apps, treat history as conversational context, not as current evidence. If an answer relies on a passage from a previous turn, retrieve that passage again by its stable source/document/section identity, include its text in the current bounded context, and display its link with the latest answer. Apply the currently selected collection filter before carrying it forward. If the passage cannot be recovered or is outside the selected collection, the answer should say it cannot verify that claim from the current sources. The current answer's citation links must resolve to passages shown in its own reference list. Preserve a bounded reference count by replacing a lower-value current hit when a prior passage is needed; do not silently add hidden evidence.
+
+This is a requirement for future implementation and evaluation, not a guarantee of the current hosted app. Test it with follow-up questions that cite a rule found in an earlier answer, and with a new chat containing the same question but no history.
+
+See [Sheltrium integration review](sheltrium-integration-review.md) for an external consumer that has the same history-versus-current-evidence issue.
