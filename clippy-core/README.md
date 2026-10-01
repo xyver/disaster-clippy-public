@@ -22,6 +22,28 @@ answer = ChatService(store, config=config).chat_sync("What counts as a fall?")
 print(answer.text, answer.search_results)
 ```
 
+If your application already searches its own database (for example Supabase
+pgvector), pass its prepared passages to `answer_sync` instead. Keep private
+user or property details in `host_context`; they personalize the answer but
+are not cited as source evidence.
+
+```python
+from clippy_core import ChatService
+from clippy_core.schemas import SearchResult
+
+passages = [SearchResult.from_pgvector(row) for row in search_rows]
+answer = ChatService(config=config).answer_sync(
+    "What does this rule require?", passages, max_evidence=5,
+    host_context="Discipline: singles; season: 2026-27",
+)
+print(answer.text, answer.search_results)  # render these exact references
+```
+
+The host must authenticate the user and filter `search_rows` before passing
+them to core. Citation validation and carrying prior-turn passages into the
+latest reference list are still planned; see
+[`docs/portable-core-strategy.md`](../docs/portable-core-strategy.md).
+
 Keep the model key in the host app's backend. The host app should authenticate callers, limit usage, and enforce a spending budget before calling chat. `clippy_core.server` is a local demonstration API with no such controls. Hybrid/semantic search needs the same query embedder that built the index; a prepared index built with local sentence-transformers embeddings still needs that model for semantic queries. Keyword mode opens that index without it.
 
 To copy just this consumer runtime into another project, run `python export_runtime.py --output /path/to/clippy-runtime`. The export contains the read-and-chat modules and their package metadata; it omits ingestion, source tools, evaluation, the CLI, and the unauthenticated demo server. The target path must not already exist.

@@ -6,7 +6,7 @@ from clippy_core import ChatService, ClippyConfig
 from clippy_core.evaluation import evaluate
 from clippy_core.ingest.pipeline import build_index
 from clippy_core.llm import LLMService
-from clippy_core.schemas import ResponseMethod
+from clippy_core.schemas import ResponseMethod, SearchResult
 from clippy_core.vectordb import SQLiteHybridStore
 
 GOLDEN = {"k": 5, "questions": [
@@ -85,6 +85,41 @@ def test_chat_sends_numbered_cited_passages_and_prompt(built_index, tmp_path):
     assert '"""' in user_msg
     assert resp.method == ResponseMethod.CLOUD_LLM
     assert resp.to_dict()["citations"][0]["citation"].startswith("Sample Rules 2025-26")
+
+
+def test_host_can_answer_over_prepared_passages_with_private_context():
+    config = ClippyConfig(llm_provider="none")
+    llm = FakeLLM(config)
+    chat = ChatService(config=config, llm_service=llm)
+    passages = [
+        SearchResult(id="r1", source_id="rules", content="A fall is defined here.",
+                     title="Rules", url="https://example.org/rules.pdf#page=3"),
+        SearchResult(id="r2", source_id="rules", content="This is another passage.",
+                     title="Rules", url="https://example.org/rules.pdf#page=4"),
+    ]
+
+    answer = chat.answer_sync("What is a fall?", passages, max_evidence=1,
+                              host_context="Discipline: singles")
+
+    user_msg, _ = llm.seen
+    assert "Discipline: singles" in user_msg
+    assert "not source evidence" in user_msg
+    assert "A fall is defined here." in user_msg
+    assert "This is another passage." not in user_msg
+    assert [r.id for r in answer.search_results] == ["r1"]
+    assert [c["id"] for c in answer.to_dict()["citations"]] == ["r1"]
+
+
+def test_extractive_answer_exposes_only_passages_it_lists():
+    chat = ChatService(config=ClippyConfig(llm_provider="none"))
+    passages = [SearchResult(id=f"r{i}", source_id="rules", content=f"Passage {i}")
+                for i in range(6)]
+
+    answer = chat.answer_sync("Show the passages", passages)
+
+    assert len(answer.search_results) == 5
+    assert len(answer.to_dict()["citations"]) == 5
+    assert "Passage 5" not in answer.text
 
 
 def test_server_endpoints(built_index):

@@ -88,22 +88,47 @@ class ChatService:
     async def chat(self, message: str, sources: Optional[List[str]] = None,
                    filters: Optional[Dict[str, Any]] = None, system_prompt: Optional[str] = None,
                    conversation_history: Optional[List[ChatMessage]] = None,
-                   stream: bool = False) -> Union[ChatResponse, AsyncGenerator[str, None]]:
+                   stream: bool = False, host_context: str = "") -> Union[ChatResponse, AsyncGenerator[str, None]]:
         found = await self.search(message, sources=sources, filters=filters)
-        results = self.formatter.used(found.results)
-
-        if self.llm.provider == "none" or found.error:
-            text = extractive_answer(results[:5]) if not found.error else f"Search failed: {found.error}"
+        if found.error:
+            text = f"Search failed: {found.error}"
             if stream:
                 async def one_shot():
                     yield text
                 return one_shot()
             return ChatResponse(text=text, method=ResponseMethod.SIMPLE,
-                                sources_used=sorted({r.source_id for r in results}),
-                                search_results=results, error=found.error)
+                                error=found.error)
 
-        messages = self._build_messages(message, self.formatter.format(results),
-                                        conversation_history or [])
+        return await self.answer(message, found.results, system_prompt=system_prompt,
+                                 conversation_history=conversation_history, stream=stream,
+                                 host_context=host_context)
+
+    async def answer(self, message: str, results: List[SearchResult],
+                     system_prompt: Optional[str] = None,
+                     conversation_history: Optional[List[ChatMessage]] = None,
+                     stream: bool = False, host_context: str = "",
+                     max_evidence: Optional[int] = None) -> Union[ChatResponse, AsyncGenerator[str, None]]:
+        """Answer over prepared passages supplied by a host app, without searching.
+
+        The returned references are exactly the passages included in the model
+        context. The host owns source authorization before passing ``results``.
+        """
+        evidence = results[:max_evidence] if max_evidence is not None else results
+        evidence = self.formatter.used(evidence)
+
+        if self.llm.provider == "none":
+            evidence = evidence[:5]
+            text = extractive_answer(evidence)
+            if stream:
+                async def one_shot():
+                    yield text
+                return one_shot()
+            return ChatResponse(text=text, method=ResponseMethod.SIMPLE,
+                                sources_used=sorted({r.source_id for r in evidence}),
+                                search_results=evidence)
+
+        messages = self._build_messages(message, self.formatter.format(evidence),
+                                        conversation_history or [], host_context)
         prompt = system_prompt or self.system_prompt
 
         if stream:
@@ -111,15 +136,18 @@ class ChatService:
         try:
             text = await self.llm.generate_async(messages, prompt)
             return ChatResponse(text=text, method=ResponseMethod.CLOUD_LLM,
-                                sources_used=sorted({r.source_id for r in results}),
-                                search_results=results)
+                                sources_used=sorted({r.source_id for r in evidence}),
+                                search_results=evidence)
         except Exception as e:
-            return ChatResponse(text=extractive_answer(results), method=ResponseMethod.SIMPLE,
-                                search_results=results, error=f"LLM failed, showing passages: {e}")
+            return ChatResponse(text=extractive_answer(evidence), method=ResponseMethod.SIMPLE,
+                                search_results=evidence, error=f"LLM failed, showing passages: {e}")
 
     @staticmethod
-    def _build_messages(message: str, context: str, history: List[ChatMessage]) -> List[ChatMessage]:
-        user = (f"Question: {message}\n\n"
+    def _build_messages(message: str, context: str, history: List[ChatMessage],
+                        host_context: str = "") -> List[ChatMessage]:
+        application_context = (f"Application context (for personalization, not source evidence):\n"
+                               f"{host_context}\n\n") if host_context else ""
+        user = (f"{application_context}Question: {message}\n\n"
                 f"Passages from the knowledge base:\n\n{context}\n\n"
                 "Answer the question using only these passages, citing them by number.")
         return list(history[-10:]) + [ChatMessage.user(user)]
@@ -139,6 +167,10 @@ class ChatService:
     def chat_sync(self, message: str, **kwargs) -> ChatResponse:
         kwargs.pop("stream", None)
         return asyncio.run(self.chat(message, stream=False, **kwargs))
+
+    def answer_sync(self, message: str, results: List[SearchResult], **kwargs) -> ChatResponse:
+        kwargs.pop("stream", None)
+        return asyncio.run(self.answer(message, results, stream=False, **kwargs))
 
     def search_sync(self, query: str, **kwargs) -> SearchResponse:
         return asyncio.run(self.search(query, **kwargs))

@@ -57,6 +57,12 @@ answer = ChatService(store, config=config).chat_sync("What counts as a fall?")
 print(answer.text, answer.search_results)
 ```
 
+If the host already retrieved passages, map them to `SearchResult` and call
+`ChatService(config=config).answer_sync(question, passages, max_evidence=5,
+host_context="...")`. The returned `search_results` are the passages used to
+build the current answer. The host authorizes passages and user context before
+calling the runtime.
+
 Keyword mode uses no local embedding model. Hybrid search needs the same
 query embedding model that produced the prepared index.
 """

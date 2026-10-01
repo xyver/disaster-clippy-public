@@ -74,3 +74,5 @@ For the portable core and its host apps, treat history as conversational context
 This is a requirement for future implementation and evaluation, not a guarantee of the current hosted app. Test it with follow-up questions that cite a rule found in an earlier answer, and with a new chat containing the same question but no history.
 
 See [Sheltrium integration review](sheltrium-integration-review.md) for an external consumer that has the same history-versus-current-evidence issue.
+
+The shared host/runtime boundary informed by Sheltrium, Disaster Clippy, and the planned GoFigure app is in [Portable clippy core](portable-core-strategy.md).
