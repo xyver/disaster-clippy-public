@@ -119,3 +119,23 @@ def test_parallel_page_loads_wait_for_catalog_refresh(monkeypatch):
         results = list(pool.map(lambda _: app_module.get_public_catalog(), range(2)))
     assert len(calls) == 1
     assert all(result["sources"][0]["source_id"] == "test-rules" for result in results)
+
+
+def test_skating_question_excludes_other_discipline_rules():
+    app_module = importlib.import_module("app")
+    def result(source, discipline):
+        return {"metadata": {"source": source, "discipline": discipline}}
+
+    articles = [
+        result("usfs-rulebook-2026-27", "synchronized"),
+        result("usfs-rulebook-2026-27", "singles"),
+        result("usfs-rulebook-2026-27", ""),
+        result("appropedia", ""),
+    ]
+    filtered = app_module.filter_skating_results_by_discipline(
+        "senior synchronized skating short program time", articles
+    )
+    assert filtered == [articles[0], articles[2], articles[3]]
+    assert app_module.filter_skating_results_by_discipline(
+        "Compare singles and synchronized skating", articles
+    ) == articles

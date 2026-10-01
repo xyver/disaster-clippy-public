@@ -1610,6 +1610,7 @@ def chat(request: Request, body: ChatRequest):
         public_ids = get_public_catalog_ids()
         articles = [a for a in articles if a.get("metadata", {}).get("source") in public_ids]
 
+    articles = filter_skating_results_by_discipline(message, articles)
     articles = prepare_articles_for_chat(message, articles, preferred_doc_type)
 
     # Store results for follow-up queries
@@ -1736,6 +1737,7 @@ def simple_chat(request: Request, body: SimpleQueryRequest):
         articles = search_articles(message, n_results=15, source_filter=source_filter,
                                    language=search_language)
 
+    articles = filter_skating_results_by_discipline(message, articles)
     articles = prepare_articles_for_chat(message, articles, preferred_doc_type)
     session["last_results"] = articles
 
@@ -1855,6 +1857,7 @@ def stream_chat(request: Request, body: SimpleQueryRequest):
         articles = search_articles(message, n_results=15, source_filter=source_filter,
                                    language=search_language)
 
+    articles = filter_skating_results_by_discipline(message, articles)
     articles = prepare_articles_for_chat(message, articles, preferred_doc_type)
     session["last_results"] = articles
 
@@ -2840,6 +2843,26 @@ def build_chat_presence_response(message: str) -> Optional[str]:
     }:
         return "Yes, I'm here. Ask me about one of the listed collections, and I'll show the references behind my answer."
     return None
+
+
+def filter_skating_results_by_discipline(query: str, articles: List[dict]) -> List[dict]:
+    """Keep a single-discipline skating question from mixing sport rule sections."""
+    terms = {
+        "synchronized": r"\b(synchronized|synchro)\b",
+        "singles": r"\bsingles\b",
+        "pairs": r"\bpairs\b",
+        "ice_dance": r"\b(ice dance|pattern dance|rhythm dance)\b",
+    }
+    requested = [discipline for discipline, pattern in terms.items() if re.search(pattern, query, re.I)]
+    if len(requested) != 1:
+        return articles
+
+    discipline = requested[0]
+    return [
+        article for article in articles
+        if article.get("metadata", {}).get("source") != "usfs-rulebook-2026-27"
+        or article.get("metadata", {}).get("discipline", "") in ("", discipline)
+    ]
 
 
 def is_binaryish_article(article: dict) -> bool:
