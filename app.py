@@ -90,6 +90,7 @@ from fastapi.responses import JSONResponse, HTMLResponse, StreamingResponse, Pla
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
+from offline_tools.cloud.catalog import catalog_short_name
 
 # Rate limiting for API endpoints
 from slowapi import Limiter
@@ -1085,15 +1086,17 @@ def get_sources():
 
                 # Get display name from manifest
                 display_name = source_id
+                short_name = source_id
                 if manifest_file.exists():
                     try:
                         with open(manifest_file, 'r', encoding='utf-8-sig') as f:
                             source_data = json.load(f)
                             display_name = get_source_display_name(source_id, source_data)
+                            short_name = str(source_data.get("short_name") or display_name).strip()
                     except Exception:
                         pass
 
-                source_info[source_id] = {"name": display_name, "folder": source_folder}
+                source_info[source_id] = {"name": display_name, "short_name": short_name, "folder": source_folder}
 
     # Build sources dict - check both vector files for accurate status
     # File existence is source of truth (metadata index may include sources not yet indexed)
@@ -1118,6 +1121,7 @@ def get_sources():
 
         sources[source_id] = {
             "name": catalog_source.get("name", info.get("name", source_id.replace("_", " ").replace("-", " ").title())),
+            "short_name": catalog_short_name(source_id, catalog_source) if catalog_source else info.get("short_name") or info.get("name") or source_id,
             "count": int(catalog_source.get("doc_count", count) or 0),
             "has_1536": has_1536,
             "has_768": has_768

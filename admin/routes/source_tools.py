@@ -30,6 +30,7 @@ router = APIRouter(prefix="/api", tags=["Source Tools"])
 class UpdateSourceConfigRequest(BaseModel):
     source_id: str
     name: Optional[str] = None
+    short_name: Optional[str] = None
     description: Optional[str] = None
     license: Optional[str] = None
     license_notes: Optional[str] = None  # Required if license is "Custom"
@@ -287,6 +288,7 @@ async def get_local_sources():
                 "source_id": source_id,
                 # User-editable fields from manifest (source of truth)
                 "name": manifest_data.get("name", master_entry.get("name", source_id)),
+                "short_name": manifest_data.get("short_name", master_entry.get("short_name", "")),
                 "description": manifest_data.get("description", master_entry.get("description", "")),
                 "license": manifest_data.get("license", master_entry.get("license", "Unknown")),
                 "license_verified": manifest_data.get("license_verified", master_entry.get("license_verified", False)),
@@ -371,6 +373,7 @@ async def get_local_sources():
             source_status = {
                 "source_id": source_id,
                 "name": manifest_data.get("name", master_entry.get("name", source_id)),
+                "short_name": manifest_data.get("short_name", master_entry.get("short_name", "")),
                 "description": manifest_data.get("description", ""),
                 "license": manifest_data.get("license", "Unknown"),
                 "license_verified": manifest_data.get("license_verified", False),
@@ -449,6 +452,11 @@ async def update_source_config(request: UpdateSourceConfigRequest):
     # Update fields that were provided
     if request.name is not None:
         source["name"] = request.name
+    if request.short_name is not None:
+        short_name = request.short_name.strip()
+        if not short_name or len(short_name) > 40:
+            raise HTTPException(400, "Short name must be 1 to 40 characters")
+        source["short_name"] = short_name
     if request.description is not None:
         source["description"] = request.description
     if request.license is not None:
@@ -600,6 +608,7 @@ async def create_source(request: CreateSourceRequest):
         source_config = {
             "source_id": source_id,
             "name": source_id.replace("_", " ").replace("-", " ").title(),
+            "short_name": source_id.replace("_", " ").replace("-", " ").title()[:40],
             "description": "",
             "license": "Unknown",
             "license_verified": False,

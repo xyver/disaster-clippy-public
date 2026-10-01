@@ -431,6 +431,7 @@ class SourceManifest:
     # Identity
     source_id: str = ""
     name: str = ""
+    short_name: str = ""
     description: str = ""
 
     # License and attribution
@@ -483,6 +484,7 @@ class SourceManifest:
             "schema_version": self.schema_version,
             "source_id": self.source_id,
             "name": self.name,
+            "short_name": self.short_name,
             "description": self.description,
             "license": self.license,
             "license_verified": self.license_verified,
@@ -530,6 +532,7 @@ class SourceManifest:
         return cls(
             source_id=data.get("source_id", ""),
             name=data.get("name", ""),
+            short_name=data.get("short_name", ""),
             description=data.get("description", ""),
             license=data.get("license", "Unknown"),
             license_verified=data.get("license_verified", False),

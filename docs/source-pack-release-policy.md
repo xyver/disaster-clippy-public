@@ -108,11 +108,14 @@ This is the important "good enough to use and iterate on" stage for local admins
 Every source requires these fields in `_manifest.json` before submission:
 
 - `name`: Human-readable display name used in the app and public site.
+- `short_name`: A concise 1–40 character label used when chat lists several selected collections. Set it during source onboarding; it is required for submission and publication.
 - `description`: One to two sentences describing what the source is and what it covers. This is the public-facing text shown on the source-pack catalog page at disasterclippy.com. Required before a source can appear in the public catalog.
 - `tags`: Array of topic tags used for filtering and discovery.
 - `license`: License identifier (CC-BY, CC0, Public Domain, etc.).
 - `license_verified`: Boolean, must be true before submission.
 - `base_url`: Canonical URL of the source.
+
+Older packs without `short_name` can still be read. The seven official hosted sources have compatibility labels until their manifests and published catalog are updated. For an existing local pack, open Source Tools → Metadata, set its Short Name, and save. Rebuild the public catalog after updating official pack manifests so `published/catalog.json` stores the labels; the hosted skating reference receives its label during that rebuild too.
 
 The `description` field is not validated automatically but is required for the public catalog. A source without a description will not appear correctly on the public site even if all other validation gates pass.
 

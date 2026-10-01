@@ -450,6 +450,8 @@ def _apply_source_name(source_id: str, name: str):
         manifest = json.load(f)
 
     manifest["name"] = name
+    if not manifest.get("short_name"):
+        manifest["short_name"] = name[:40]
 
     with open(manifest_path, "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=2, ensure_ascii=False)
@@ -1119,7 +1121,7 @@ def get_job_function(job_type: str, source_id: str, params: Dict[str, Any]):
                     pass
 
             # Fields to preserve from existing manifest (user edits take precedence)
-            preserved_fields = ["name", "description", "base_url", "license",
+            preserved_fields = ["name", "short_name", "description", "base_url", "license",
                                "license_verified", "attribution", "tags", "language",
                                "version", "created_at"]
             for field in preserved_fields:

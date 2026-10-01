@@ -78,6 +78,7 @@ class ValidationResult:
 
     # File existence checks
     has_manifest: bool = False
+    has_short_name: bool = False
     has_metadata: bool = False
     has_backup: bool = False
     has_config: bool = False  # Alias for has_manifest (backwards compat)
@@ -154,6 +155,11 @@ class ValidationResult:
 # =============================================================================
 
 FIX_ACTIONS = {
+    "has_short_name": {
+        "job": None,
+        "label": "Set Short Name",
+        "url": "/useradmin/sources/tools?source={source_id}#metadata"
+    },
     "has_backup": {
         "job": "scrape",
         "label": "Scrape Content",
@@ -266,6 +272,7 @@ def validate_light(source_path: str, source_id: str, use_cache: bool = True) -> 
             # Recompute gates (in case logic changed)
             cached.can_submit = _compute_can_submit(cached)
             cached.can_publish = _compute_can_publish(cached)
+            cached.missing = _compute_missing(cached)
             return cached
 
     # Import schema helpers
@@ -301,6 +308,8 @@ def validate_light(source_path: str, source_id: str, use_cache: bool = True) -> 
     if result.has_manifest:
         manifest_data = _load_json(path / get_manifest_file())
         if manifest_data:
+            short_name = manifest_data.get("short_name")
+            result.has_short_name = isinstance(short_name, str) and 1 <= len(short_name.strip()) <= 40
             result.license = manifest_data.get("license", "Unknown")
             result.license_verified = manifest_data.get("license_verified", False)
             result.license_notes = manifest_data.get("license_notes", "")
@@ -435,6 +444,7 @@ def _compute_can_submit(r: ValidationResult) -> bool:
 
     Requires:
     - has_manifest
+    - has_short_name
     - has_metadata
     - has_backup with size >= 0.1 MB
     - At least ONE vector dimension (768 OR 1536)
@@ -448,6 +458,7 @@ def _compute_can_submit(r: ValidationResult) -> bool:
 
     return (
         r.has_manifest and
+        r.has_short_name and
         r.has_metadata and
         r.has_backup and
         r.backup_size_mb >= MIN_BACKUP_SIZE_MB and
@@ -894,6 +905,7 @@ def _compute_missing(result: ValidationResult) -> List[Dict[str, Any]]:
 
     checks = [
         ("has_manifest", result.has_manifest, "Missing manifest file"),
+        ("has_short_name", result.has_short_name, "Missing short name (1 to 40 characters)"),
         ("has_metadata", result.has_metadata, "Missing metadata file"),
         ("has_backup", result.has_backup, "Missing backup content"),
         ("has_vectors_1536", result.has_vectors_1536, "Missing 1536-dim vectors (online index)"),
@@ -1044,6 +1056,7 @@ def update_master_validation(backup_folder: str, source_id: str, result: Validat
         "can_submit": result.can_submit,
         "can_publish": result.can_publish,
         "has_manifest": result.has_manifest,
+        "has_short_name": result.has_short_name,
         "has_metadata": result.has_metadata,
         "has_backup": result.has_backup,
         "has_vectors_1536": result.has_vectors_1536,
@@ -1076,6 +1089,7 @@ def update_master_validation(backup_folder: str, source_id: str, result: Validat
             with open(manifest_path, "r", encoding="utf-8") as f:
                 manifest = json.load(f)
             summary["name"] = manifest.get("name", source_id)
+            summary["short_name"] = manifest.get("short_name", "")
             summary["description"] = manifest.get("description", "")
             summary["base_url"] = manifest.get("base_url", "")
             summary["tags"] = manifest.get("tags", [])

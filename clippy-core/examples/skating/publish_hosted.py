@@ -172,6 +172,7 @@ def publish(documents: list[dict], batch_size: int = 50) -> None:
     sources.append({
         "source_id": SOURCE_ID,
         "name": "U.S. Figure Skating Rulebook 2026-27 (demo)",
+        "short_name": "Figure skating",
         "description": "Temporary searchable reference to the publisher's 2026-27 rulebook. Results link to the official PDF; this hosted demo does not distribute a PDF or downloadable pack.",
         "license": "Copyright © 2026 U.S. Figure Skating",
         "license_verified": False,

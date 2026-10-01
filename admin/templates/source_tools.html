@@ -812,6 +812,11 @@
                             <input type="text" id="editName" placeholder="Human-readable name">
                         </div>
                         <div class="form-group">
+                            <label>Short Name</label>
+                            <input type="text" id="editShortName" maxlength="40" placeholder="Brief name for chat collections">
+                            <p style="font-size: 0.8rem; color: #888; margin-top: 0.25rem;">Shown when several collections are selected.</p>
+                        </div>
+                        <div class="form-group">
                             <label>License</label>
                             <select id="editLicense">
                                 <option value="Unknown">Unknown</option>
@@ -2318,6 +2323,7 @@
         function populateEditForm() {
             const s = currentSource;
             document.getElementById('editName').value = s.name || '';
+            document.getElementById('editShortName').value = s.short_name || s.name || '';
             document.getElementById('editDescription').value = s.description || '';
             document.getElementById('editLicense').value = s.license || 'Unknown';
             document.getElementById('editBaseUrl').value = s.base_url || '';
@@ -2521,6 +2527,7 @@
             const config = {
                 source_id: currentSource.source_id,
                 name: document.getElementById('editName').value,
+                short_name: document.getElementById('editShortName').value.trim(),
                 description: document.getElementById('editDescription').value,
                 license: document.getElementById('editLicense').value,
                 license_verified: document.getElementById('editLicenseVerified').checked,

@@ -26,6 +26,26 @@ logger = logging.getLogger(__name__)
 
 CATALOG_KEY = "published/catalog.json"
 
+# Names for packs published before short_name became part of the manifest.
+# New packs supply their own short_name during onboarding.
+LEGACY_SHORT_NAMES = {
+    "appropedia": "Appropedia",
+    "bitcoin": "Bitcoin",
+    "fortified-2025": "FORTIFIED",
+    "ready_gov_site": "Ready.gov",
+    "usfs-rulebook-2026-27": "Figure skating",
+    "wikipedia-medical": "Medical",
+    "wikipedia_climate_change": "Climate change",
+}
+
+
+def catalog_short_name(source_id: str, metadata: Dict[str, Any]) -> str:
+    """Use pack metadata, with a compatibility label for older published packs."""
+    return str(
+        metadata.get("short_name") or LEGACY_SHORT_NAMES.get(source_id)
+        or metadata.get("name") or source_id
+    ).strip()
+
 
 def _looks_like_backup_url(url: str) -> bool:
     """Heuristic check for bucket/backup-hosted URLs."""
@@ -150,6 +170,7 @@ def _build_catalog_entry(source_id: str, source_dir: Path, manifest: Dict[str, A
     return {
         "source_id": source_id,
         "name": manifest.get("name", source_id),
+        "short_name": catalog_short_name(source_id, manifest),
         "description": description,
         "license": manifest.get("license", "Unknown"),
         "license_verified": manifest.get("license_verified", False),
@@ -174,7 +195,7 @@ def _preserve_hosted_references(entries: List[Dict[str, Any]], existing_catalog:
             continue
         source_id = entry.get("source_id")
         if entry.get("reference_only") is True and source_id and source_id not in known_ids:
-            entries.append(entry)
+            entries.append({**entry, "short_name": catalog_short_name(source_id, entry)})
             known_ids.add(source_id)
     return entries
 

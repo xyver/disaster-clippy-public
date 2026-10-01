@@ -12,6 +12,18 @@ let welcomeData = null;
 let activeChatController = null;
 let chatGeneration = 0;
 
+function readableList(items) {
+    if (items.length < 2) return items[0] || '';
+    if (items.length === 2) return `${items[0]} and ${items[1]}`;
+    return `${items.slice(0, -1).join(', ')}, and ${items.at(-1)}`;
+}
+
+function selectedCollectionNames(ids) {
+    const names = ids.map(id => availableSources[id].short_name || availableSources[id].name || id);
+    if (names.length > 4) return `${names.slice(0, 3).join(', ')}, and ${names.length - 3} more`;
+    return readableList(names);
+}
+
 const chatMessages = document.getElementById('chatMessages');
 const chatForm = document.getElementById('chatForm');
 const userInput = document.getElementById('userInput');
@@ -49,14 +61,14 @@ function renderCollectionContext() {
     } else if (selectedSources === null) {
         const topics = welcomeData?.stats?.topics || [];
         indexStats.textContent = `${total} passages in collection${topics.length ? ` | Topics: ${topics.join(', ')}` : ''}`;
-        opening = `You are searching all ${allIds.length} collections (${total} passages). Ask what you need and check the references in each answer.`;
+        opening = `You are searching all ${allIds.length} collections (${total.toLocaleString('en-US')} passages)${topics.length ? `, covering ${readableList(topics)}` : ''}. Ask what you need and check the references in each answer.`;
     } else if (chosen.length === 1) {
         const name = availableSources[chosen[0]].name || chosen[0];
         indexStats.textContent = `${total} passages selected`;
         opening = `You are searching ${name} (${total} passages). Ask a question about this collection; I will cite the sources I use.`;
     } else {
         indexStats.textContent = `${total} passages across ${chosen.length} selected collections`;
-        opening = `You are searching ${chosen.length} selected collections (${total} passages). Ask what you need and check the references in each answer.`;
+        opening = `You are searching ${chosen.length} collections: ${selectedCollectionNames(chosen)} (${total.toLocaleString('en-US')} passages). Ask what you need and check the references in each answer.`;
     }
 
     if (chatMessages.children.length === 1) {

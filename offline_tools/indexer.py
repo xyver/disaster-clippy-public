@@ -82,7 +82,7 @@ def save_manifest(output_folder: Path, source_id: str, documents: List[Dict],
         # These should NOT be overwritten during indexing - only explicit user action should change them
         preserved = [
             # Identity & metadata
-            "name", "description", "license", "license_verified", "license_notes",
+            "name", "short_name", "description", "license", "license_verified", "license_notes",
             "attribution", "base_url", "tags", "created_at", "version",
             "language", "language_verified",
             # Source origin info
@@ -102,6 +102,7 @@ def save_manifest(output_folder: Path, source_id: str, documents: List[Dict],
             "schema_version": CURRENT_SCHEMA_VERSION,
             "source_id": source_id,
             "name": source_id.replace('_', ' ').title(),
+            "short_name": source_id.replace('_', ' ').title()[:40],
             "description": "",
             "license": license_info,
             "license_verified": False,

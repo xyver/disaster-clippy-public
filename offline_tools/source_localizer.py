@@ -485,10 +485,13 @@ def localize_source(
             with open(manifest_file, 'r', encoding='utf-8') as f:
                 original_manifest = json.load(f)
 
+        language_suffix = f" ({target_lang.upper()})"
+        base_short_name = str(original_manifest.get('short_name') or original_manifest.get('name') or source_id)
         localized_manifest = {
             "source_id": result.localized_source_id,
             "parent_source": source_id,
             "name": f"{original_manifest.get('name', source_id)} ({target_lang.upper()})",
+            "short_name": base_short_name[:40 - len(language_suffix)] + language_suffix,
             "description": original_manifest.get("description", ""),
             "language": target_lang,
             "language_verified": True,  # Known from translation target

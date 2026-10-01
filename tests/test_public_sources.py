@@ -14,7 +14,7 @@ def test_public_source_routes_use_catalog(monkeypatch):
     monkeypatch.setattr(
         app_module,
         "get_public_catalog_sources",
-        lambda: [{"source_id": "test-rules", "name": "Test Rules", "doc_count": 12}],
+        lambda: [{"source_id": "test-rules", "name": "Test Rules 2026", "short_name": "Rules", "doc_count": 12}],
     )
     monkeypatch.setattr(
         app_module,
@@ -31,6 +31,7 @@ def test_public_source_routes_use_catalog(monkeypatch):
     sources = client.get("/sources")
     assert sources.status_code == 200
     assert sources.json()["sources"]["test-rules"]["count"] == 12
+    assert sources.json()["sources"]["test-rules"]["short_name"] == "Rules"
     assert sources.json()["sources"]["test-rules"]["has_1536"] is True
 
     simple_sources = client.get("/api/v1/sources")
@@ -160,7 +161,7 @@ def test_rule_context_uses_section_id_not_result_number():
 
 
 def test_catalog_rebuild_preserves_hosted_reference_only():
-    from offline_tools.cloud.catalog import _preserve_hosted_references
+    from offline_tools.cloud.catalog import _preserve_hosted_references, catalog_short_name
 
     entries = [{"source_id": "ready-gov"}]
     existing = {"sources": [
@@ -170,3 +171,33 @@ def test_catalog_rebuild_preserves_hosted_reference_only():
     ]}
     result = _preserve_hosted_references(entries, existing)
     assert [item["source_id"] for item in result] == ["ready-gov", "usfs-rulebook-2026-27"]
+    assert result[1]["short_name"] == "Figure skating"
+    assert catalog_short_name("custom-pack", {"name": "Custom Pack", "short_name": "Custom"}) == "Custom"
+    assert catalog_short_name("wikipedia-medical", {"name": "Wikipedia Medical"}) == "Medical"
+
+
+def test_catalog_entry_carries_manifest_short_name(tmp_path):
+    from offline_tools.cloud.catalog import _build_catalog_entry
+
+    entry = _build_catalog_entry("my-pack", tmp_path, {
+        "name": "My Detailed Pack Name",
+        "short_name": "My Pack",
+        "description": "A test pack.",
+    }, {"count": 5})
+    assert entry["short_name"] == "My Pack"
+
+
+def test_short_name_is_required_for_pack_submission():
+    from offline_tools.validation import ValidationResult, _compute_can_submit, _compute_missing
+
+    result = ValidationResult(
+        source_id="my-pack", has_manifest=True, has_metadata=True,
+        has_backup=True, backup_size_mb=1, has_vectors_1536=True,
+        license_in_allowlist=True, license_verified=True,
+        links_verified_offline=True, links_verified_online=True,
+        language_is_english=True,
+    )
+    assert not _compute_can_submit(result)
+    assert any(item["check"] == "has_short_name" for item in _compute_missing(result))
+    result.has_short_name = True
+    assert _compute_can_submit(result)
