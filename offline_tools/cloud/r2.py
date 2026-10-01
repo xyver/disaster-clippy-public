@@ -324,7 +324,7 @@ class R2Storage:
             self._last_error = str(e)
             return False
 
-    def download_file_content(self, remote_key: str) -> Optional[str]:
+    def download_file_content(self, remote_key: str, timeout_seconds: Optional[int] = None) -> Optional[str]:
         """
         Download a file's content directly as a string (for small files like JSON).
 
@@ -336,6 +336,21 @@ class R2Storage:
         """
         try:
             client = self._get_client()
+            if timeout_seconds is not None:
+                from botocore.config import Config
+
+                client = boto3.client(
+                    's3',
+                    endpoint_url=self.config.endpoint_url,
+                    aws_access_key_id=self.config.access_key_id,
+                    aws_secret_access_key=self.config.secret_access_key,
+                    region_name='auto',
+                    config=Config(
+                        connect_timeout=timeout_seconds,
+                        read_timeout=timeout_seconds,
+                        retries={'max_attempts': 1},
+                    ),
+                )
             response = client.get_object(Bucket=self.config.bucket_name, Key=remote_key)
             content = response['Body'].read().decode('utf-8')
             logger.info(f"Downloaded content from r2://{self.config.bucket_name}/{remote_key}")

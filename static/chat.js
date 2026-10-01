@@ -253,14 +253,13 @@ userInput.addEventListener('keydown', (e) => {
 
 // Load sources and render checkboxes
 async function loadSources() {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000);
     try {
-        // Use AbortController for timeout - database may be busy during indexing
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 5000);
-
         const response = await fetch('/sources', { signal: controller.signal });
-        clearTimeout(timeoutId);
-
+        if (!response.ok) {
+            throw new Error(`Sources request failed: ${response.status}`);
+        }
         const data = await response.json();
 
         availableSources = data.sources || {};
@@ -285,14 +284,15 @@ async function loadSources() {
 
     } catch (e) {
         console.error('Failed to load sources:', e);
-        // Check if it was a timeout (abort) - likely database busy with indexing
         if (e.name === 'AbortError') {
-            sourcesGrid.innerHTML = '<span style="color: #f0ad4e;">Database in use (indexing). Try again later.</span>';
+            sourcesGrid.innerHTML = '<span style="color: #f0ad4e;">Sources are taking longer than expected. Retrying...</span>';
             // Retry after 30 seconds
             setTimeout(loadSources, 30000);
         } else {
             sourcesGrid.innerHTML = '<span style="color: #888;">Unable to load sources</span>';
         }
+    } finally {
+        clearTimeout(timeoutId);
     }
 }
 

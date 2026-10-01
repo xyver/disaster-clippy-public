@@ -848,7 +848,7 @@ async def admin_available():
 
 
 @app.get("/welcome")
-async def get_welcome():
+def get_welcome():
     """
     Get a dynamic welcome message based on indexed content.
     Uses _master.json for fast cached stats instead of querying ChromaDB.
@@ -884,8 +884,19 @@ async def get_welcome():
             except Exception as e:
                 print(f"Warning: Could not load local _master.json: {e}")
 
+    # Public deployments already have a curated catalog; avoid a second cloud
+    # request on page load when that catalog is available.
+    if public_mode and curated_catalog_sources:
+        master = {
+            "total_documents": sum(int(s.get("doc_count", 0) or 0) for s in curated_catalog_sources),
+            "sources": {
+                s["source_id"]: {"count": int(s.get("doc_count", 0) or 0)}
+                for s in curated_catalog_sources if s.get("source_id")
+            },
+        }
+
     # 2. Fall back to R2 cloud storage (for Railway deployment)
-    if not master:
+    if not master and not public_mode:
         try:
             from offline_tools.cloud.r2 import get_backups_storage
             storage = get_backups_storage()
@@ -922,7 +933,7 @@ async def get_welcome():
                     topics_counter.update(source_tags)
 
     # Fall back to ChromaDB if _master.json empty or missing
-    if total_docs == 0:
+    if total_docs == 0 and not public_mode:
         store = get_vector_store()
         stats = store.get_stats()
         total_docs = stats.get("total_documents", 0)
@@ -1009,12 +1020,12 @@ async def get_welcome():
 
 
 @app.get("/sources")
-async def get_sources():
+def get_sources():
     """
     Get list of available sources with document counts and availability info.
 
-    IMPORTANT: Uses ChromaDB as source of truth (what's actually searchable),
-    with _manifest.json files for display names only.
+    Public mode uses the published catalog. Local mode uses vector store stats,
+    with _manifest.json files for display names.
 
     Returns availability flags:
     - has_1536: Has 1536-dim vectors (for online/Pinecone search)
@@ -1023,12 +1034,23 @@ async def get_sources():
     from admin.local_config import get_local_config
     from offline_tools.schemas import get_vectors_file, get_vectors_768_file
 
-    # ChromaDB is the source of truth for searchable sources
-    store = get_vector_store()
-    stats = store.get_stats()
-    sources_counts = stats.get("sources", {})
-    total_docs = stats.get("total_documents", 0)
     curated_catalog_sources = get_public_catalog_sources() if is_public_mode() else []
+    if curated_catalog_sources:
+        # The published catalog already contains the public source list and counts.
+        sources_counts = {
+            source["source_id"]: int(source.get("doc_count", 0) or 0)
+            for source in curated_catalog_sources
+            if source.get("source_id")
+        }
+        total_docs = sum(sources_counts.values())
+    elif not is_public_mode():
+        store = get_vector_store()
+        stats = store.get_stats()
+        sources_counts = stats.get("sources", {})
+        total_docs = stats.get("total_documents", 0)
+    else:
+        sources_counts = {}
+        total_docs = 0
     curated_catalog_by_id = {
         source.get("source_id"): source
         for source in curated_catalog_sources
@@ -1090,8 +1112,8 @@ async def get_sources():
         catalog_source = curated_catalog_by_id.get(source_id, {})
 
         # Check both vector files (2 fast stat calls per source)
-        has_1536 = folder and (folder / get_vectors_file()).exists()
-        has_768 = folder and (folder / get_vectors_768_file()).exists()
+        has_1536 = bool(catalog_source) if is_public_mode() else bool(folder and (folder / get_vectors_file()).exists())
+        has_768 = bool(folder and (folder / get_vectors_768_file()).exists())
 
         sources[source_id] = {
             "name": catalog_source.get("name", info.get("name", source_id.replace("_", " ").replace("-", " ").title())),
@@ -1108,7 +1130,7 @@ async def get_sources():
 
 
 @app.get("/api/v1/sources")
-async def list_sources_simple():
+def list_sources_simple():
     """
     Simple endpoint for external API consumers to discover available sources.
 
@@ -1164,6 +1186,9 @@ def _refresh_public_catalog_cache() -> None:
     """Load published/catalog.json from R2 for public-mode source gating."""
     global _public_catalog_cache
 
+    # A failed request gets a short cooldown, so each page load does not retry
+    # a slow cloud call. Preserve the last good catalog during an outage.
+    _public_catalog_cache["expires"] = datetime.now(timezone.utc) + timedelta(minutes=1)
     try:
         from offline_tools.cloud.r2 import get_backups_storage
 
@@ -1171,7 +1196,7 @@ def _refresh_public_catalog_cache() -> None:
         if not storage.is_configured():
             return
 
-        raw = storage.download_file_content("published/catalog.json")
+        raw = storage.download_file_content("published/catalog.json", timeout_seconds=3)
         if not raw:
             return
 
@@ -1220,13 +1245,22 @@ def get_source_display_name(source_id: str, manifest: Optional[Dict[str, Any]] =
 
 
 def _refresh_source_cache() -> None:
-    """Refresh the source cache from vector store stats."""
+    """Refresh available sources from the public catalog or vector store."""
     global _source_cache
     try:
-        store = get_vector_store()
-        stats = store.get_stats()
-        sources_counts = stats.get("sources", {})
         public_catalog_sources = get_public_catalog_sources() if is_public_mode() else []
+        if public_catalog_sources:
+            sources_counts = {
+                source["source_id"]: int(source.get("doc_count", 0) or 0)
+                for source in public_catalog_sources
+                if source.get("source_id")
+            }
+        elif not is_public_mode():
+            store = get_vector_store()
+            stats = store.get_stats()
+            sources_counts = stats.get("sources", {})
+        else:
+            sources_counts = {}
         public_catalog_by_id = {
             source.get("source_id"): source
             for source in public_catalog_sources
@@ -1274,7 +1308,9 @@ def _refresh_source_cache() -> None:
         _source_cache = {
             "data": source_list,
             "ids": set(sources_counts.keys()),
-            "expires": datetime.now(timezone.utc) + _SOURCE_CACHE_TTL
+            "expires": datetime.now(timezone.utc) + (
+                timedelta(minutes=1) if is_public_mode() and not source_list else _SOURCE_CACHE_TTL
+            )
         }
     except Exception as e:
         print(f"[SOURCE_CACHE] Error refreshing cache: {e}")
@@ -1508,7 +1544,7 @@ def format_offline_response(query: str, context: str) -> str:
 
 @app.post("/chat", response_model=ChatResponse)
 @limiter.limit("10/minute")
-async def chat(request: Request, body: ChatRequest):
+def chat(request: Request, body: ChatRequest):
     """
     Main chat endpoint.
     Handles conversational queries with context from vector store.
@@ -1615,7 +1651,7 @@ async def chat(request: Request, body: ChatRequest):
 
 @app.post("/api/v1/chat", response_model=SimpleQueryResponse)
 @limiter.limit("10/minute")
-async def simple_chat(request: Request, body: SimpleQueryRequest):
+def simple_chat(request: Request, body: SimpleQueryRequest):
     """
     Simple chat API for external websites.
 
@@ -1723,7 +1759,7 @@ async def simple_chat(request: Request, body: SimpleQueryRequest):
 
 @app.post("/api/v1/chat/stream")
 @limiter.limit("10/minute")
-async def stream_chat(request: Request, body: SimpleQueryRequest):
+def stream_chat(request: Request, body: SimpleQueryRequest):
     """
     Streaming chat API - returns Server-Sent Events (SSE) for real-time response.
 
@@ -1745,7 +1781,7 @@ async def stream_chat(request: Request, body: SimpleQueryRequest):
     message = body.message.strip()
 
     if not message:
-        async def empty_response():
+        def empty_response():
             yield "data: Please enter a question.\n\n"
             yield "data: [DONE]\n\n"
         return StreamingResponse(empty_response(), media_type="text/event-stream")
@@ -1775,7 +1811,7 @@ async def stream_chat(request: Request, body: SimpleQueryRequest):
 
     # Handle no sources case
     if source_ids is not None and len(source_ids) == 0:
-        async def no_sources_response():
+        def no_sources_response():
             # Stream warnings first if any
             for warning in filter_warnings:
                 yield f"data: {warning}\\n\n\n"
@@ -1817,7 +1853,7 @@ async def stream_chat(request: Request, body: SimpleQueryRequest):
     if filter_warnings:
         warning_prefix = "\\n".join(filter_warnings) + "\\n\\n"
 
-    async def generate():
+    def generate():
         # Send articles first as JSON (prefixed with [ARTICLES])
         # Use appropriate URL based on context (online for Railway, local for offline)
         articles_json = json.dumps([{
@@ -2173,7 +2209,7 @@ async def cloud_sources(request: Request):
 
 @app.get("/api/cloud/catalog")
 @limiter.limit("30/minute")
-async def cloud_catalog(request: Request):
+def cloud_catalog(request: Request):
     """
     Return the live published source-pack catalog from R2.
     """
@@ -2190,27 +2226,16 @@ async def cloud_catalog(request: Request):
                 }
             )
 
-        conn_status = storage.test_connection()
-        if not conn_status["connected"]:
+        catalog = get_public_catalog()
+        if not catalog:
             return JSONResponse(
                 status_code=503,
                 content={
-                    "error": "cloud_connection_failed",
-                    "message": conn_status.get("error", "Failed to connect to cloud storage")
+                    "error": "catalog_unavailable",
+                    "message": "The public source catalog is temporarily unavailable"
                 }
             )
 
-        raw = storage.download_file_content("published/catalog.json")
-        if not raw:
-            return JSONResponse(
-                status_code=404,
-                content={
-                    "error": "catalog_not_found",
-                    "message": "published/catalog.json not found"
-                }
-            )
-
-        catalog = json.loads(raw)
         return {
             "catalog": catalog,
             "connected": True,

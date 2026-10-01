@@ -174,6 +174,11 @@ def get_vector_store_for_search(fallback: bool = True):
     Returns:
         VectorStore instance, or tuple of (primary, fallback) if fallback=True in hybrid mode
     """
+    # The hosted public app serves official cloud packs only. A local settings
+    # file must never switch it to ChromaDB or a local fallback.
+    if os.getenv("VECTOR_DB_MODE", "local").lower() == "pinecone":
+        return get_vector_store(mode="pinecone")
+
     offline_mode = get_offline_mode()
     local_dimension = get_default_dimension()  # Uses configured embedding model
 

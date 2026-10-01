@@ -1,0 +1,80 @@
+"""Public catalog routes must not query Pinecone for source discovery."""
+
+import importlib
+
+from fastapi.testclient import TestClient
+
+
+def test_public_source_routes_use_catalog(monkeypatch):
+    app_module = importlib.import_module("app")
+    monkeypatch.setenv("VECTOR_DB_MODE", "pinecone")
+    monkeypatch.setattr(
+        app_module,
+        "get_public_catalog_sources",
+        lambda: [{"source_id": "test-rules", "name": "Test Rules", "doc_count": 12}],
+    )
+    monkeypatch.setattr(
+        app_module,
+        "get_vector_store",
+        lambda: (_ for _ in ()).throw(AssertionError("source discovery queried Pinecone")),
+    )
+    monkeypatch.setattr(
+        app_module,
+        "_source_cache",
+        {"data": [], "ids": set(), "expires": None},
+    )
+
+    client = TestClient(app_module.app)
+    sources = client.get("/sources")
+    assert sources.status_code == 200
+    assert sources.json()["sources"]["test-rules"]["count"] == 12
+    assert sources.json()["sources"]["test-rules"]["has_1536"] is True
+
+    simple_sources = client.get("/api/v1/sources")
+    assert simple_sources.status_code == 200
+    assert simple_sources.json()["sources"] == [
+        {"id": "test-rules", "name": "Test Rules", "count": 12}
+    ]
+
+
+def test_public_sources_fail_closed_without_catalog(monkeypatch):
+    app_module = importlib.import_module("app")
+    monkeypatch.setenv("VECTOR_DB_MODE", "pinecone")
+    monkeypatch.setattr(app_module, "get_public_catalog_sources", lambda: [])
+    monkeypatch.setattr(
+        app_module,
+        "get_vector_store",
+        lambda: (_ for _ in ()).throw(AssertionError("source discovery queried Pinecone")),
+    )
+    monkeypatch.setattr(
+        app_module,
+        "_source_cache",
+        {"data": [], "ids": set(), "expires": None},
+    )
+
+    client = TestClient(app_module.app)
+    assert client.get("/sources").json()["sources"] == {}
+    assert client.get("/api/v1/sources").json()["sources"] == []
+
+
+def test_hosted_mode_forces_pinecone_without_local_fallback(monkeypatch):
+    from admin.local_config import get_local_config
+    from offline_tools.vectordb import factory
+
+    monkeypatch.setenv("VECTOR_DB_MODE", "pinecone")
+    local_config = get_local_config()
+    monkeypatch.setitem(local_config.config, "offline_mode", "offline_only")
+    assert local_config.get_offline_mode() == "online_only"
+
+    calls = []
+    monkeypatch.setattr(factory, "get_vector_store", lambda **kwargs: calls.append(kwargs) or "cloud-store")
+    assert factory.get_vector_store_for_search(fallback=True) == "cloud-store"
+    assert calls == [{"mode": "pinecone"}]
+
+
+def test_empty_stream_still_completes():
+    app_module = importlib.import_module("app")
+    client = TestClient(app_module.app)
+    response = client.post("/api/v1/chat/stream", json={"message": ""})
+    assert response.status_code == 200
+    assert "data: [DONE]" in response.text

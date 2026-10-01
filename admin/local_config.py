@@ -282,6 +282,8 @@ Here are some guides that can help:
 
     def get_offline_mode(self) -> str:
         """Get current offline mode setting"""
+        if os.getenv("VECTOR_DB_MODE", "local").lower() == "pinecone":
+            return "online_only"
         return self.config.get("offline_mode", "hybrid")
 
     def set_offline_mode(self, mode: str) -> None:
