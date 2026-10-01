@@ -52,12 +52,13 @@ def _config(args) -> ClippyConfig:
     return config
 
 
-def _store(config: ClippyConfig):
+def _store(config: ClippyConfig, search_mode: Optional[str] = None):
     from .vectordb import SQLiteHybridStore
     path = Path(config.index_path)
     if not path.exists():
         raise SystemExit(f"No index at {path}. Run `clippy build` first.")
-    return SQLiteHybridStore(path, api_key=config.get_openai_api_key(), create=False)
+    return SQLiteHybridStore(path, api_key=config.get_openai_api_key(), create=False,
+                             keyword_only=(search_mode or config.search_mode) == "keyword")
 
 
 # ---------------------------------------------------------------- commands
@@ -119,7 +120,7 @@ def cmd_info(args) -> None:
 
 def cmd_search(args) -> None:
     config = _config(args)
-    store = _store(config)
+    store = _store(config, search_mode=args.mode)
     results = store.search(args.query, n_results=args.k, filters=_filters(args.filter),
                            mode=args.mode or config.search_mode)
     if args.json:

@@ -43,7 +43,8 @@ class IndexMismatchError(RuntimeError):
 
 class SQLiteHybridStore(SyncVectorStoreBase):
     def __init__(self, path: str | Path, embedder: Optional[Embedder] = None,
-                 api_key: Optional[str] = None, create: bool = True):
+                 api_key: Optional[str] = None, create: bool = True,
+                 keyword_only: bool = False):
         self.path = Path(path)
         if not create and not self.path.exists():
             raise FileNotFoundError(f"Index not found: {self.path}")
@@ -53,16 +54,20 @@ class SQLiteHybridStore(SyncVectorStoreBase):
         self._create_schema()
 
         stored = self.get_meta("embedder")
+        if keyword_only and embedder is not None:
+            raise ValueError("keyword_only cannot be combined with an embedder")
         if embedder is None:
             if not stored:
                 raise IndexMismatchError(
                     f"{self.path} has no embedder recorded. Build it first, or pass an embedder.")
-            embedder = embedder_from_name(stored, api_key=api_key)
+            if not keyword_only:
+                embedder = embedder_from_name(stored, api_key=api_key)
         elif stored and stored != embedder.name:
             raise IndexMismatchError(
                 f"Index {self.path} was built with {stored!r}, not {embedder.name!r}. "
                 "Rebuild the index or query it with the same embedder.")
         self.embedder = embedder
+        self.keyword_only = keyword_only
         if not stored:
             self.set_meta("embedder", embedder.name)
             self.set_meta("dimension", str(embedder.dimension))
@@ -107,6 +112,8 @@ class SQLiteHybridStore(SyncVectorStoreBase):
     def add_chunks(self, chunks: Sequence[Chunk], batch_size: int = 64,
                    progress=None) -> int:
         """Insert or replace chunks (matched by id). Returns number written."""
+        if self.keyword_only:
+            raise IndexMismatchError("A keyword-only store cannot embed new chunks")
         written = 0
         for i in range(0, len(chunks), batch_size):
             batch = list(chunks[i:i + batch_size])
@@ -231,6 +238,8 @@ class SQLiteHybridStore(SyncVectorStoreBase):
                         if rows else np.zeros((0, dim), dtype=np.float32))
 
     def _semantic_ranked(self, query, limit, sources, filters) -> List[Tuple[int, float]]:
+        if self.keyword_only:
+            raise IndexMismatchError("Semantic search needs the embedder used to build this index")
         if self._matrix is None:
             self._load_matrix()
         if not len(self._rowids):

@@ -11,12 +11,11 @@ license = {text = "MIT"}
 requires-python = ">=3.10"
 dependencies = [
   "numpy>=1.24",
-  "pyyaml>=6.0",
-  "pypdf>=4.0",
 ]
 
 [project.optional-dependencies]
-pdf = ["pymupdf>=1.24"]          # faster, better PDF text extraction
+build = ["pyyaml>=6.0", "pypdf>=4.0"]  # PDF source preparation and manifests
+pdf = ["clippy-core[build]", "pymupdf>=1.24"]  # faster PDF text extraction
 openai = ["openai>=1.30"]        # OpenAI embeddings and/or chat
 anthropic = ["anthropic>=0.40"]  # Claude chat
 local = ["sentence-transformers>=2.7"]   # offline embeddings

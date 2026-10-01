@@ -69,6 +69,19 @@ def test_reopen_uses_stored_embedder_and_rejects_mismatch(tmp_path):
         SQLiteHybridStore(tmp_path / "s.sqlite", embedder=HashEmbedder(512))
 
 
+def test_prepared_index_opens_for_keyword_search_without_loading_embedder(tmp_path, monkeypatch):
+    make_store(tmp_path).close()
+    import clippy_core.vectordb.sqlite_hybrid as sqlite_module
+
+    monkeypatch.setattr(sqlite_module, "embedder_from_name", lambda *args, **kwargs: (_ for _ in ()).throw(
+        AssertionError("keyword search loaded an embedding model")))
+    store = SQLiteHybridStore(tmp_path / "s.sqlite", create=False, keyword_only=True)
+    assert store.search("fall", mode="keyword")[0].id == "b"
+    with pytest.raises(IndexMismatchError, match="Semantic search needs"):
+        store.search("fall", mode="semantic")
+    store.close()
+
+
 def test_citation_format(tmp_path):
     r = make_store(tmp_path).search_keyword("fall")[0]
     r.metadata.update({"doc_title": "Tech Rules", "page_start": 4, "page_end": 5})

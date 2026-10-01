@@ -4,6 +4,28 @@ Cited search and chat over your own documents. It turns PDFs into a one-file ind
 
 It's extracted from [Disaster Clippy](https://github.com/xyver/disaster-clippy-public) as a small, portable core. The first tested external use is a U.S. figure skating rules search.
 
+## Use a prepared index
+
+A consuming app can receive a prepared `.sqlite` index and use only the search/chat runtime. Keyword search needs no local embedding model; written answers use a server-side OpenAI or Anthropic API key.
+
+```bash
+pip install -e ".[openai]"  # or [anthropic]; no PDF or local-model dependencies
+```
+
+```python
+from clippy_core import ChatService, ClippyConfig
+from clippy_core.vectordb import SQLiteHybridStore
+
+config = ClippyConfig(index_path="rules.sqlite", search_mode="keyword", llm_provider="openai")
+store = SQLiteHybridStore(config.index_path, create=False, keyword_only=True)
+answer = ChatService(store, config=config).chat_sync("What counts as a fall?")
+print(answer.text, answer.search_results)
+```
+
+Keep the model key in the host app's backend. The host app should authenticate callers, limit usage, and enforce a spending budget before calling chat. `clippy_core.server` is a local demonstration API with no such controls. Hybrid/semantic search needs the same query embedder that built the index; a prepared index built with local sentence-transformers embeddings still needs that model for semantic queries. Keyword mode opens that index without it.
+
+To copy just this consumer runtime into another project, run `python export_runtime.py --output /path/to/clippy-runtime`. The export contains the read-and-chat modules and their package metadata; it omits ingestion, source tools, evaluation, the CLI, and the unauthenticated demo server. The target path must not already exist.
+
 ## Quick start
 
 ```bash

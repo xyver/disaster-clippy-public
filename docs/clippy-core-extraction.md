@@ -53,6 +53,14 @@ The package's 27 offline tests pass in this repo. The fictional sample builds an
 
 The package server is a local development surface with no authentication or rate limiting. It should be wrapped by a project-specific application before public deployment.
 
+## Prepared-data runtime boundary
+
+The next consumer target is narrower than the current developer package: the consuming app receives a prepared index, searches it, formats citations, and sends bounded context to a model API through its own backend. The app owns authentication, rate limits, quotas, provider keys, and spending controls. It does not need PDF extraction, source onboarding, or a local LLM. The `clippy_core` chat interface already accepts an injected LLM service for an app-owned API proxy.
+
+The first supported path is keyword search against the prepared SQLite index with `SQLiteHybridStore(..., create=False, keyword_only=True)` and an OpenAI or Anthropic chat provider. It works with the locally embedded skating index without installing sentence-transformers at query time. Hybrid search still requires a query embedder compatible with the index's stored vectors. To run hybrid search without a local model, the producer must prepare vectors with an API embedding model, and the consuming backend must use that same model for queries.
+
+`python clippy-core/export_runtime.py --output <new-folder>` now produces a consumer-only folder with the search/chat modules and minimal package metadata. It excludes PDF ingestion, build/eval commands, examples, the CLI, and the unauthenticated demo server. `clippy-core/` remains the producer checkout; its base install leaves PDF and local-model dependencies optional. A cost-controlled API adapter is still owned by the consuming app, where authentication, quota policy, and provider credentials belong. The existing source tools stay in the producer side of Disaster Clippy.
+
 ## Migration rule
 
 Keep this as a parallel, reusable package while the Disaster Clippy app continues to use its existing paths. Move app call sites onto the package only after behavior and deployment parity are demonstrated. Preserve one package implementation and make app-specific adapters above it rather than copying its code into a second runtime.

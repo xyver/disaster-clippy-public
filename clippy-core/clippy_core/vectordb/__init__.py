@@ -24,7 +24,8 @@ def get_vector_store(config=None, mode: Optional[str] = None, embedder=None):
 
     if mode == "sqlite":
         return SQLiteHybridStore(config.index_path, embedder=embedder,
-                                 api_key=config.get_openai_api_key())
+                                 api_key=config.get_openai_api_key(),
+                                 keyword_only=config.search_mode == "keyword" and embedder is None)
     if mode == "pgvector":
         from .pgvector import PgVectorStore
         return PgVectorStore(connection_string=config.pgvector_connection_string,
