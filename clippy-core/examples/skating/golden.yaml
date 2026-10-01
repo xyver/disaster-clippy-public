@@ -1,0 +1,26 @@
+# Retrieval checks against the 2026-27 U.S. Figure Skating Rulebook.
+# Expected IDs were checked against the PDF's rule headings and pages.
+# Add questions and verify their cited sections as real users test the system.
+k: 5
+filters: {edition: '2026-27'}
+questions:
+  - q: How long can a senior singles short program be?
+    filters: {edition: '2026-27', discipline: singles}
+    expect: {section_id: '6051', source_id: usfs-rules}
+  - q: What is the senior synchronized skating short program maximum time?
+    filters: {edition: '2026-27', discipline: synchronized}
+    expect: {section_id: '9042', source_id: usfs-rules}
+  - q: Can a coach also judge a test?
+    expect: {section_id: 'DOR 9.00', source_id: usfs-rules}
+  - q: When may a judge request a reskate of a pattern dance test?
+    expect: {section_id: '8241', source_id: usfs-rules}
+  - q: What must a non-U.S. citizen who has never been a member of a foreign federation submit to enter a qualifying competition?
+    expect: {section_id: '2241', source_id: usfs-rules}
+  - q: When does timing start for a singles skating program?
+    filters: {edition: '2026-27', discipline: singles}
+    expect: {section_id: '6050', source_id: usfs-rules}
+  - q: What happens to a non-listed element under IJS?
+    expect: {section_id: '1071', source_id: usfs-rules}
+  - q: How long is a senior free skate in singles?
+    filters: {edition: '2026-27', discipline: singles}
+    expect: {section_id: '6052', source_id: usfs-rules}

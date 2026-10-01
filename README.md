@@ -27,7 +27,7 @@ That approach works for any curated body of knowledge. The same engine has been 
 
 The source pack model is what makes this portable. On the public site and in the app, people explore collections through a catalog. Under the hood, a source pack is the discrete, versioned bundle of knowledge — HTML backups, ZIM archives, PDFs, embeddings, and metadata — that can be installed locally, carried offline, or swapped out entirely. The runtime does not care what the pack contains.
 
-If you are a developer thinking about building something similar for your own domain, the architecture is designed with that in mind. See [`docs/clippy-core-extraction.md`](docs/clippy-core-extraction.md) for the direction the portable core is heading, and [`docs/template-deployments.md`](docs/template-deployments.md) for the planned plug-and-play deployment path.
+If you are building a cited search system for your own documents, [`clippy-core/`](clippy-core/README.md) is the standalone Python package for PDF indexing, hybrid retrieval, and optional LLM answers. See [`docs/clippy-core-extraction.md`](docs/clippy-core-extraction.md) for how it relates to this app, and [`docs/template-deployments.md`](docs/template-deployments.md) for the broader deployment direction.
 
 ---
 
@@ -249,7 +249,8 @@ Where:
 - [`docs/source-tools.md`](docs/source-tools.md) - source creation and ingestion tools
 - [`docs/language-packs.md`](docs/language-packs.md) - translation system
 - [`docs/video_processing.md`](docs/video_processing.md) - video and transcript pipeline
-- [`docs/clippy-core-extraction.md`](docs/clippy-core-extraction.md) - portable core architecture target
+- [`clippy-core/README.md`](clippy-core/README.md) - portable PDF indexing and cited search package
+- [`docs/clippy-core-extraction.md`](docs/clippy-core-extraction.md) - package boundary and app migration path
 
 ---
 

@@ -20,17 +20,19 @@ Disaster Clippy works best when understood in four layers:
 app.py
 admin/
 offline_tools/
-clippy_core/   (future extraction target)
+clippy-core/clippy_core/   (portable package, currently parallel to app runtime)
 ```
 
 See [`clippy-core-extraction.md`](clippy-core-extraction.md).
 
 Dependency direction should flow downward:
 
-- `app.py` can depend on `admin/`, `offline_tools/`, and future `clippy_core/`
-- `admin/` can depend on `offline_tools/` and future `clippy_core/`
-- `offline_tools/` can depend on future `clippy_core/`
-- `clippy_core/` should not depend on the layers above it
+- `app.py` can depend on `admin/`, `offline_tools/`, and eventually `clippy_core/`
+- `admin/` can depend on `offline_tools/` and eventually `clippy_core/`
+- `offline_tools/` can eventually depend on `clippy_core/`
+- `clippy_core/` does not depend on the layers above it
+
+The package currently runs alongside the app's existing search implementation. The distribution docs' downloadable **core engine** is the full public app; `clippy-core` is the smaller Python library a developer can reuse in another project.
 
 ---
 

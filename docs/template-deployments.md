@@ -13,7 +13,7 @@ The goal is a stripped-down deployment path that:
 
 ## What we are building toward
 
-The foundation for this is the clippy-core extraction work documented in [clippy-core-extraction.md](clippy-core-extraction.md). The idea is to separate the portable runtime core from the advanced local admin and source-building tooling, so a developer can take just the parts they need.
+The standalone [clippy-core package](../clippy-core/README.md) already provides PDF indexing and cited search for developers building a different application. The broader template deployment path for the full Disaster Clippy app is still planned. See [clippy-core-extraction.md](clippy-core-extraction.md) for the distinction between the package and the downloadable app engine.
 
 Once that seam is clean, a template deployment would look something like:
 

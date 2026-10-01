@@ -1,0 +1,39 @@
+# Quick-start manifest for the fictional sample rulebooks.
+#   python examples/sample/make_sample_pdfs.py
+#   clippy build   --manifest examples/sample/sources.yaml --rebuild
+#   clippy preview --manifest examples/sample/sources.yaml
+#   clippy ask "How long can the short program be?" -m examples/sample/sources.yaml -f edition=2025-26
+#   clippy eval examples/sample/golden.yaml -m examples/sample/sources.yaml --compare
+
+index: ../../build/sample-rules.sqlite
+
+embedding:
+  provider: hash      # deterministic offline demo; choose openai or local for real semantic search
+
+chunker:
+  class: regex_section
+  params:
+    # A new section starts at every line like "Rule 201 Short Program - Required Elements"
+    pattern: '^(?P<id>Rule\s+\d+[A-Z]?)\b[\s.:–-]*(?P<title>.*)$'
+    max_chars: 2500
+    drop_lines:                       # running header and page footer
+      - '^Sample Sport Technical Rules \d{4}-\d{2}$'
+      - '^Page \d+$'
+
+defaults:
+  source_id: sample-rules
+  metadata:
+    sport: sample
+
+documents:
+  - path: pdfs/sample-rules-2024-25.pdf
+    doc_id: sample-tech-rules
+    title: Sample Sport Technical Rules
+    edition: "2024-25"
+  - path: pdfs/sample-rules-2025-26.pdf
+    doc_id: sample-tech-rules
+    title: Sample Sport Technical Rules
+    edition: "2025-26"
+
+config:
+  prompt_path: prompt.md

@@ -1,0 +1,23 @@
+# Golden questions for the sample rulebooks. Each question names the rule that
+# must come back. Run:  clippy eval examples/sample/golden.yaml -m examples/sample/sources.yaml --compare
+k: 5
+questions:
+  - q: How many jump elements are allowed in the short program?
+    expect: {section_id: "Rule 201"}
+  - q: What is the maximum length of the short program this season?
+    filters: {edition: "2025-26"}
+    expect: {section_id: "Rule 202", edition: "2025-26"}
+    expect_text: "2 minutes 50 seconds"
+  - q: What is the deduction for a costume violation?
+    filters: {edition: "2025-26"}
+    expect: {section_id: "Rule 401"}
+  - q: How many times can a triple jump be repeated in the free skate?
+    expect: {section_id: "Rule 301"}
+  - q: What counts as a fall?
+    expect: {section_id: "Rule 501"}
+  - q: When are entries due?
+    expect: {section_id: "Rule 102"}
+  - q: minimum age for senior events
+    expect: {section_id: "Rule 101"}
+  - q: Are props allowed?
+    expect: {section_id: "Rule 401"}

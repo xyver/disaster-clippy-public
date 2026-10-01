@@ -228,7 +228,7 @@ Deployment and repo boundaries work better if the internal architecture stays la
 app.py
 admin/
 offline_tools/
-clippy_core/   (future extraction target)
+clippy-core/clippy_core/   (portable package, currently parallel to the app)
 ```
 
 See [`clippy-core-extraction.md`](./clippy-core-extraction.md).
@@ -238,7 +238,9 @@ That separation matters because:
 - the hosted shell should not own all business logic
 - the private repo should not need to duplicate the public app engine
 - the local runtime should remain first-class
-- the portable chat/search engine should eventually be reusable outside the full app
+- the portable PDF chat/search package can be reused outside the full app
+
+The distribution model's **core engine** is the complete downloadable public app. The `clippy-core` Python package is a smaller developer library; it is not the wrapper's engine artifact.
 
 ---
 

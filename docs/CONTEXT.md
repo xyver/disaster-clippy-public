@@ -52,7 +52,7 @@ The project now needs to be understood as four related surfaces:
 |-----|----------------|
 | [deployment.md](deployment.md) | The clearest current statement of hosted vs local vs private-shell direction |
 | [architecture.md](architecture.md) | Layering, runtime roles, and repo boundaries |
-| [clippy-core-extraction.md](clippy-core-extraction.md) | Future portable-core seam |
+| [clippy-core-extraction.md](clippy-core-extraction.md) | Portable package boundary and app migration path |
 
 ### Working with Sources
 
@@ -130,11 +130,12 @@ Read:
 - `docs/video_processing.md`
 - `docs/video_processing_plan.md`
 
-### Future Portable Core Direction
+### Portable Core Package
 
 Read:
 
 - `docs/clippy-core-extraction.md`
+- `clippy-core/README.md` and `clippy-core/HANDOFF.md` for the standalone PDF search package
 
 ---
 

@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "clippy-core"
+version = "0.2.0"
+description = "Portable cited search and chat over your own documents (extracted from Disaster Clippy)."
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+dependencies = [
+  "numpy>=1.24",
+  "pyyaml>=6.0",
+  "pypdf>=4.0",
+]
+
+[project.optional-dependencies]
+pdf = ["pymupdf>=1.24"]          # faster, better PDF text extraction
+openai = ["openai>=1.30"]        # OpenAI embeddings and/or chat
+anthropic = ["anthropic>=0.40"]  # Claude chat
+local = ["sentence-transformers>=2.7"]   # offline embeddings
+server = ["fastapi>=0.110", "uvicorn>=0.29"]
+pgvector = ["asyncpg>=0.29", "psycopg2-binary>=2.9"]
+all = ["clippy-core[pdf,openai,anthropic,server]"]
+dev = ["clippy-core[pdf,server]", "pytest>=8", "httpx>=0.27"]
+
+[project.scripts]
+clippy = "clippy_core.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["clippy_core*"]
+
+[tool.setuptools.package-data]
+clippy_core = ["prompts/*.md"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -1,0 +1,87 @@
+# 2026-27 U.S. Figure Skating Rulebook (451 PDF pages).
+# This manifest uses a local PDF at pdfs/2026-27_Rulebook.pdf.
+# The downloaded PDF is not committed. Copy it there or make a local manifest
+# with an absolute path, then preview before building.
+#
+# The PDF contains: front matter (1-14), bylaws and rules (15-242),
+# skating skills diagrams (243-328), and pattern dance diagrams (329-451).
+# Pages 3-12, 243-244, and 329 are tables of contents and are omitted.
+
+index: ../../build/usfs-2026-27.sqlite
+
+embedding:
+  provider: local
+  model: all-MiniLM-L6-v2
+
+chunker:
+  class: skating_chunker.py:SkatingRuleChunker
+  params:
+    # Official headings include ARTICLE IV, Section 4.1, GR 1.00, PSER 1.01,
+    # and four-digit sport rules such as 9042.
+    pattern: '^(?P<id>ARTICLE\s+[IVXLC]+|Section\s+\d+\.\d+|[A-Z]{2,6}\s+\d{1,3}\.\d{2}|[1-9]\d{3}(?=\t))(?=\s|$)\s*(?P<title>.*)$'
+    max_chars: 3000
+    drop_lines:
+      - '^\d{1,3}$'
+      - '^2026-27 U\.S\. Figure Skating Rulebook$'
+    disciplines:
+      singles: '6000-6999'
+      pairs: '7000-7999'
+      ice_dance: '8000-8999'
+      synchronized: '9000-9999'
+
+defaults:
+  title: 2026-27 U.S. Figure Skating Rulebook
+  edition: '2026-27'
+  url: https://dxbhsrqyrr690.cloudfront.net/sidearm.nextgen.sites/usafs.sidearmsports.com/documents/2026/8/13/2026-27_Rulebook.pdf
+  metadata:
+    publisher: U.S. Figure Skating
+
+documents:
+  - path: pdfs/2026-27_Rulebook.pdf
+    doc_id: usfs-frontmatter
+    source_id: usfs-frontmatter
+    pages: '1-2,13-14'
+    metadata: {part: frontmatter}
+    chunker:
+      class: page
+      params:
+        target_chars: 1500
+        overlap_chars: 100
+        separate_pages: true
+        drop_lines: ['^\d{1,3}$', '^2026-27 U\.S\. Figure Skating Rulebook$']
+
+  - path: pdfs/2026-27_Rulebook.pdf
+    doc_id: usfs-bylaws-and-rules
+    source_id: usfs-rules
+    pages: '15-242'
+    metadata: {part: bylaws_and_rules}
+
+  - path: pdfs/2026-27_Rulebook.pdf
+    doc_id: usfs-skating-skills-diagrams
+    source_id: usfs-skating-skills
+    pages: '245-328'
+    metadata: {part: skating_skills_diagrams}
+    chunker:
+      class: page
+      params:
+        target_chars: 1500
+        overlap_chars: 100
+        separate_pages: true
+        drop_lines: ['^SS-\d+$', '^2026-27 U\.S\. Figure Skating Rulebook$']
+
+  - path: pdfs/2026-27_Rulebook.pdf
+    doc_id: usfs-pattern-dance-diagrams
+    source_id: usfs-pattern-dance
+    pages: '330-451'
+    metadata: {part: pattern_dance_diagrams}
+    chunker:
+      class: page
+      params:
+        target_chars: 1500
+        overlap_chars: 100
+        separate_pages: true
+        drop_lines: ['^Dance-\d+$', '^2026-27 U\.S\. Figure Skating Rulebook$']
+
+config:
+  prompt_path: prompt.md
+  n_results: 8
