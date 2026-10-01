@@ -4,6 +4,8 @@ This is the baseline for a cited rules search. It's meant to be taken over by pe
 
 ## 1. What you're getting
 
+For the current producer-to-consumer handoff, see [Portable pack workflow](../docs/portable-pack-workflow.md). Build and evaluate in this checkout, export a `.clippypack`, and give the other app the archive plus the consumer runtime. Additional skating PDFs belong as entries in one manifest; the pack exporter checks that each was indexed.
+
 - **One-file index.** PDFs become a single `.sqlite` file with keyword (BM25) and semantic search, fused. No server or cloud database needed. Rebuild it each season, version it, or ship it.
 - **Citations everywhere.** Every chunk knows its document, edition, section (rule number) and pages. Answers cite `[n]`, and links open the PDF at the right page.
 - **Works without keys.** With no LLM, you get the matching passages. With an Anthropic or OpenAI key, you get written answers that quote the rule text.

@@ -9,7 +9,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 RUNTIME_FILES = (
-    "__init__.py", "chat.py", "config.py", "context.py", "embeddings.py",
+    "__init__.py", "chat.py", "config.py", "context.py", "embeddings.py", "pack.py",
     "llm.py", "schemas.py", "prompts/default.md", "vectordb/__init__.py",
     "vectordb/base.py", "vectordb/sqlite_hybrid.py", "vectordb/pgvector.py",
 )
@@ -39,14 +39,20 @@ clippy_core = ["prompts/*.md"]
 """
 RUNTIME_README = """# clippy-core runtime
 
-This folder is the consumer-only export of `clippy-core`. Supply a prepared
-SQLite index, search it, and generate cited answers through a server-side
+This folder is the consumer-only export of `clippy-core`. Install a finished
+`.clippypack` or supply a prepared SQLite index, search it, and generate cited answers through a server-side
 OpenAI or Anthropic API key, or inject a host-owned local/cloud model adapter.
 It contains no PDF builders, source tools,
 evaluation commands, local LLM, or public API server.
 
 Install with `pip install -e ".[openai]"` (or `[anthropic]`). Keep API keys in
 your host backend, which should authenticate callers and enforce usage limits.
+
+```python
+from clippy_core import install_pack
+pack = install_pack("skating.clippypack", "./packs")
+store = pack.open_store(keyword_only=True)
+```
 
 ```python
 from clippy_core import ChatService, ClippyConfig

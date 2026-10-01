@@ -33,6 +33,7 @@ This distinction also preserves the distribution model's optional layers: regula
 - Cited extractive answers without an LLM; optional OpenAI or Anthropic answer generation.
 - CLI commands for preview, build, search, ask, info, eval, and a local API server.
 - Golden-question retrieval evaluation and sample PDFs.
+- A verified `.clippypack` export and install path for finished SQLite indexes; see [Portable pack workflow](portable-pack-workflow.md).
 
 See [`clippy-core/README.md`](../clippy-core/README.md) for the install and quick start, and [`clippy-core/HANDOFF.md`](../clippy-core/HANDOFF.md) for metadata conventions and domain customization.
 
@@ -49,7 +50,7 @@ Scanned pages need OCR before this package can index them. The existing Disaster
 
 ## Validation and limits
 
-The package's 27 offline tests pass in this repo. The fictional sample builds an 18-chunk SQLite index, and the 451-page U.S. rulebook builds into 1,888 chunks with local embeddings. On eight verified questions, hybrid retrieval finds the expected rule in its top five results for all eight; top-result accuracy is four of eight. This is an initial retrieval baseline, not a complete quality evaluation. Live LLM calls, OpenAI embeddings, and the PgVector adapter remain untested in this integration.
+The package's 37 offline tests pass in this repo. The fictional sample builds an 18-chunk SQLite index, and the 451-page U.S. rulebook builds into 1,888 chunks with local embeddings. On eight verified questions, hybrid retrieval finds the expected rule in its top five results for all eight; top-result accuracy is four of eight. This is an initial retrieval baseline, not a complete quality evaluation. Live LLM calls, OpenAI embeddings, and the PgVector adapter remain untested in this integration.
 
 The package server is a local development surface with no authentication or rate limiting. It should be wrapped by a project-specific application before public deployment.
 
@@ -59,7 +60,7 @@ The next consumer target is narrower than the current developer package: the con
 
 The first supported path is keyword search against the prepared SQLite index with `SQLiteHybridStore(..., create=False, keyword_only=True)` and an OpenAI or Anthropic chat provider. It works with the locally embedded skating index without installing sentence-transformers at query time. Hybrid search still requires a query embedder compatible with the index's stored vectors. To run hybrid search without a local model, the producer must prepare vectors with an API embedding model, and the consuming backend must use that same model for queries.
 
-`python clippy-core/export_runtime.py --output <new-folder>` now produces a consumer-only folder with the search/chat modules and minimal package metadata. It excludes PDF ingestion, build/eval commands, examples, the CLI, and the unauthenticated demo server. `clippy-core/` remains the producer checkout; its base install leaves PDF and local-model dependencies optional. A cost-controlled API adapter is still owned by the consuming app, where authentication, quota policy, and provider credentials belong. The existing source tools stay in the producer side of Disaster Clippy.
+`python clippy-core/export_runtime.py --output <new-folder>` now produces a consumer-only folder with search/chat and pack installation modules plus minimal package metadata. It excludes PDF ingestion, pack creation, build/eval commands, examples, the CLI, and the unauthenticated demo server. `clippy-core/` remains the producer checkout; its base install leaves PDF and local-model dependencies optional. A cost-controlled API adapter is still owned by the consuming app, where authentication, quota policy, and provider credentials belong. The existing source tools stay in the producer side of Disaster Clippy.
 
 ## Migration rule
 

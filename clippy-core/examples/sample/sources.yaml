@@ -7,6 +7,15 @@
 
 index: ../../build/sample-rules.sqlite
 
+pack:
+  id: sample-rules
+  name: Sample Sport Technical Rules
+  short_name: Sample Rules
+  description: Two fictional seasons of technical rules for pack workflow tests.
+  tags: [rules, competition, sample]
+  license: CC0-1.0
+  origin: project
+
 embedding:
   provider: hash      # deterministic offline demo; choose openai or local for real semantic search
 

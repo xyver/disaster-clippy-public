@@ -41,6 +41,17 @@ Once the model is downloaded, set `HF_HUB_OFFLINE=1` and `TRANSFORMERS_OFFLINE=1
 
 The starter [golden.yaml](golden.yaml) has eight questions with rule IDs checked against this PDF. It tests retrieval, not LLM answer quality. Expand it with real skater, coach, and official questions before relying on generated answers.
 
+## Add more PDFs and prepare a transferable pack
+
+Add each forthcoming rule or reference PDF to `documents:` in [sources.yaml](sources.yaml), with its own stable `doc_id`, `source_id`, public URL, title, and edition. Keep this rulebook's four page-range entries: they are four indexed sections of one physical PDF. A second PDF gets another document entry (or several entries when its layouts need different chunkers). Preview it, rebuild the full index, and run retrieval questions covering every document. The `pack:` section supplies the shared display name, short name, and tags for the finished collection.
+
+```powershell
+python -m clippy_core.cli pack-export -m examples/skating/sources.yaml -o build/skating.clippypack
+python -m clippy_core.cli pack-inspect build/skating.clippypack
+```
+
+The release check rejects a declared document with no indexed passages and any stale, undeclared document in the index. The default archive contains the prepared index and manifest, with no original PDFs, chunker, or build scripts. See [portable-pack-workflow.md](../../../docs/portable-pack-workflow.md) for the receiving app's install path. The pack records the publisher's copyright label; that metadata does not grant redistribution rights to the extracted text.
+
 ## Temporary hosted reference demo
 
 The official Disaster Clippy hosted app uses Pinecone and 1,536-dimensional OpenAI embeddings. Its skating reference is separate from this portable SQLite index. The [publish_hosted.py](publish_hosted.py) helper verifies the inspected PDF hash, prepares hosted embeddings in ignored `clippy-core/build/`, uploads the chunks to the existing Pinecone index, checks sample records, and adds a `reference_only` entry to the published catalog. It does not upload the PDF or create a downloadable pack. All search results link to the publisher's PDF. The catalog entry labels the rulebook as copyrighted and sets `license_verified: false`.

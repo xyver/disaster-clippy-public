@@ -174,6 +174,28 @@ def cmd_serve(args) -> None:
     uvicorn.run(app, host=args.host, port=args.port)
 
 
+def cmd_pack_export(args) -> None:
+    from .ingest.pipeline import load_manifest
+    from .packaging import export_pack
+
+    archive = export_pack(load_manifest(args.manifest), args.output,
+                          include_pdfs=args.include_pdfs)
+    print(archive)
+
+
+def cmd_pack_inspect(args) -> None:
+    from .pack import inspect_pack
+
+    print(json.dumps(inspect_pack(args.archive), indent=2, ensure_ascii=False))
+
+
+def cmd_pack_install(args) -> None:
+    from .pack import install_pack
+
+    installed = install_pack(args.archive, args.library)
+    print(installed.path)
+
+
 # ---------------------------------------------------------------- parser
 
 def build_parser() -> argparse.ArgumentParser:
@@ -236,6 +258,21 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--port", type=int, default=8000)
     sp.add_argument("--provider", choices=["auto", "anthropic", "openai", "none"])
     sp.set_defaults(func=cmd_serve)
+
+    sp = sub.add_parser("pack-export", help="export a built index as a transferable pack")
+    sp.add_argument("--manifest", "-m", required=True, help="producer sources.yaml with a pack section")
+    sp.add_argument("--output", "-o", required=True, help="new .clippypack archive path")
+    sp.add_argument("--include-pdfs", action="store_true", help="also include original PDFs")
+    sp.set_defaults(func=cmd_pack_export)
+
+    sp = sub.add_parser("pack-inspect", help="verify and describe a transferable pack")
+    sp.add_argument("archive")
+    sp.set_defaults(func=cmd_pack_inspect)
+
+    sp = sub.add_parser("pack-install", help="verify and install a pack into a library folder")
+    sp.add_argument("archive")
+    sp.add_argument("--library", required=True, help="folder containing installed packs")
+    sp.set_defaults(func=cmd_pack_install)
     return p
 
 

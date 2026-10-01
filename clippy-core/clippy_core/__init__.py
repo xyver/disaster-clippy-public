@@ -26,12 +26,14 @@ from .schemas import (Chunk, ChatMessage, ChatResponse, DocType, ResponseMethod,
                       SearchResponse, SearchResult, SourceInfo)
 from .chat import ChatService
 from .llm import LLMBackend
+from .pack import InstalledPack, inspect_pack, install_pack, open_pack
 from .vectordb import SQLiteHybridStore, SyncVectorStoreBase, VectorStoreBase, get_vector_store
 
 __version__ = "0.2.0"
 
 __all__ = [
     "ChatService", "ClippyConfig", "ContextFormatter", "LLMBackend",
+    "InstalledPack", "inspect_pack", "install_pack", "open_pack",
     "Chunk", "ChatMessage", "ChatResponse", "SearchResult", "SearchResponse", "SourceInfo",
     "SearchMethod", "ResponseMethod", "DocType",
     "VectorStoreBase", "SyncVectorStoreBase", "SQLiteHybridStore", "get_vector_store",

@@ -9,6 +9,15 @@
 
 index: ../../build/usfs-2026-27.sqlite
 
+pack:
+  id: usfs-rules-2026-27-demo
+  name: U.S. Figure Skating Rulebook 2026-27 (demo)
+  short_name: Skating
+  description: Searchable 2026-27 U.S. Figure Skating rulebook passages.
+  tags: [figure-skating, rules, competition]
+  license: Copyright U.S. Figure Skating
+  origin: project
+
 embedding:
   provider: local
   model: all-MiniLM-L6-v2

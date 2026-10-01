@@ -8,6 +8,17 @@ It's extracted from [Disaster Clippy](https://github.com/xyver/disaster-clippy-p
 
 A consuming app can receive a prepared `.sqlite` index and use only the search/chat runtime. Keyword search needs no local embedding model; written answers use a server-side OpenAI or Anthropic API key.
 
+For a transferable collection, the producer can export a `.clippypack` containing the verified SQLite index and display metadata. These commands run in the full `clippy-core` checkout; a consumer-only export uses `install_pack()` from Python:
+
+```bash
+clippy build -m examples/sample/sources.yaml --rebuild
+clippy pack-export -m examples/sample/sources.yaml -o build/sample.clippypack
+clippy pack-inspect build/sample.clippypack
+clippy pack-install build/sample.clippypack --library ./packs
+```
+
+See [Portable pack workflow](../docs/portable-pack-workflow.md) for the producer, consumer, and host responsibilities and the five-PDF skating plan.
+
 ```bash
 pip install -e ".[openai]"  # or [anthropic]; no PDF or local-model dependencies
 ```
@@ -59,7 +70,7 @@ the core package. The exported runtime bundles no local inference engine.
 
 Keep the model key in the host app's backend. The host app should authenticate callers, limit usage, and enforce a spending budget before calling chat. `clippy_core.server` is a local demonstration API with no such controls. Hybrid/semantic search needs the same query embedder that built the index; a prepared index built with local sentence-transformers embeddings still needs that model for semantic queries. Keyword mode opens that index without it.
 
-To copy just this consumer runtime into another project, run `python export_runtime.py --output /path/to/clippy-runtime`. The export contains the read-and-chat modules and their package metadata; it omits ingestion, source tools, evaluation, the CLI, and the unauthenticated demo server. The target path must not already exist.
+To copy just this consumer runtime into another project, run `python export_runtime.py --output /path/to/clippy-runtime`. The export contains the read-and-chat modules, pack verification/install, and package metadata; it omits ingestion, pack creation, source tools, evaluation, the CLI, and the unauthenticated demo server. The target path must not already exist.
 
 ## Quick start
 
@@ -97,6 +108,9 @@ Set `CLIPPY_MODEL_CACHE` to keep downloaded local embedding models in a chosen d
 | `clippy ask "…" [-f key=value]` | Cited answer |
 | `clippy eval golden.yaml [--compare]` | Retrieval scores (hit@1, hit@k, MRR) and the misses |
 | `clippy serve` | Minimal web page and JSON API |
+| `clippy pack-export -m sources.yaml -o pack.clippypack` | Snapshot and verify a built index for transfer; `--include-pdfs` is optional |
+| `clippy pack-inspect pack.clippypack` | Check archive and show its manifest |
+| `clippy pack-install pack.clippypack --library packs` | Verify and install without prep scripts |
 
 ## Python
 
@@ -127,6 +141,8 @@ clippy_core/
   cli.py, server.py  `clippy` command and minimal FastAPI app
   prompts/default.md Default system prompt
   ingest/            PDF extraction, chunkers, manifest-driven build pipeline
+  packaging.py        Producer-only pack release gate and archive export
+  pack.py             Consumer pack verification, installation, and open
   vectordb/          SQLiteHybridStore (default), PgVectorStore (optional)
 examples/
   sample/            Fictional rulebooks, manifest, prompt, golden set (used by tests)
