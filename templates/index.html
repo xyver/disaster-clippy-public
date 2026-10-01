@@ -70,8 +70,10 @@
             Loading sources...
         </div>
         <div class="sources-actions">
-            <button id="selectAll">Select All</button>
-            <button id="selectNone">Select None</button>
+            <button id="selectAll" type="button">Select All</button>
+            <button id="selectNone" type="button">Select None</button>
+            <button id="saveSources" type="button" disabled>Save collection</button>
+            <span id="sourcesSaveStatus" role="status" aria-live="polite"></span>
         </div>
     </div>
 
@@ -98,7 +100,7 @@
     </div>
 
     <script src="/static/chat-utils.js"></script>
-    <script src="/static/chat.js?v=20261001"></script>
+    <script src="/static/chat.js?v=20261001-collections"></script>
     <script>
         // Check if admin UI is available (not PUBLIC_MODE)
         fetch('/api/admin-available')

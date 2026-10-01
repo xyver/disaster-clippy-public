@@ -1,8 +1,16 @@
 // Disaster Clippy - Chat Interface
 
-let sessionId = null;
+function createSessionId() {
+    return globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+let sessionId = createSessionId();
 let availableSources = {};  // {source_id: {name, count}}
-let selectedSources = null; // null = all sources, array = specific sources
+let selectedSources = null; // Saved selection used by chat; null = all sources
+let draftSources = null;    // Checkbox selection awaiting Save
+let welcomeData = null;
+let activeChatController = null;
+let chatGeneration = 0;
 
 const chatMessages = document.getElementById('chatMessages');
 const chatForm = document.getElementById('chatForm');
@@ -15,46 +23,63 @@ const sourcesGrid = document.getElementById('sourcesGrid');
 const toggleSourcesBtn = document.getElementById('toggleSources');
 const selectAllBtn = document.getElementById('selectAll');
 const selectNoneBtn = document.getElementById('selectNone');
+const saveSourcesBtn = document.getElementById('saveSources');
+const sourcesSaveStatus = document.getElementById('sourcesSaveStatus');
+
+function selectedSourceIds() {
+    const ids = Object.keys(availableSources);
+    return selectedSources === null ? ids : selectedSources.filter(id => id in availableSources);
+}
+
+function renderCollectionContext() {
+    const allIds = Object.keys(availableSources);
+    const chosen = selectedSourceIds();
+    const total = chosen.reduce((sum, id) => sum + (Number(availableSources[id].count) || 0), 0);
+    let opening;
+
+    if (allIds.length === 0) {
+        const stats = welcomeData?.stats || {};
+        indexStats.textContent = stats.total_documents > 0
+            ? `${stats.total_documents} articles indexed`
+            : 'Loading collection...';
+        opening = welcomeData?.message || 'Ask what you need. I will search the collection and show the sources.';
+    } else if (chosen.length === 0) {
+        indexStats.textContent = 'No collections selected';
+        opening = 'Choose at least one collection, then select Save collection to start a new chat.';
+    } else if (selectedSources === null) {
+        const topics = welcomeData?.stats?.topics || [];
+        indexStats.textContent = `${total} passages in collection${topics.length ? ` | Topics: ${topics.join(', ')}` : ''}`;
+        opening = `You are searching all ${allIds.length} collections (${total} passages). Ask what you need and check the references in each answer.`;
+    } else if (chosen.length === 1) {
+        const name = availableSources[chosen[0]].name || chosen[0];
+        indexStats.textContent = `${total} passages selected`;
+        opening = `You are searching ${name} (${total} passages). Ask a question about this collection; I will cite the sources I use.`;
+    } else {
+        indexStats.textContent = `${total} passages across ${chosen.length} selected collections`;
+        opening = `You are searching ${chosen.length} selected collections (${total} passages). Ask what you need and check the references in each answer.`;
+    }
+
+    if (chatMessages.children.length === 1) {
+        const openingDiv = chatMessages.querySelector('.message.assistant .message-content');
+        if (openingDiv) openingDiv.textContent = opening;
+    }
+    sendBtn.disabled = activeChatController !== null || (chosen.length === 0 && allIds.length > 0);
+}
 
 // Load welcome message and stats on page load
 async function loadWelcome() {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000);
     try {
-        // Use AbortController for timeout - database may be busy during indexing
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 5000);
-
         const response = await fetch('/welcome', { signal: controller.signal });
-        clearTimeout(timeoutId);
-
-        const data = await response.json();
-
-        // Update stats bar
-        const stats = data.stats || {};
-        const sourceTotal = Object.values(availableSources).reduce((sum, source) => sum + (Number(source.count) || 0), 0);
-        const totalDocuments = Math.max(Number(stats.total_documents) || 0, sourceTotal);
-        if (totalDocuments > 0) {
-            const topicsStr = (stats.topics || []).length > 0 ? ` | Topics: ${stats.topics.join(', ')}` : '';
-            indexStats.textContent = `${totalDocuments} articles indexed${topicsStr}`;
-        } else {
-            indexStats.textContent = 'No articles indexed yet';
-        }
-
-        // Update welcome message in chat
-        const welcomeDiv = chatMessages.querySelector('.message.assistant .message-content');
-        if (welcomeDiv && data.message) {
-            welcomeDiv.textContent = totalDocuments > 0 && !stats.total_documents
-                ? `The collection has ${totalDocuments} searchable passages. Ask what you need and check the references in each answer.`
-                : data.message;
-        }
-
+        if (!response.ok) throw new Error(`Welcome request failed: ${response.status}`);
+        welcomeData = await response.json();
+        renderCollectionContext();
     } catch (e) {
         console.error('Failed to load welcome:', e);
-        // Check if it was a timeout (abort) - likely database busy with indexing
-        if (e.name === 'AbortError') {
-            indexStats.textContent = 'Database in use (indexing)';
-        } else {
-            indexStats.textContent = 'Unable to load stats';
-        }
+        renderCollectionContext();
+    } finally {
+        clearTimeout(timeoutId);
     }
 }
 
@@ -121,7 +146,10 @@ function renderArticles(articles, messageDiv) {
 
 // Send chat message with streaming
 async function sendMessage(message) {
-    if (!message.trim()) return;
+    if (!message.trim() || activeChatController || (selectedSources !== null && selectedSources.length === 0)) return;
+    const generation = chatGeneration;
+    const controller = new AbortController();
+    activeChatController = controller;
 
     // Add user message to chat
     addMessage(message, true);
@@ -156,8 +184,11 @@ async function sendMessage(message) {
             headers: {
                 'Content-Type': 'application/json'
             },
-            body: JSON.stringify(requestBody)
+            body: JSON.stringify(requestBody),
+            signal: controller.signal
         });
+
+        if (generation !== chatGeneration) return;
 
         if (!response.ok) {
             throw new Error('Network response was not ok');
@@ -182,6 +213,10 @@ async function sendMessage(message) {
 
         while (true) {
             const { done, value } = await reader.read();
+            if (generation !== chatGeneration) {
+                await reader.cancel();
+                return;
+            }
             if (done) break;
 
             // Append new data to buffer
@@ -230,12 +265,16 @@ async function sendMessage(message) {
         }
 
     } catch (error) {
+        if (error.name === 'AbortError' || generation !== chatGeneration) return;
         console.error('Error:', error);
         addMessage('Sorry, there was an error processing your request. Please try again.');
         loading.classList.remove('active');
     } finally {
-        sendBtn.disabled = false;
-        userInput.focus();
+        if (activeChatController === controller) activeChatController = null;
+        if (generation === chatGeneration) {
+            renderCollectionContext();
+            userInput.focus();
+        }
     }
 }
 
@@ -268,30 +307,25 @@ async function loadSources() {
 
         availableSources = data.sources || {};
 
-        // Load saved preferences from localStorage
+        // Restore only the last saved selection. Checkbox edits are drafts.
         const saved = localStorage.getItem('clippy_selected_sources');
-        if (saved) {
+        if (saved !== null) {
             try {
                 const savedSources = JSON.parse(saved);
-                // Only use saved sources that still exist
-                selectedSources = savedSources.filter(s => s in availableSources);
-                if (selectedSources.length === 0) {
-                    selectedSources = null; // All sources if none selected
-                }
+                if (!Array.isArray(savedSources)) throw new Error('Invalid saved collection');
+                const validSources = savedSources.filter(id => id in availableSources);
+                selectedSources = validSources.length === Object.keys(availableSources).length
+                    ? null : validSources;
             } catch (e) {
                 selectedSources = null;
             }
         }
+        draftSources = selectedSources === null ? null : [...selectedSources];
 
         renderSourcesGrid();
         updateToggleButton();
-        if (data.total > 0 && indexStats.textContent === 'No articles indexed yet') {
-            indexStats.textContent = `${data.total} articles indexed`;
-            const welcomeDiv = chatMessages.querySelector('.message.assistant .message-content');
-            if (welcomeDiv && welcomeDiv.textContent.includes('knowledge base is currently empty')) {
-                welcomeDiv.textContent = `The collection has ${data.total} searchable passages. Ask what you need and check the references in each answer.`;
-            }
-        }
+        updateSaveButton();
+        renderCollectionContext();
 
     } catch (e) {
         console.error('Failed to load sources:', e);
@@ -318,7 +352,7 @@ function renderSourcesGrid() {
 
     sourcesGrid.innerHTML = sourceIds.map(sourceId => {
         const source = availableSources[sourceId];
-        const isChecked = selectedSources === null || selectedSources.includes(sourceId);
+        const isChecked = draftSources === null || draftSources.includes(sourceId);
         const displayName = source.name || sourceId;
 
         // Check availability - 768-dim means offline ready
@@ -368,17 +402,41 @@ function onSourceChange() {
         }
     });
 
-    // If all are checked, set to null (query all)
-    selectedSources = allChecked ? null : checked;
+    draftSources = allChecked ? null : checked;
+    updateSaveButton();
+}
 
-    // Save to localStorage
+function updateSaveButton() {
+    const saved = selectedSources === null ? null : [...selectedSources].sort();
+    const draft = draftSources === null ? null : [...draftSources].sort();
+    const changed = JSON.stringify(saved) !== JSON.stringify(draft);
+    saveSourcesBtn.disabled = !changed;
+    sourcesSaveStatus.textContent = changed ? 'Unsaved collection changes' : '';
+}
+
+function saveCollection() {
+    if (saveSourcesBtn.disabled) return;
+    selectedSources = draftSources === null ? null : [...draftSources];
     if (selectedSources === null) {
         localStorage.removeItem('clippy_selected_sources');
     } else {
         localStorage.setItem('clippy_selected_sources', JSON.stringify(selectedSources));
     }
 
+    // Start a new conversation for the newly saved source set.
+    chatGeneration += 1;
+    activeChatController?.abort();
+    activeChatController = null;
+    sessionId = createSessionId();
+    chatMessages.innerHTML = '<div class="message assistant"><div class="message-content"></div></div>';
+    loading.classList.remove('active');
+    userInput.value = '';
+    renderCollectionContext();
     updateToggleButton();
+    updateSaveButton();
+    sourcesPanel.classList.remove('open');
+    toggleSourcesBtn.setAttribute('aria-expanded', 'false');
+    userInput.focus();
 }
 
 // Update the toggle button text
@@ -403,24 +461,23 @@ function toggleSourcesPanel() {
 function selectAllSources() {
     const checkboxes = sourcesGrid.querySelectorAll('input[type="checkbox"]');
     checkboxes.forEach(cb => cb.checked = true);
-    selectedSources = null;
-    localStorage.removeItem('clippy_selected_sources');
-    updateToggleButton();
+    draftSources = null;
+    updateSaveButton();
 }
 
 // Select no sources
 function selectNoSources() {
     const checkboxes = sourcesGrid.querySelectorAll('input[type="checkbox"]');
     checkboxes.forEach(cb => cb.checked = false);
-    selectedSources = [];
-    localStorage.setItem('clippy_selected_sources', JSON.stringify([]));
-    updateToggleButton();
+    draftSources = [];
+    updateSaveButton();
 }
 
 // Event listeners for source controls
 toggleSourcesBtn.addEventListener('click', toggleSourcesPanel);
 selectAllBtn.addEventListener('click', selectAllSources);
 selectNoneBtn.addEventListener('click', selectNoSources);
+saveSourcesBtn.addEventListener('click', saveCollection);
 
 // Connection status - uses unified endpoint
 async function loadConnectionStatus() {

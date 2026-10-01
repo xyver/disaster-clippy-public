@@ -352,8 +352,9 @@
 }
 
 .sources-panel.open {
-    max-height: 300px;
+    max-height: 70vh;
     padding: 1rem;
+    overflow-y: auto;
 }
 
 .sources-panel h3 {
@@ -425,6 +426,8 @@
 .sources-actions {
     margin-top: 0.75rem;
     display: flex;
+    align-items: center;
+    flex-wrap: wrap;
     gap: 0.5rem;
 }
 
@@ -441,6 +444,24 @@
 .sources-actions button:hover {
     border-color: #ad4f2d;
     color: #ad4f2d;
+}
+
+.sources-actions #saveSources {
+    background: #ad4f2d;
+    border-color: #ad4f2d;
+    color: #fff9ee;
+    font-weight: 600;
+    padding: 0.35rem 0.7rem;
+}
+
+.sources-actions #saveSources:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
+#sourcesSaveStatus {
+    color: #5f6b61;
+    font-size: 0.75rem;
 }
 
 /* Responsive */
