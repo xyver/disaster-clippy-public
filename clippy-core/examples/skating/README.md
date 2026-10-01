@@ -53,4 +53,4 @@ python clippy-core/examples/skating/publish_hosted.py prepare
 python clippy-core/examples/skating/publish_hosted.py publish
 ```
 
-The hosted source ID is `usfs-rulebook-2026-27`. The user-facing name says “demo,” and this source should be removed from the catalog and Pinecone when the temporary reference is retired. A later full catalog rebuild from local `_master.json` will omit this hosted-only reference unless it is explicitly preserved there.
+The hosted source ID is `usfs-rulebook-2026-27`. The user-facing name says “demo,” and this source should be removed from the catalog and Pinecone when the temporary reference is retired. Normal catalog rebuilds preserve entries explicitly marked `reference_only`; removing the demo requires deleting its catalog entry and Pinecone vectors.

@@ -139,3 +139,34 @@ def test_skating_question_excludes_other_discipline_rules():
     assert app_module.filter_skating_results_by_discipline(
         "Compare singles and synchronized skating", articles
     ) == articles
+
+
+def test_rule_context_uses_section_id_not_result_number():
+    app_module = importlib.import_module("app")
+    context = app_module.format_articles_for_context([{
+        "metadata": {
+            "title": "1400 | U.S. Figure Skating Rulebook",
+            "section_id": "1400",
+            "source": "usfs-rulebook-2026-27",
+            "url": "https://example.test/rules.pdf#page=97",
+            "categories": [],
+        },
+        "content": "A fall is defined in this rule.",
+        "score": 0.8,
+    }])
+    assert "Reference 1:" in context
+    assert "Rule/Section: 1400" in context
+    assert "Article #1" not in context
+
+
+def test_catalog_rebuild_preserves_hosted_reference_only():
+    from offline_tools.cloud.catalog import _preserve_hosted_references
+
+    entries = [{"source_id": "ready-gov"}]
+    existing = {"sources": [
+        {"source_id": "ready-gov", "reference_only": False},
+        {"source_id": "usfs-rulebook-2026-27", "reference_only": True},
+        {"source_id": "old-pack", "reference_only": False},
+    ]}
+    result = _preserve_hosted_references(entries, existing)
+    assert [item["source_id"] for item in result] == ["ready-gov", "usfs-rulebook-2026-27"]

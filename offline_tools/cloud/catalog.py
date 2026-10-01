@@ -166,6 +166,19 @@ def _build_catalog_entry(source_id: str, source_dir: Path, manifest: Dict[str, A
     }
 
 
+def _preserve_hosted_references(entries: List[Dict[str, Any]], existing_catalog: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Carry hosted-only references through normal downloadable-pack rebuilds."""
+    known_ids = {entry.get("source_id") for entry in entries}
+    for entry in existing_catalog.get("sources", []):
+        if not isinstance(entry, dict):
+            continue
+        source_id = entry.get("source_id")
+        if entry.get("reference_only") is True and source_id and source_id not in known_ids:
+            entries.append(entry)
+            known_ids.add(source_id)
+    return entries
+
+
 def generate_public_catalog(source_ids: Optional[List[str]] = None) -> Dict[str, Any]:
     """
     Build published/catalog.json from local manifests and upload to R2.
@@ -256,6 +269,15 @@ def generate_public_catalog(source_ids: Optional[List[str]] = None) -> Dict[str,
 
         entries.append(entry)
         result["included"].append(source_id)
+
+    # A hosted-only reference has no local pack or PDF backup. Preserve these
+    # explicit entries when rebuilding the downloadable source-pack catalog.
+    try:
+        raw_catalog = storage.download_file_content(CATALOG_KEY, timeout_seconds=3)
+        if raw_catalog:
+            entries = _preserve_hosted_references(entries, json.loads(raw_catalog))
+    except Exception as e:
+        logger.warning("Could not read existing hosted references: %s", e)
 
     # Assemble catalog document
     catalog = {

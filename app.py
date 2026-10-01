@@ -3239,9 +3239,11 @@ def format_articles_for_context(articles: List[dict]) -> str:
         else:
             url_line = "URL: (offline archive)"
 
+        section_id = metadata.get("section_id", "")
+        section_line = f"Rule/Section: {section_id}\n" if section_id else ""
         formatted.append(f"""
-Article #{i}: {metadata.get('title', 'Unknown Title')}
-Type: {doc_type_label}
+Reference {i}: {metadata.get('title', 'Unknown Title')}
+{section_line}Type: {doc_type_label}
 Source: {metadata.get('source', 'unknown')}
 {url_line}
 Categories: {', '.join(metadata.get('categories', [])[:5])}
