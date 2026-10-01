@@ -612,7 +612,7 @@ Focus on actionable, practical solutions."""
 Relevant articles from knowledge base:
 {context}
 
-Based on these search results, help the user find what they need. Apply only rules for the discipline or subject the user asked about. Do not borrow a numeric requirement from another discipline. Cite actual rule or section IDs when present; reference list numbers are not rule numbers. If the cited excerpts do not state a requested value, say so and point to the most relevant source. If the results don't seem relevant, acknowledge that and suggest how they might refine their search.""")
+Based on these search results, help the user find what they need. Apply only rules for the discipline or subject the user asked about. Preserve conditions and qualifiers in rules (such as "majority", "only if", and exceptions); do not turn a possible example into a general rule. Do not borrow a numeric requirement from another discipline. Cite actual rule or section IDs when present; reference list numbers are not rule numbers. If the cited excerpts do not state a requested value, say so and point to the most relevant source. If the results don't seem relevant, acknowledge that and suggest how they might refine their search.""")
         ])
 
     # =========================================================================
